@@ -15,6 +15,7 @@ import (
 	"github.com/chenluuo/smart-project/backend/internal/config"
 	"github.com/chenluuo/smart-project/backend/internal/control"
 	"github.com/chenluuo/smart-project/backend/internal/device"
+	"github.com/chenluuo/smart-project/backend/internal/events"
 	httpserver "github.com/chenluuo/smart-project/backend/internal/http"
 	"github.com/chenluuo/smart-project/backend/internal/identity"
 	"github.com/chenluuo/smart-project/backend/internal/knowledge"
@@ -58,8 +59,9 @@ func main() {
 	authService := identity.NewAuthService(identity.NewRepositories(db), tokenManager)
 	plotService := plot.NewService(plot.NewRepositories(db))
 	deviceService := device.NewService(device.NewRepositories(db))
-	controlService := control.NewService(control.NewRepository(db))
-	alertService := alert.NewService(alert.NewRepositories(db))
+	eventBroker := events.NewBroker(512)
+	controlService := control.NewService(control.NewRepository(db), eventBroker)
+	alertService := alert.NewService(alert.NewRepositories(db), eventBroker)
 	telemetryService := telemetry.NewService(telemetry.NullStore{})
 	agentService := agent.NewService(agent.NewRepository(db))
 	var knowledgeObjectStore knowledge.ObjectStore
@@ -117,12 +119,14 @@ func main() {
 		Addr: ":" + cfg.Server.Port,
 		Handler: httpserver.NewRouterWithBackendServices(
 			cfg.Server.Mode, sqlDB, authService, plotService, deviceService, controlService, alertService,
-			agentService, knowledgeService, telemetryService, cfg.Internal.ServiceKey,
+			agentService, knowledgeService, telemetryService, cfg.Internal.ServiceKey, eventBroker,
 		),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      15 * time.Second,
-		IdleTimeout:       60 * time.Second,
+		// SSE responses are intentionally long-lived; handlers still bound their
+		// own downstream calls and ReadHeaderTimeout protects request intake.
+		WriteTimeout: 0,
+		IdleTimeout:  60 * time.Second,
 	}
 
 	serverErr := make(chan error, 1)

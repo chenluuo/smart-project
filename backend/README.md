@@ -23,6 +23,7 @@ backend/
 │  ├─ identity/               # 用户与角色
 │  ├─ plot/                   # 农户所属田块
 │  ├─ device/                 # 设备与绑定关系
+│  ├─ events/                 # SSE 用户订阅、隔离与断线重放
 │  ├─ alert/                  # 告警规则与告警记录
 │  ├─ control/                # 设备控制命令
 │  ├─ notification/           # 告警通知
@@ -93,6 +94,16 @@ GET  /api/v1/plots/{plotId} # 当前用户的地块详情
 ```
 
 两个地块接口都要求 Bearer Token，并按令牌中的用户 ID 隔离数据。实时遥测接入前，列表中的 `soilMoisture`、`temperature` 和 `deviceStatus` 返回 `null`。
+
+实时事件接口：
+
+```text
+GET  /api/v1/events/stream   # Bearer Token；支持 Last-Event-ID 断线续传
+```
+
+响应使用 `text/event-stream`，每 15 秒发送一次心跳，并在客户端断开时清理订阅。事件中心按 owner ID 隔离连接；事件生产者发布时必须提供 owner ID、资源 ID 和事件类型。
+
+支持的实时事件为 `telemetry.updated`、`alert.created`、`alert.recovered`、`device.status.changed` 和 `command.result`。告警创建和控制命令完成已接入现有业务流程；其余类型的发布函数供 MQTT 遥测、告警恢复和设备心跳模块接入。
 
 智能问答会话接口：
 

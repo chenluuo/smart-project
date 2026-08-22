@@ -77,6 +77,7 @@ func NewRouterWithBackendServices(
 	knowledgeDocuments knowledgeService,
 	telemetry telemetryService,
 	internalServiceKey string,
+	eventSubscribers ...eventSubscriber,
 ) *gin.Engine {
 	router := NewRouterWithAllServices(mode, db, auth, plots, devices, controls, alerts)
 	if alerts != nil {
@@ -91,6 +92,9 @@ func NewRouterWithBackendServices(
 	if telemetry != nil {
 		registerDashboardRoutes(router, auth, plots, devices, alerts, telemetry)
 		registerTelemetryRoutes(router, auth, plots, devices, telemetry)
+	}
+	if len(eventSubscribers) > 0 && eventSubscribers[0] != nil {
+		registerEventRoutes(router, auth, eventSubscribers[0])
 	}
 	return router
 }

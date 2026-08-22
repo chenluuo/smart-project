@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/chenluuo/smart-project/backend/internal/device"
+	"github.com/chenluuo/smart-project/backend/internal/events"
 	"github.com/chenluuo/smart-project/backend/internal/shared/persistence"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
@@ -102,7 +103,10 @@ func TestIssueOpenCommandCompletesBeforeReturning(t *testing.T) {
 		irrigationDevice: &IrrigationDevice{DeviceID: 3, PlotID: 11, Status: device.StatusOnline},
 		idempotencyErr:   gorm.ErrRecordNotFound,
 	}
-	service := NewService(store)
+	broker := events.NewBroker(10)
+	subscription := broker.Subscribe(7, "")
+	defer subscription.Close()
+	service := NewService(store, broker)
 	service.now = func() time.Time { return now }
 	result, err := service.Issue(context.Background(), 7, 11, IssueInput{
 		Action: " open ", DurationSeconds: 600, Mode: "manual", Reason: "土壤湿度低", IdempotencyKey: "request-1",
@@ -120,6 +124,14 @@ func TestIssueOpenCommandCompletesBeforeReturning(t *testing.T) {
 	payload, err := decodePayload(store.created.ParametersJSON)
 	if err != nil || integerPayload(payload, "durationSeconds") != 600 || payload["mode"] != "MANUAL" {
 		t.Fatalf("payload=%v err=%v", payload, err)
+	}
+	select {
+	case event := <-subscription.Events:
+		if event.Type != events.TypeCommandResult || event.Payload["status"] != string(StatusSucceeded) || event.Payload["plotId"] != uint64(11) {
+			t.Fatalf("published event = %+v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for command.result")
 	}
 }
 

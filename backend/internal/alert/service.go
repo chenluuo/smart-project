@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chenluuo/smart-project/backend/internal/events"
 	"github.com/chenluuo/smart-project/backend/internal/shared/persistence"
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
@@ -112,8 +113,13 @@ type TriggerInput struct {
 }
 
 type TriggerRecord struct {
-	Alert   Alert
-	Created bool
+	Alert    Alert
+	Created  bool
+	OwnerID  uint64
+	PlotID   uint64
+	PlotCode string
+	Metric   string
+	Operator ComparisonOperator
 }
 
 type TriggerResult struct {
@@ -132,12 +138,17 @@ type Store interface {
 }
 
 type Service struct {
-	store Store
-	now   func() time.Time
+	store     Store
+	publisher events.Publisher
+	now       func() time.Time
 }
 
-func NewService(store Store) *Service {
-	return &Service{store: store, now: time.Now}
+func NewService(store Store, publishers ...events.Publisher) *Service {
+	service := &Service{store: store, now: time.Now}
+	if len(publishers) > 0 {
+		service.publisher = publishers[0]
+	}
+	return service
 }
 
 func (s *Service) ListRules(ctx context.Context, ownerID, plotID uint64) ([]RuleView, error) {
@@ -266,6 +277,15 @@ func (s *Service) Trigger(ctx context.Context, input TriggerInput) (*TriggerResu
 	}
 	if err != nil {
 		return nil, fmt.Errorf("trigger alert: %w", err)
+	}
+	if record.Created && s.publisher != nil {
+		_, _ = events.PublishAlertCreated(s.publisher, events.AlertCreated{
+			OwnerID: record.OwnerID, AlertID: record.Alert.ID, PlotID: record.PlotID,
+			Level: string(record.Alert.Level), Title: alertTitle(AlertListRow{
+				PlotCode: record.PlotCode, Metric: record.Metric, Operator: record.Operator,
+			}),
+			CreatedAt: record.Alert.TriggeredAt,
+		})
 	}
 	return &TriggerResult{
 		ID: record.Alert.ID, Status: record.Alert.Status,

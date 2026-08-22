@@ -78,6 +78,9 @@ func TestCreateTriggeredAlertPersistsOwnerNotificationAndOriginalAgentRequest(t 
 	if err != nil || !first.Created {
 		t.Fatalf("first CreateTriggeredAlert() = (%+v, %v)", first, err)
 	}
+	if first.OwnerID != owner.ID || first.PlotID != plot.ID || first.PlotCode != plotCode || first.Metric != rule.Metric {
+		t.Fatalf("trigger routing metadata = %+v", first)
+	}
 	second, err := repository.CreateTriggeredAlert(context.Background(), input, now.Add(time.Second))
 	if err != nil || second.Created || second.Alert.ID != first.Alert.ID {
 		t.Fatalf("duplicate CreateTriggeredAlert() = (%+v, %v), first=%+v", second, err, first)

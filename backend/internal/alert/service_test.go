@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chenluuo/smart-project/backend/internal/events"
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 )
@@ -128,9 +129,12 @@ func TestConfirmTrimsRemarkAndMapsStoreErrors(t *testing.T) {
 func TestTriggerCreatesDeliveryRecordAndDefaultsTime(t *testing.T) {
 	now := time.Date(2026, 8, 22, 10, 0, 0, 0, time.UTC)
 	store := &alertStoreStub{triggerRecord: &TriggerRecord{Alert: Alert{
-		ID: 9, Status: StatusActive, TriggeredAt: now,
-	}, Created: true}}
-	service := NewService(store)
+		ID: 9, Level: LevelMedium, Status: StatusActive, TriggeredAt: now,
+	}, Created: true, OwnerID: 7, PlotID: 11, PlotCode: "A3", Metric: "soilMoisture", Operator: OperatorLT}}
+	broker := events.NewBroker(10)
+	subscription := broker.Subscribe(7, "")
+	defer subscription.Close()
+	service := NewService(store, broker)
 	service.now = func() time.Time { return now }
 
 	result, err := service.Trigger(context.Background(), TriggerInput{
@@ -142,6 +146,14 @@ func TestTriggerCreatesDeliveryRecordAndDefaultsTime(t *testing.T) {
 	if store.triggerInput.TriggeredAt == nil || !store.triggerInput.TriggeredAt.Equal(now) ||
 		store.triggerInput.TraceID != "trace-1" || !store.triggeredAt.Equal(now) {
 		t.Fatalf("stored trigger = %+v at %s", store.triggerInput, store.triggeredAt)
+	}
+	select {
+	case event := <-subscription.Events:
+		if event.Type != events.TypeAlertCreated || event.Payload["alertId"] != uint64(9) || event.Payload["title"] != "A3 地块湿度偏低" {
+			t.Fatalf("published event = %+v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for alert.created")
 	}
 }
 

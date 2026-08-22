@@ -140,7 +140,7 @@ PENDING -> SENT -> SUCCEEDED
 
 | 状态 | 方法与路径 | Go 侧要求 |
 |---|---|---|
-| 待实现 | `GET /api/v1/events/stream` | JWT 鉴权、心跳、断线清理、按当前用户地块过滤，支持 `Last-Event-ID` 或等效断线续传 |
+| 已具备 | `GET /api/v1/events/stream` | JWT 鉴权、心跳、断线清理、按当前用户隔离，支持 `Last-Event-ID` 断线续传；事件生产者按资源所属 owner 发布即可完成地块过滤 |
 
 事件类型：
 
@@ -151,6 +151,8 @@ PENDING -> SENT -> SUCCEEDED
 - `command.result`
 
 每条事件至少包含事件 ID、事件时间和资源 ID；禁止向连接推送其他用户的地块数据。
+
+五类事件的类型化发布契约均已具备，统一校验 owner、资源和事件时间并自动生成事件 ID。`alert.created` 已接入告警事务提交后的新告警触发点，`command.result` 已接入控制命令完成点；`telemetry.updated`、`alert.recovered` 和 `device.status.changed` 由后续 MQTT 遥测接入、告警恢复引擎和设备心跳调度器调用同一发布契约。
 
 ### 3.8 智能问答与知识文档
 

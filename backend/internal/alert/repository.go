@@ -168,6 +168,8 @@ func (r Repositories) CreateTriggeredAlert(ctx context.Context, input TriggerInp
 		if err := tx.Table("plots").Select("owner_id, code").Where("id = ?", rule.PlotID).Take(&plot).Error; err != nil {
 			return err
 		}
+		result.OwnerID, result.PlotID, result.PlotCode = plot.OwnerID, rule.PlotID, plot.Code
+		result.Metric, result.Operator = rule.Metric, rule.ComparisonOperator
 		if input.DeviceID != nil {
 			var bindingCount int64
 			if err := tx.Table("device_bindings").Where(

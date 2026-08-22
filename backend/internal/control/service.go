@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/chenluuo/smart-project/backend/internal/device"
+	"github.com/chenluuo/smart-project/backend/internal/events"
 	"github.com/chenluuo/smart-project/backend/internal/shared/persistence"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
@@ -97,12 +98,17 @@ type Store interface {
 }
 
 type Service struct {
-	commands Store
-	now      func() time.Time
+	commands  Store
+	publisher events.Publisher
+	now       func() time.Time
 }
 
-func NewService(commands Store) *Service {
-	return &Service{commands: commands, now: time.Now}
+func NewService(commands Store, publishers ...events.Publisher) *Service {
+	service := &Service{commands: commands, now: time.Now}
+	if len(publishers) > 0 {
+		service.publisher = publishers[0]
+	}
+	return service
 }
 
 func (s *Service) Issue(ctx context.Context, ownerID, plotID uint64, input IssueInput) (*IssueResult, error) {
@@ -165,6 +171,12 @@ func (s *Service) Issue(ctx context.Context, ownerID, plotID uint64, input Issue
 	command.UpdatedAt = now
 	if err := s.commands.Save(ctx, command); err != nil {
 		return nil, fmt.Errorf("complete irrigation command: %w", err)
+	}
+	if s.publisher != nil {
+		_, _ = events.PublishCommandResult(s.publisher, events.CommandResult{
+			OwnerID: ownerID, CommandID: command.CommandID, Status: string(command.Status),
+			PlotID: plotID, AckAt: command.ExecutedAt, ChangedAt: command.UpdatedAt,
+		})
 	}
 	return issueResult(command), nil
 }

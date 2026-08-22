@@ -159,7 +159,7 @@ func TestInternalAlertTriggerRequiresServiceKeyAndParsesPayload(t *testing.T) {
 		ID: 9, Status: alert.StatusActive, Created: true, TriggeredAt: now,
 	}}
 	router := NewRouterWithBackendServices(
-		"test", pingerStub{}, authServiceStub{}, nil, nil, nil, service, nil, nil,
+		"test", pingerStub{}, authServiceStub{}, nil, nil, nil, service, nil, nil, nil,
 		"test-internal-service-key-32-characters",
 	)
 
