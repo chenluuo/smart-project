@@ -1,43 +1,37 @@
-# 智慧农业后端骨架
+# 智慧农业 Gin 后端骨架
 
-该目录是依据《智慧农业系统架构设计（修订版）》建立的 Spring Boot 模块化单体骨架。目前只包含工程基础设施、MySQL 领域模型、Repository 和数据库迁移，不包含 Controller 或业务接口实现。
+该目录是依据《智慧农业系统架构设计（修订版）》建立的 Go 模块化单体骨架。目前包含 Gin HTTP 服务、MySQL 领域模型、GORM Repository 和嵌入式数据库迁移；业务 REST API 尚未实现。
 
 ## 技术基线
 
-- Java 21
-- Spring Boot 4.1.1
-- Maven Wrapper
-- Spring Data JPA
-- Flyway
+- Go 1.25
+- Gin
+- GORM
 - MySQL 8.4 LTS
 - Docker Compose
 
 ## 模块结构
 
 ```text
-src/main/java/com/smartagriculture/
-├─ identity/                 # 用户与角色
-│  ├─ controller/            # HTTP 接口层（暂为空）
-│  ├─ service/               # 应用服务与事务（暂为空）
-│  ├─ dto/                   # 请求与响应对象（暂为空）
-│  ├─ domain/                # 实体、枚举和领域规则
-│  └─ repository/            # 数据访问
-├─ farm/                     # 农场、成员和地块
-├─ device/                   # 设备与绑定关系
-├─ telemetry/                # 遥测，后续接入 EMQX/TDengine/Redis
-├─ alert/                    # 告警规则与告警记录
-├─ control/                  # 设备控制命令
-├─ notification/             # 告警通知
-├─ audit/                    # 操作审计
-├─ outbox/                   # 可靠异步事件
-├─ agent/                    # 智能问答，后续接入 RAG
-└─ shared/
-   ├─ config/                # 公共配置（暂为空）
-   ├─ exception/             # 统一异常（暂为空）
-   └─ persistence/           # 公共持久化基础类
+backend/
+├─ cmd/api/                    # HTTP 服务入口与优雅停机
+├─ internal/
+│  ├─ http/                   # Gin 路由与 Handler
+│  ├─ config/                 # 环境变量配置
+│  ├─ platform/database/      # MySQL 连接与嵌入式 SQL 迁移
+│  ├─ shared/persistence/     # 公共模型与泛型 Repository
+│  ├─ identity/               # 用户与角色
+│  ├─ farm/                   # 农场、成员和地块
+│  ├─ device/                 # 设备与绑定关系
+│  ├─ alert/                  # 告警规则与告警记录
+│  ├─ control/                # 设备控制命令
+│  ├─ notification/           # 告警通知
+│  ├─ audit/                  # 操作审计
+│  └─ outbox/                 # 可靠异步事件
+└─ compose.yaml
 ```
 
-其他业务模块与 `identity` 采用相同的 `controller / service / dto / domain / repository` 分层；暂未实现的目录使用 `.gitkeep` 让 Git 保留。
+项目不预留 Agent/RAG 模块。
 
 ## 已建立的 MySQL 表
 
@@ -60,22 +54,25 @@ src/main/java/com/smartagriculture/
 docker compose up -d mysql
 ```
 
-执行测试：
+安装依赖并执行测试：
 
 ```powershell
-.\mvnw.cmd test
+go mod tidy
+go test ./...
 ```
 
 启动应用：
 
 ```powershell
-.\mvnw.cmd spring-boot:run
+go run ./cmd/api
 ```
 
 健康检查：
 
 ```text
 GET http://localhost:8080/actuator/health
+GET http://localhost:8080/actuator/health/liveness
+GET http://localhost:8080/actuator/health/readiness
 ```
 
 ## 配置
@@ -83,16 +80,32 @@ GET http://localhost:8080/actuator/health
 本地默认连接：
 
 ```text
-jdbc:mysql://localhost:3307/smart_agriculture
+mysql://localhost:3307/smart_agriculture
 username: smart_agriculture
 password: smart_agriculture
 ```
 
-可通过环境变量 `DB_URL`、`DB_USERNAME`、`DB_PASSWORD` 覆盖。生产环境不得使用示例密码，也不得将密钥提交到仓库。
+支持以下环境变量：
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `SERVER_PORT` | `8080` | HTTP 端口 |
+| `GIN_MODE` | `debug` | Gin 运行模式 |
+| `DB_DSN` | 空 | 完整 Go MySQL DSN，设置后优先级最高 |
+| `DB_URL` | 原 JDBC MySQL URL | 兼容原 Spring 配置 |
+| `DB_USERNAME` | `smart_agriculture` | 数据库用户名 |
+| `DB_PASSWORD` | `smart_agriculture` | 数据库密码 |
+| `DB_POOL_MAX_SIZE` | `10` | 最大连接数 |
+| `DB_POOL_MIN_IDLE` | `2` | 最大空闲连接数 |
+| `DB_MIGRATE` | `true` | 启动时执行嵌入式 SQL 迁移 |
+
+已有 Flyway 数据库可直接升级：启动时会读取 `flyway_schema_history`，把成功版本导入新的 `schema_migrations`，不会重复建表。
+
+生产环境不得使用示例密码，也不得将密钥提交到仓库。
 
 ## 下一步
 
 1. 实现应用服务和事务边界。
 2. 增加用户认证与农场/地块数据权限。
 3. 接入 EMQX、TDengine 和 Redis。
-4. 最后再增加 REST Controller、DTO 和接口契约。
+4. 增加 REST Handler、DTO 和接口契约。
