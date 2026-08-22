@@ -54,6 +54,8 @@ async def chat(req: ChatRequest, request: Request,
     ensure_trace_id() if not x_trace_id else None
 
     async def event_stream():
+        # 先发占位事件：立即发出响应头，避免客户端长时间等待首 token（TTFT）
+        yield "event: started\ndata: {\"type\": \"started\"}\n\n"
         try:
             async for ev in handle_question(
                 user_id=user_id,

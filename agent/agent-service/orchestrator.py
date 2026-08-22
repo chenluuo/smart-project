@@ -122,17 +122,28 @@ async def handle_question(
         state["status"] = STATUS_ACTIVE  # 新问题/继续 → 回到 active
         get_redis().session_set(session_id, state)
 
-    # ---------- 三路取数（并行） ----------
+    # ---------- 三路取数（知识/记忆并行，同步 embedding 走线程池） ----------
     knowledge = []
     memory = []
-    try:
-        knowledge = rag_search(question)
-    except Exception:
-        pass  # 知识检索失败不阻塞问答
-    try:
-        memory = memory_recall(user_id, question)
-    except Exception:
-        pass
+
+    def _safe_rag():
+        try:
+            return rag_search(question)
+        except Exception:
+            return []
+
+    def _safe_memory():
+        try:
+            return memory_recall(user_id, question)
+        except Exception:
+            return []
+
+    import asyncio
+
+    knowledge, memory = await asyncio.gather(
+        asyncio.to_thread(_safe_rag),
+        asyncio.to_thread(_safe_memory),
+    )
 
     # 现场数据：走工具（LLM 工具循环）
     live_data, tool_log = await _tool_loop(question, plot_id, authorization)
