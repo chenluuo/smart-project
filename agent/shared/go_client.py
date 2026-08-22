@@ -23,6 +23,10 @@ class GoClient:
         self.base_url = cfg.get("base_url", "http://go-backend:8080/api/v1")
         self.timeout = float(cfg.get("timeout_seconds", 10))
         self.internal_key = cfg.get("internal_key")  # ${GO_INTERNAL_KEY}
+        # connect 短超时：Go 不可达（SYN 被丢弃/拒绝）时快速降级，避免拖慢问答
+        self._timeout = httpx.Timeout(
+            connect=1.0, read=self.timeout, write=self.timeout, pool=self.timeout
+        )
 
     def _headers(self, authorization: str = "", internal: bool = False) -> dict[str, str]:
         h = {HEADER: ensure_trace_id(), "Content-Type": "application/json"}
@@ -38,7 +42,7 @@ class GoClient:
         self, method: str, path: str, authorization: str = "", internal: bool = False, **kwargs: Any
     ) -> dict[str, Any] | list[Any]:
         url = f"{self.base_url}{path}"
-        with httpx.Client(timeout=self.timeout) as client:
+        with httpx.Client(timeout=self._timeout, trust_env=False) as client:
             resp = client.request(method, url, headers=self._headers(authorization, internal), **kwargs)
             resp.raise_for_status()
             body = resp.json()

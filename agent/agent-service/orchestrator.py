@@ -41,7 +41,7 @@ def _svc_url(service: str) -> str:
 
 
 async def _call_context(payload: dict, authorization: str) -> dict:
-    async with httpx.AsyncClient(timeout=15) as client:
+    async with httpx.AsyncClient(timeout=15, trust_env=False) as client:
         resp = await client.post(
             f"{_context_url}/context/build",
             json=payload,
@@ -52,7 +52,7 @@ async def _call_context(payload: dict, authorization: str) -> dict:
 
 
 async def _call_tool(name: str, args: dict, authorization: str) -> dict:
-    async with httpx.AsyncClient(timeout=15) as client:
+    async with httpx.AsyncClient(timeout=15, trust_env=False) as client:
         resp = await client.post(
             f"{_tool_url}/tools/{name}/execute",
             json={"args": args},
@@ -64,7 +64,7 @@ async def _call_tool(name: str, args: dict, authorization: str) -> dict:
 
 async def _tool_schemas() -> list[dict]:
     """拉取工具清单（启动缓存，失败返回空）。"""
-    async with httpx.AsyncClient(timeout=10) as client:
+    async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
         resp = await client.get(f"{_tool_url}/tools", headers={"X-Trace-Id": ensure_trace_id()})
         resp.raise_for_status()
         defs = resp.json()
@@ -234,6 +234,7 @@ async def _tool_loop(question: str, plot_id: str | None, authorization: str) -> 
             messages=messages,
             tools=tools,
             tool_choice="auto",
+            max_tokens=100,  # 预判决策：只需"是否调用工具"，小预算快速返回
         )
         msg = resp.choices[0].message
         if not msg.tool_calls:

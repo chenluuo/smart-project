@@ -86,19 +86,9 @@ def ensure_collections() -> None:
 
 
 def _load(col: str) -> None:
-    """load collection 并等待加载完成（Milvus 异步加载）。"""
-    import time
-
+    """确保 collection 已加载（幂等；load_collection 已加载时毫秒级返回，无需轮询）。"""
     conn = _get_conn()
     conn.load_collection(col)
-    for _ in range(60):
-        try:
-            state = conn.get_load_state(col)
-            if state.get("state") == "Loaded":
-                return
-        except Exception:
-            pass
-        time.sleep(1)
 
 
 def search_knowledge(query_embedding: list[float], top_k: int = 5,
