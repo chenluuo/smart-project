@@ -43,15 +43,17 @@ backend/
 - `notifications`
 - `audit_logs`
 - `outbox_events`
+- `chat_sessions`、`chat_messages`、`ai_suggestions`
+- `knowledge_documents`
 
 高频温度、湿度遥测不进入 MySQL；后续由 `telemetry` 模块批量写入 TDengine，并将设备最新状态写入 Redis。
 
 ## 本地启动
 
-启动 MySQL：
+启动 MySQL 和 MinIO：
 
 ```powershell
-docker compose up -d mysql
+docker compose up -d mysql minio
 ```
 
 安装依赖并执行测试：
@@ -92,6 +94,27 @@ GET  /api/v1/plots/{plotId} # 当前用户的地块详情
 
 两个地块接口都要求 Bearer Token，并按令牌中的用户 ID 隔离数据。实时遥测接入前，列表中的 `soilMoisture`、`temperature` 和 `deviceStatus` 返回 `null`。
 
+智能问答会话接口：
+
+```text
+POST /api/v1/ai/sessions                       # 创建当前用户会话
+GET  /api/v1/ai/sessions/{id}/messages         # 分页读取当前用户会话消息
+POST /api/v1/ai/sessions/{id}/close            # 幂等关闭会话
+POST /internal/agent/sessions/{id}/messages    # 智能体实时写入消息，使用内部服务密钥
+```
+
+知识文档元数据接口：
+
+```text
+GET  /api/v1/knowledge/docs                    # 登录用户读取 ACTIVE 文档
+POST /api/v1/knowledge/docs                    # SYSTEM_ADMIN 上传文件并创建 DRAFT 元数据
+POST /api/v1/knowledge/docs/{id}/approve       # DRAFT -> APPROVED
+POST /api/v1/knowledge/docs/{id}/publish       # APPROVED -> ACTIVE
+POST /api/v1/knowledge/docs/{id}/archive       # ACTIVE -> ARCHIVED
+```
+
+知识文档上传接口使用 `multipart/form-data`，字段为 `file/title/category/source?/version?`。文件写入 MinIO 后，元数据、审计日志和 Outbox 事件在同一 MySQL 事务内落库；数据库事务失败时会回滚已上传对象。活动文档列表返回短期签名下载地址。
+
 ## 配置
 
 本地默认连接：
@@ -118,6 +141,20 @@ password: smart_agriculture
 | `JWT_SECRET` | 仅供本地开发的默认密钥 | HS256 签名密钥，至少 32 个字符 |
 | `JWT_ISSUER` | `smart-agriculture-api` | JWT 签发方 |
 | `JWT_TTL` | `2h` | 访问令牌有效期（Go duration） |
+| `INTERNAL_SERVICE_KEY` | 仅供本地开发的默认密钥 | 智能体调用 `/internal/*` 的共享密钥，至少 32 个字符 |
+| `OBJECT_STORAGE_ENABLED` | `false` | 是否启用 MinIO；启用时启动阶段检查并创建 Bucket |
+| `MINIO_ENDPOINT` | `localhost:9000` | MinIO S3 API 地址，不带协议 |
+| `MINIO_ACCESS_KEY` | `minioadmin` | MinIO Access Key |
+| `MINIO_SECRET_KEY` | `minioadmin` | MinIO Secret Key |
+| `MINIO_BUCKET` | `knowledge` | 知识文档私有 Bucket |
+| `MINIO_REGION` | `us-east-1` | Bucket Region |
+| `MINIO_SECURE` | `false` | 是否通过 HTTPS 访问 MinIO |
+| `KNOWLEDGE_MAX_UPLOAD_BYTES` | `20971520` | 单个知识文档最大字节数 |
+| `MINIO_SIGNED_URL_TTL` | `15m` | 下载签名地址有效期 |
+| `KNOWLEDGE_NOTIFY_URL` | 空 | 智能体通知完整 URL；为空时不启动 Outbox 派发器 |
+| `OUTBOX_DISPATCH_INTERVAL` | `2s` | 知识文档 Outbox 扫描周期 |
+| `OUTBOX_BATCH_SIZE` | `50` | 单批认领数量，范围 1-500 |
+| `AGENT_HTTP_TIMEOUT` | `5s` | 调用智能体通知接口的超时 |
 
 已有 Flyway 数据库可直接升级：启动时会读取 `flyway_schema_history`，把成功版本导入新的 `schema_migrations`，不会重复建表。
 
@@ -125,7 +162,7 @@ password: smart_agriculture
 
 ## 下一步
 
-1. 实现应用服务和事务边界。
-2. 增加按农户隔离的田块数据权限。
-3. 接入 EMQX、TDengine 和 Redis。
-4. 增加 REST Handler、DTO 和接口契约。
+1. 接入 EMQX、TDengine 和 Redis。
+2. 将控制命令演示桩替换为 MQTT 下发/回执状态机。
+3. 配置智能体服务并联调知识文档通知。
+4. 实现 `/api/v1/ai/chat` 的智能体编排和 AI 建议采纳流程。

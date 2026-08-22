@@ -32,6 +32,15 @@ func (s *memoryUserStore) FindUserByMobile(_ context.Context, mobile string) (*U
 	return nil, ErrUserNotFound
 }
 
+func (s *memoryUserStore) FindUserByID(_ context.Context, userID uint64) (*User, error) {
+	for _, user := range s.users {
+		if user.ID == userID {
+			return user, nil
+		}
+	}
+	return nil, ErrUserNotFound
+}
+
 func (s *memoryUserStore) CreateUser(_ context.Context, user *User) error {
 	user.ID = uint64(len(s.users) + 1)
 	s.users = append(s.users, user)
@@ -93,5 +102,18 @@ func TestAuthServiceRejectsDuplicateAndInvalidCredentials(t *testing.T) {
 	}
 	if _, err := service.Login(context.Background(), "grower", "wrong-password"); !errors.Is(err, ErrInvalidCredentials) {
 		t.Fatalf("Login() error = %v, want ErrInvalidCredentials", err)
+	}
+}
+
+func TestAuthServiceCurrentUser(t *testing.T) {
+	style := "plain"
+	store := &memoryUserStore{users: []*User{{ID: 7, AccountName: "grower", InteractionStyle: &style}}}
+	service := NewAuthService(store, nil)
+	result, err := service.CurrentUser(context.Background(), 7)
+	if err != nil {
+		t.Fatalf("CurrentUser() error = %v", err)
+	}
+	if result.User.ID != 7 || result.Role != "FARMER" || result.User.InteractionStyle == nil || *result.User.InteractionStyle != "plain" {
+		t.Fatalf("unexpected current user: %+v", result)
 	}
 }

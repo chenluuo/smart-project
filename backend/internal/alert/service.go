@@ -1,0 +1,267 @@
+package alert
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"math"
+	"strings"
+	"time"
+
+	"github.com/chenluuo/smart-project/backend/internal/shared/persistence"
+	"github.com/shopspring/decimal"
+	"gorm.io/gorm"
+)
+
+var (
+	ErrInvalidInput = errors.New("invalid alert input")
+	ErrNotFound     = errors.New("alert resource not found")
+	ErrConflict     = errors.New("alert state conflict")
+)
+
+type RuleInput struct {
+	Metric          string
+	Operator        ComparisonOperator
+	Value           float64
+	DurationSeconds int
+	Level           Level
+	Enabled         bool
+}
+
+type RuleView struct {
+	ID              uint64             `json:"id"`
+	PlotID          uint64             `json:"plotId"`
+	Metric          string             `json:"metric"`
+	Operator        ComparisonOperator `json:"operator"`
+	Value           float64            `json:"value"`
+	Unit            string             `json:"unit"`
+	DurationSeconds int                `json:"durationSeconds"`
+	Enabled         bool               `json:"enabled"`
+	Level           Level              `json:"level"`
+}
+
+type RuleUpdateResult struct {
+	ID        uint64    `json:"id"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+type ListFilter struct {
+	PlotID    *uint64
+	Status    *Status
+	StartTime *time.Time
+	EndTime   *time.Time
+	Page      int
+	PageSize  int
+}
+
+type AlertListRow struct {
+	ID                 uint64
+	PlotID             uint64
+	PlotCode           string
+	Metric             string
+	Operator           ComparisonOperator
+	Threshold          decimal.Decimal
+	DurationSeconds    int
+	Level              Level
+	Status             Status
+	TriggerValue       decimal.Decimal
+	TriggeredAt        time.Time
+	AcknowledgedAt     *time.Time
+	ConfirmationRemark *string
+	ResolvedAt         *time.Time
+}
+
+type ListItem struct {
+	ID             uint64     `json:"id"`
+	PlotID         uint64     `json:"plotId"`
+	PlotCode       string     `json:"plotCode"`
+	Metric         string     `json:"metric"`
+	Level          Level      `json:"level"`
+	Status         Status     `json:"status"`
+	Title          string     `json:"title"`
+	Content        string     `json:"content"`
+	CurrentValue   float64    `json:"currentValue"`
+	ThresholdValue float64    `json:"thresholdValue"`
+	StartedAt      time.Time  `json:"startedAt"`
+	ConfirmedAt    *time.Time `json:"confirmedAt,omitempty"`
+	ConfirmRemark  *string    `json:"confirmRemark,omitempty"`
+	RecoveredAt    *time.Time `json:"recoveredAt,omitempty"`
+}
+
+type ListResult struct {
+	Items    []ListItem `json:"items"`
+	Page     int        `json:"page"`
+	PageSize int        `json:"pageSize"`
+	Total    int64      `json:"total"`
+}
+
+type ConfirmResult struct {
+	ID          uint64    `json:"id"`
+	Status      Status    `json:"status"`
+	ConfirmedAt time.Time `json:"confirmedAt"`
+}
+
+type Store interface {
+	ListRulesByOwner(context.Context, uint64, uint64) ([]Rule, error)
+	UpsertRuleByOwner(context.Context, uint64, *Rule) error
+	ListAlertsByOwner(context.Context, uint64, ListFilter) ([]AlertListRow, int64, error)
+	ConfirmAlertByOwner(context.Context, uint64, uint64, string, time.Time) (*Alert, error)
+}
+
+type Service struct {
+	store Store
+	now   func() time.Time
+}
+
+func NewService(store Store) *Service {
+	return &Service{store: store, now: time.Now}
+}
+
+func (s *Service) ListRules(ctx context.Context, ownerID, plotID uint64) ([]RuleView, error) {
+	if ownerID == 0 || plotID == 0 {
+		return nil, ErrInvalidInput
+	}
+	rules, err := s.store.ListRulesByOwner(ctx, ownerID, plotID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("list threshold rules: %w", err)
+	}
+	result := make([]RuleView, 0, len(rules))
+	for _, rule := range rules {
+		value, _ := rule.Threshold.Float64()
+		result = append(result, RuleView{
+			ID: rule.ID, PlotID: rule.PlotID, Metric: rule.Metric,
+			Operator: rule.ComparisonOperator, Value: value, Unit: metricUnit(rule.Metric),
+			DurationSeconds: rule.DurationSeconds, Enabled: rule.Enabled, Level: rule.Level,
+		})
+	}
+	return result, nil
+}
+
+func (s *Service) UpsertRule(ctx context.Context, ownerID, plotID, thresholdID uint64, input RuleInput) (*RuleUpdateResult, error) {
+	input.Metric = strings.TrimSpace(input.Metric)
+	input.Operator = ComparisonOperator(strings.ToUpper(strings.TrimSpace(string(input.Operator))))
+	input.Level = Level(strings.ToUpper(strings.TrimSpace(string(input.Level))))
+	if ownerID == 0 || plotID == 0 || thresholdID == 0 || !validRuleInput(input) {
+		return nil, ErrInvalidInput
+	}
+	now := s.now()
+	rule := &Rule{
+		ID: thresholdID, PlotID: plotID, Name: input.Metric + " " + string(input.Operator),
+		Metric: input.Metric, ComparisonOperator: input.Operator,
+		Threshold: decimal.NewFromFloat(input.Value), DurationSeconds: input.DurationSeconds,
+		Level: input.Level, Enabled: input.Enabled,
+		Auditable: persistence.Auditable{CreatedAt: now, UpdatedAt: now},
+	}
+	if err := s.store.UpsertRuleByOwner(ctx, ownerID, rule); errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrNotFound
+	} else if err != nil {
+		return nil, fmt.Errorf("upsert threshold rule: %w", err)
+	}
+	return &RuleUpdateResult{ID: rule.ID, UpdatedAt: rule.UpdatedAt}, nil
+}
+
+func (s *Service) List(ctx context.Context, ownerID uint64, filter ListFilter) (ListResult, error) {
+	if filter.Page == 0 {
+		filter.Page = 1
+	}
+	if filter.PageSize == 0 {
+		filter.PageSize = 20
+	}
+	if ownerID == 0 || filter.Page < 1 || filter.PageSize < 1 || filter.PageSize > 100 ||
+		filter.PlotID != nil && *filter.PlotID == 0 || filter.Status != nil && !validStatus(*filter.Status) ||
+		filter.StartTime != nil && filter.EndTime != nil && filter.StartTime.After(*filter.EndTime) {
+		return ListResult{}, ErrInvalidInput
+	}
+	rows, total, err := s.store.ListAlertsByOwner(ctx, ownerID, filter)
+	if err != nil {
+		return ListResult{}, fmt.Errorf("list alerts: %w", err)
+	}
+	items := make([]ListItem, 0, len(rows))
+	for _, row := range rows {
+		current, _ := row.TriggerValue.Float64()
+		threshold, _ := row.Threshold.Float64()
+		status := row.Status
+		if status == StatusAcknowledged {
+			status = StatusConfirmed
+		}
+		items = append(items, ListItem{
+			ID: row.ID, PlotID: row.PlotID, PlotCode: row.PlotCode,
+			Metric: row.Metric, Level: row.Level, Status: status,
+			Title: alertTitle(row), Content: alertContent(row),
+			CurrentValue: current, ThresholdValue: threshold, StartedAt: row.TriggeredAt,
+			ConfirmedAt: row.AcknowledgedAt, ConfirmRemark: row.ConfirmationRemark, RecoveredAt: row.ResolvedAt,
+		})
+	}
+	return ListResult{Items: items, Page: filter.Page, PageSize: filter.PageSize, Total: total}, nil
+}
+
+func (s *Service) Confirm(ctx context.Context, ownerID, alertID uint64, remark string) (*ConfirmResult, error) {
+	remark = strings.TrimSpace(remark)
+	if ownerID == 0 || alertID == 0 || remark == "" || len([]rune(remark)) > 500 {
+		return nil, ErrInvalidInput
+	}
+	now := s.now()
+	result, err := s.store.ConfirmAlertByOwner(ctx, ownerID, alertID, remark, now)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrNotFound
+	}
+	if errors.Is(err, ErrConflict) {
+		return nil, ErrConflict
+	}
+	if err != nil {
+		return nil, fmt.Errorf("confirm alert: %w", err)
+	}
+	return &ConfirmResult{ID: result.ID, Status: StatusConfirmed, ConfirmedAt: now}, nil
+}
+
+func validRuleInput(input RuleInput) bool {
+	return input.Metric != "" && len(input.Metric) <= 64 &&
+		(input.Operator == OperatorLT || input.Operator == OperatorLTE || input.Operator == OperatorGT || input.Operator == OperatorGTE) &&
+		!math.IsNaN(input.Value) && !math.IsInf(input.Value, 0) &&
+		input.DurationSeconds >= 0 && input.DurationSeconds <= 86400 && validLevel(input.Level)
+}
+
+func validLevel(level Level) bool {
+	return level == LevelLow || level == LevelMedium || level == LevelHigh
+}
+
+func validStatus(status Status) bool {
+	return status == StatusActive || status == StatusConfirmed || status == StatusAcknowledged || status == StatusResolved || status == StatusClosed
+}
+
+func metricUnit(metric string) string {
+	switch strings.ToLower(metric) {
+	case "soilmoisture", "humidity", "airhumidity":
+		return "%"
+	case "temperature", "airtemperature", "soiltemperature":
+		return "°C"
+	case "rainfall":
+		return "mm"
+	default:
+		return ""
+	}
+}
+
+func alertTitle(row AlertListRow) string {
+	direction := "异常"
+	if row.Operator == OperatorLT || row.Operator == OperatorLTE {
+		direction = "偏低"
+	} else if row.Operator == OperatorGT || row.Operator == OperatorGTE {
+		direction = "偏高"
+	}
+	metric := row.Metric
+	if strings.EqualFold(metric, "soilMoisture") {
+		metric = "湿度"
+	} else if strings.Contains(strings.ToLower(metric), "temperature") {
+		metric = "温度"
+	}
+	return fmt.Sprintf("%s 地块%s%s", row.PlotCode, metric, direction)
+}
+
+func alertContent(row AlertListRow) string {
+	unit := metricUnit(row.Metric)
+	return fmt.Sprintf("%s%s 触发持续阈值告警", row.TriggerValue.String(), unit)
+}

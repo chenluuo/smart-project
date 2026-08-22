@@ -106,8 +106,18 @@ func (h authHandler) me(c *gin.Context) {
 		respondError(c, http.StatusUnauthorized, 40101, "未登录或访问令牌无效")
 		return
 	}
+	result, err := h.service.CurrentUser(c.Request.Context(), claims.UserID)
+	if err != nil {
+		if errors.Is(err, identity.ErrUserNotFound) {
+			respondError(c, http.StatusNotFound, 40401, "用户不存在")
+		} else {
+			respondError(c, http.StatusInternalServerError, 50000, "服务器内部错误")
+		}
+		return
+	}
 	respondSuccess(c, http.StatusOK, gin.H{
-		"id": claims.UserID, "name": claims.AccountName, "role": claims.Role,
+		"id": result.User.ID, "name": result.User.AccountName, "role": result.Role,
+		"interactionStyle": result.User.InteractionStyle, "knowledgeReliance": result.User.KnowledgeReliance,
 	})
 }
 

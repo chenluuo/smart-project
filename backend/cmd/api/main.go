@@ -10,12 +10,17 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/chenluuo/smart-project/backend/internal/agent"
+	"github.com/chenluuo/smart-project/backend/internal/alert"
 	"github.com/chenluuo/smart-project/backend/internal/config"
 	"github.com/chenluuo/smart-project/backend/internal/control"
 	"github.com/chenluuo/smart-project/backend/internal/device"
 	httpserver "github.com/chenluuo/smart-project/backend/internal/http"
 	"github.com/chenluuo/smart-project/backend/internal/identity"
+	"github.com/chenluuo/smart-project/backend/internal/knowledge"
+	"github.com/chenluuo/smart-project/backend/internal/outbox"
 	"github.com/chenluuo/smart-project/backend/internal/platform/database"
+	"github.com/chenluuo/smart-project/backend/internal/platform/objectstore"
 	"github.com/chenluuo/smart-project/backend/internal/plot"
 )
 
@@ -53,10 +58,52 @@ func main() {
 	plotService := plot.NewService(plot.NewRepositories(db))
 	deviceService := device.NewService(device.NewRepositories(db))
 	controlService := control.NewService(control.NewRepository(db))
+	alertService := alert.NewService(alert.NewRepositories(db))
+	agentService := agent.NewService(agent.NewRepository(db))
+	var knowledgeObjectStore knowledge.ObjectStore
+	if cfg.ObjectStorage.Enabled {
+		minioStore, err := objectstore.NewMinIO(objectstore.Config{
+			Endpoint: cfg.ObjectStorage.Endpoint, AccessKey: cfg.ObjectStorage.AccessKey,
+			SecretKey: cfg.ObjectStorage.SecretKey, Bucket: cfg.ObjectStorage.Bucket,
+			Region: cfg.ObjectStorage.Region, Secure: cfg.ObjectStorage.Secure,
+		})
+		if err != nil {
+			slog.Error("configure object storage", "error", err)
+			os.Exit(1)
+		}
+		bucketCtx, bucketCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if err := minioStore.EnsureBucket(bucketCtx); err != nil {
+			bucketCancel()
+			slog.Error("prepare object storage", "error", err)
+			os.Exit(1)
+		}
+		bucketCancel()
+		knowledgeObjectStore = minioStore
+	}
+	knowledgeService := knowledge.NewService(knowledge.NewRepository(db), knowledgeObjectStore)
+	knowledgeService.ConfigureObjectAccess(cfg.ObjectStorage.MaxUploadBytes, cfg.ObjectStorage.SignedURLTimeout)
+	workerContext, stopWorkers := context.WithCancel(context.Background())
+	defer stopWorkers()
+	if cfg.Internal.KnowledgeNotifyURL != "" {
+		dispatcher, err := knowledge.NewDispatcher(
+			outbox.NewRepository(db),
+			&http.Client{Timeout: cfg.Internal.AgentHTTPTimeout},
+			cfg.Internal.KnowledgeNotifyURL,
+			cfg.Internal.ServiceKey,
+		)
+		if err != nil {
+			slog.Error("configure knowledge outbox dispatcher", "error", err)
+			os.Exit(1)
+		}
+		go dispatcher.Run(workerContext, cfg.Internal.OutboxDispatchInterval, cfg.Internal.OutboxBatchSize)
+	}
 
 	server := &http.Server{
-		Addr:              ":" + cfg.Server.Port,
-		Handler:           httpserver.NewRouterWithServices(cfg.Server.Mode, sqlDB, authService, plotService, deviceService, controlService),
+		Addr: ":" + cfg.Server.Port,
+		Handler: httpserver.NewRouterWithBackendServices(
+			cfg.Server.Mode, sqlDB, authService, plotService, deviceService, controlService, alertService,
+			agentService, knowledgeService, cfg.Internal.ServiceKey,
+		),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,
@@ -81,6 +128,7 @@ func main() {
 			os.Exit(1)
 		}
 	}
+	stopWorkers()
 
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
 	defer cancel()

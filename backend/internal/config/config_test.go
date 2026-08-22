@@ -7,7 +7,7 @@ import (
 )
 
 func TestLoadDefaults(t *testing.T) {
-	for _, key := range []string{"DB_DSN", "DB_URL", "DB_USERNAME", "DB_PASSWORD", "DB_POOL_MAX_SIZE", "DB_POOL_MIN_IDLE", "DB_MIGRATE", "SERVER_PORT", "GIN_MODE", "JWT_SECRET", "JWT_ISSUER", "JWT_TTL"} {
+	for _, key := range []string{"DB_DSN", "DB_URL", "DB_USERNAME", "DB_PASSWORD", "DB_POOL_MAX_SIZE", "DB_POOL_MIN_IDLE", "DB_MIGRATE", "SERVER_PORT", "GIN_MODE", "JWT_SECRET", "JWT_ISSUER", "JWT_TTL", "INTERNAL_SERVICE_KEY", "KNOWLEDGE_NOTIFY_URL", "OUTBOX_DISPATCH_INTERVAL", "OUTBOX_BATCH_SIZE", "AGENT_HTTP_TIMEOUT", "OBJECT_STORAGE_ENABLED", "MINIO_SECURE", "KNOWLEDGE_MAX_UPLOAD_BYTES", "MINIO_SIGNED_URL_TTL"} {
 		t.Setenv(key, "")
 	}
 
@@ -30,6 +30,15 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Auth.TokenTTL != 2*time.Hour || cfg.Auth.Issuer != "smart-agriculture-api" {
 		t.Fatalf("unexpected auth defaults: %+v", cfg.Auth)
 	}
+	if len(cfg.Internal.ServiceKey) < 32 {
+		t.Fatalf("internal service key is too short: %q", cfg.Internal.ServiceKey)
+	}
+	if cfg.Internal.KnowledgeNotifyURL != "" || cfg.Internal.OutboxBatchSize != 50 || cfg.Internal.OutboxDispatchInterval != 2*time.Second {
+		t.Fatalf("unexpected internal defaults: %+v", cfg.Internal)
+	}
+	if cfg.ObjectStorage.Enabled || cfg.ObjectStorage.MaxUploadBytes != 20*1024*1024 || cfg.ObjectStorage.SignedURLTimeout != 15*time.Minute {
+		t.Fatalf("unexpected object storage defaults: %+v", cfg.ObjectStorage)
+	}
 }
 
 func TestInvalidJWTConfiguration(t *testing.T) {
@@ -42,6 +51,13 @@ func TestInvalidJWTConfiguration(t *testing.T) {
 	t.Setenv("JWT_TTL", "never")
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() error = nil, want invalid JWT TTL error")
+	}
+}
+
+func TestInvalidInternalServiceKey(t *testing.T) {
+	t.Setenv("INTERNAL_SERVICE_KEY", "too-short")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil, want short internal service key error")
 	}
 }
 

@@ -12,9 +12,11 @@ import (
 )
 
 type Config struct {
-	Server   ServerConfig
-	Database DatabaseConfig
-	Auth     AuthConfig
+	Server        ServerConfig
+	Database      DatabaseConfig
+	Auth          AuthConfig
+	Internal      InternalConfig
+	ObjectStorage ObjectStorageConfig
 }
 
 type ServerConfig struct {
@@ -35,6 +37,26 @@ type AuthConfig struct {
 	JWTSecret string
 	Issuer    string
 	TokenTTL  time.Duration
+}
+
+type InternalConfig struct {
+	ServiceKey             string
+	KnowledgeNotifyURL     string
+	OutboxDispatchInterval time.Duration
+	OutboxBatchSize        int
+	AgentHTTPTimeout       time.Duration
+}
+
+type ObjectStorageConfig struct {
+	Enabled          bool
+	Endpoint         string
+	AccessKey        string
+	SecretKey        string
+	Bucket           string
+	Region           string
+	Secure           bool
+	MaxUploadBytes   int64
+	SignedURLTimeout time.Duration
 }
 
 func Load() (Config, error) {
@@ -63,6 +85,38 @@ func Load() (Config, error) {
 	if len(jwtSecret) < 32 {
 		return Config{}, fmt.Errorf("JWT_SECRET must contain at least 32 characters")
 	}
+	internalServiceKey := value("INTERNAL_SERVICE_KEY", "dev-only-internal-service-key-change-me")
+	if len(internalServiceKey) < 32 {
+		return Config{}, fmt.Errorf("INTERNAL_SERVICE_KEY must contain at least 32 characters")
+	}
+	outboxDispatchInterval, err := durationValue("OUTBOX_DISPATCH_INTERVAL", 2*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	outboxBatchSize, err := intValue("OUTBOX_BATCH_SIZE", 50)
+	if err != nil || outboxBatchSize < 1 || outboxBatchSize > 500 {
+		return Config{}, fmt.Errorf("OUTBOX_BATCH_SIZE must be between 1 and 500")
+	}
+	agentHTTPTimeout, err := durationValue("AGENT_HTTP_TIMEOUT", 5*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	objectStorageEnabled, err := boolValue("OBJECT_STORAGE_ENABLED", false)
+	if err != nil {
+		return Config{}, err
+	}
+	objectStorageSecure, err := boolValue("MINIO_SECURE", false)
+	if err != nil {
+		return Config{}, err
+	}
+	maxUploadBytes, err := int64Value("KNOWLEDGE_MAX_UPLOAD_BYTES", 20*1024*1024)
+	if err != nil || maxUploadBytes < 1 {
+		return Config{}, fmt.Errorf("KNOWLEDGE_MAX_UPLOAD_BYTES must be a positive integer")
+	}
+	signedURLTimeout, err := durationValue("MINIO_SIGNED_URL_TTL", 15*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
 
 	return Config{
 		Server: ServerConfig{
@@ -81,6 +135,16 @@ func Load() (Config, error) {
 			JWTSecret: jwtSecret,
 			Issuer:    value("JWT_ISSUER", "smart-agriculture-api"),
 			TokenTTL:  tokenTTL,
+		},
+		Internal: InternalConfig{
+			ServiceKey: internalServiceKey, KnowledgeNotifyURL: strings.TrimSpace(os.Getenv("KNOWLEDGE_NOTIFY_URL")),
+			OutboxDispatchInterval: outboxDispatchInterval, OutboxBatchSize: outboxBatchSize, AgentHTTPTimeout: agentHTTPTimeout,
+		},
+		ObjectStorage: ObjectStorageConfig{
+			Enabled: objectStorageEnabled, Endpoint: value("MINIO_ENDPOINT", "localhost:9000"),
+			AccessKey: value("MINIO_ACCESS_KEY", "minioadmin"), SecretKey: value("MINIO_SECRET_KEY", "minioadmin"),
+			Bucket: value("MINIO_BUCKET", "knowledge"), Region: value("MINIO_REGION", "us-east-1"),
+			Secure: objectStorageSecure, MaxUploadBytes: maxUploadBytes, SignedURLTimeout: signedURLTimeout,
 		},
 	}, nil
 }
@@ -145,6 +209,18 @@ func intValue(key string, fallback int) (int, error) {
 	result, err := strconv.Atoi(raw)
 	if err != nil || result < 0 {
 		return 0, fmt.Errorf("%s must be a non-negative integer", key)
+	}
+	return result, nil
+}
+
+func int64Value(key string, fallback int64) (int64, error) {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return fallback, nil
+	}
+	result, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be an integer", key)
 	}
 	return result, nil
 }

@@ -41,6 +41,17 @@ func (r Repositories) FindUserByAccountName(ctx context.Context, accountName str
 	return &user, nil
 }
 
+func (r Repositories) FindUserByID(ctx context.Context, userID uint64) (*User, error) {
+	var user User
+	if err := r.db.WithContext(ctx).First(&user, userID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrUserNotFound
+		}
+		return nil, err
+	}
+	return &user, nil
+}
+
 func (r Repositories) CreateUser(ctx context.Context, user *User) error {
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(user).Error; err != nil {

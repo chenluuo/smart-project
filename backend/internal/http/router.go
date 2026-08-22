@@ -5,9 +5,12 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/chenluuo/smart-project/backend/internal/agent"
+	"github.com/chenluuo/smart-project/backend/internal/alert"
 	"github.com/chenluuo/smart-project/backend/internal/control"
 	"github.com/chenluuo/smart-project/backend/internal/device"
 	"github.com/chenluuo/smart-project/backend/internal/identity"
+	"github.com/chenluuo/smart-project/backend/internal/knowledge"
 	"github.com/chenluuo/smart-project/backend/internal/plot"
 	"github.com/gin-gonic/gin"
 )
@@ -53,9 +56,40 @@ func NewRouterWithServices(mode string, db databasePinger, auth authService, plo
 	return router
 }
 
+func NewRouterWithAllServices(mode string, db databasePinger, auth authService, plots plotService, devices deviceService, controls controlService, alerts alertService) *gin.Engine {
+	router := NewRouterWithServices(mode, db, auth, plots, devices, controls)
+	if alerts != nil {
+		registerAlertRoutes(router, auth, alerts)
+	}
+	return router
+}
+
+func NewRouterWithBackendServices(
+	mode string,
+	db databasePinger,
+	auth authService,
+	plots plotService,
+	devices deviceService,
+	controls controlService,
+	alerts alertService,
+	agents agentService,
+	knowledgeDocuments knowledgeService,
+	internalServiceKey string,
+) *gin.Engine {
+	router := NewRouterWithAllServices(mode, db, auth, plots, devices, controls, alerts)
+	if agents != nil {
+		registerAgentRoutes(router, auth, agents, internalServiceKey)
+	}
+	if knowledgeDocuments != nil {
+		registerKnowledgeRoutes(router, auth, knowledgeDocuments)
+	}
+	return router
+}
+
 type authService interface {
 	Register(context.Context, identity.RegisterInput) (*identity.User, error)
 	Login(context.Context, string, string) (*identity.LoginResult, error)
+	CurrentUser(context.Context, uint64) (*identity.CurrentUserResult, error)
 	Authenticate(string) (identity.Claims, error)
 }
 
@@ -76,6 +110,29 @@ type controlService interface {
 	IrrigationStatus(context.Context, uint64, uint64) (*control.IrrigationStatus, error)
 	Command(context.Context, uint64, string) (*control.CommandResult, error)
 	List(context.Context, uint64, control.ListFilter) (control.ListResult, error)
+}
+
+type alertService interface {
+	ListRules(context.Context, uint64, uint64) ([]alert.RuleView, error)
+	UpsertRule(context.Context, uint64, uint64, uint64, alert.RuleInput) (*alert.RuleUpdateResult, error)
+	List(context.Context, uint64, alert.ListFilter) (alert.ListResult, error)
+	Confirm(context.Context, uint64, uint64, string) (*alert.ConfirmResult, error)
+}
+
+type agentService interface {
+	CreateSession(context.Context, uint64, *uint64) (*agent.Session, error)
+	AppendMessage(context.Context, string, agent.MessageInput) (*agent.Message, error)
+	ListMessages(context.Context, uint64, string, int, int) (agent.MessageList, error)
+	CloseSession(context.Context, uint64, string) (*agent.Session, error)
+}
+
+type knowledgeService interface {
+	ListActive(context.Context, string) ([]knowledge.DocumentView, error)
+	MaxUploadBytes() int64
+	Upload(context.Context, uint64, knowledge.UploadInput) (*knowledge.Document, error)
+	Approve(context.Context, uint64, uint64, string) (*knowledge.Document, error)
+	Publish(context.Context, uint64, uint64, string) (*knowledge.Document, error)
+	Archive(context.Context, uint64, uint64, string) (*knowledge.Document, error)
 }
 
 type healthHandler struct {
