@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/chenluuo/smart-project/backend/internal/alert"
 	"github.com/chenluuo/smart-project/backend/internal/device"
 	"github.com/chenluuo/smart-project/backend/internal/plot"
 	"github.com/chenluuo/smart-project/backend/internal/telemetry"
@@ -104,4 +105,105 @@ func (h telemetryHandler) latest(c *gin.Context) {
 	}
 
 	respondSuccess(c, http.StatusOK, result)
+}
+
+type telemetryListHandler struct {
+	plots     plotService
+	alerts    alertService
+	telemetry telemetryService
+}
+
+type plotLatestItem struct {
+	PlotID       uint64     `json:"plotId"`
+	PlotCode     string     `json:"plotCode"`
+	SoilMoisture *float64   `json:"soilMoisture"`
+	Temperature  *float64   `json:"temperature"`
+	Status       string     `json:"status"`
+	SampleTime   *time.Time `json:"sampleTime"`
+}
+
+func registerTelemetryListRoutes(router *gin.Engine, auth authService, plots plotService, alerts alertService, telemetry telemetryService) {
+	handler := telemetryListHandler{plots: plots, alerts: alerts, telemetry: telemetry}
+	router.GET("/api/v1/telemetry/latest", jwtAuthentication(auth), handler.list)
+}
+
+func (h telemetryListHandler) list(c *gin.Context) {
+	claims, ok := authenticatedClaims(c)
+	if !ok {
+		respondError(c, http.StatusUnauthorized, 40101, "未登录或访问令牌无效")
+		return
+	}
+	ctx := c.Request.Context()
+
+	allPlots, err := h.plots.List(ctx, claims.UserID)
+	if err != nil {
+		respondError(c, http.StatusInternalServerError, 50000, "服务器内部错误")
+		return
+	}
+
+	// 可选 plotId 过滤（farmId 已废弃，按当前用户地块范围 + 可选 plotId）
+	if raw := c.Query("plotId"); raw != "" {
+		id, err := strconv.ParseUint(raw, 10, 64)
+		if err != nil || id == 0 {
+			respondError(c, http.StatusBadRequest, 40001, "参数错误：plotId 必须为正整数")
+			return
+		}
+		filtered := make([]plot.Plot, 0, len(allPlots))
+		for _, p := range allPlots {
+			if p.ID == id {
+				filtered = append(filtered, p)
+			}
+		}
+		allPlots = filtered
+	}
+
+	// 批量读取遥测（NullStore 返回空；接 Redis 后走 MGET）
+	plotIDs := make([]uint64, 0, len(allPlots))
+	for _, p := range allPlots {
+		plotIDs = append(plotIDs, p.ID)
+	}
+	latestList, err := h.telemetry.LatestByPlots(ctx, plotIDs)
+	if err != nil {
+		respondError(c, http.StatusInternalServerError, 50000, "服务器内部错误")
+		return
+	}
+	latestByPlot := make(map[uint64]telemetry.Latest, len(latestList))
+	for _, l := range latestList {
+		latestByPlot[l.PlotID] = l
+	}
+
+	// 活动告警地块集合，用于派生 NORMAL/ALERT
+	activeStatus := alert.StatusActive
+	activeAlerts, err := h.alerts.List(ctx, claims.UserID, alert.ListFilter{Status: &activeStatus, PageSize: 100})
+	if err != nil {
+		respondError(c, http.StatusInternalServerError, 50000, "服务器内部错误")
+		return
+	}
+	alertPlots := make(map[uint64]bool)
+	for _, item := range activeAlerts.Items {
+		alertPlots[item.PlotID] = true
+	}
+
+	items := make([]plotLatestItem, 0, len(allPlots))
+	for _, p := range allPlots {
+		item := plotLatestItem{PlotID: p.ID, PlotCode: p.Code, Status: "NORMAL"}
+		if alertPlots[p.ID] {
+			item.Status = "ALERT"
+		}
+		if l, ok := latestByPlot[p.ID]; ok {
+			if !l.SampleTime.IsZero() {
+				t := l.SampleTime
+				item.SampleTime = &t
+			}
+			if l.SoilMoisture != nil {
+				item.SoilMoisture = &l.SoilMoisture.Value
+			}
+			if l.Temperature != nil {
+				item.Temperature = &l.Temperature.Value
+			}
+		}
+		items = append(items, item)
+	}
+
+	respondSuccess(c, http.StatusOK, items)
 }

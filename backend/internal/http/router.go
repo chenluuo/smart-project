@@ -88,6 +88,7 @@ func NewRouterWithBackendServices(
 	if telemetry != nil {
 		registerDashboardRoutes(router, auth, plots, devices, alerts, telemetry)
 		registerTelemetryRoutes(router, auth, plots, devices, telemetry)
+		registerTelemetryListRoutes(router, auth, plots, alerts, telemetry)
 	}
 	return router
 }
@@ -143,6 +144,7 @@ type knowledgeService interface {
 
 type telemetryService interface {
 	LatestByPlot(context.Context, uint64) (*telemetry.Latest, error)
+	LatestByPlots(context.Context, []uint64) ([]telemetry.Latest, error)
 }
 
 type healthHandler struct {

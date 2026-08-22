@@ -8,20 +8,28 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chenluuo/smart-project/backend/internal/alert"
 	"github.com/chenluuo/smart-project/backend/internal/device"
 	"github.com/chenluuo/smart-project/backend/internal/plot"
 	"github.com/chenluuo/smart-project/backend/internal/telemetry"
 )
 
 type telemetryServiceStub struct {
-	latest *telemetry.Latest
-	err    error
-	plotID uint64
+	latest     *telemetry.Latest
+	latestList []telemetry.Latest
+	err        error
+	plotID     uint64
+	plotIDs    []uint64
 }
 
 func (s *telemetryServiceStub) LatestByPlot(_ context.Context, plotID uint64) (*telemetry.Latest, error) {
 	s.plotID = plotID
 	return s.latest, s.err
+}
+
+func (s *telemetryServiceStub) LatestByPlots(_ context.Context, plotIDs []uint64) ([]telemetry.Latest, error) {
+	s.plotIDs = plotIDs
+	return s.latestList, s.err
 }
 
 func newTelemetryTestRouter(plots plotService, devices deviceService, telemetry telemetryService) http.Handler {
@@ -96,6 +104,52 @@ func TestPlotTelemetryReturnsLatestAndSourceDevices(t *testing.T) {
 		`"name":"土壤传感器 03"`,
 		`"status":"ONLINE"`,
 		`"battery":87`,
+	} {
+		if !strings.Contains(response.Body.String(), want) {
+			t.Fatalf("body = %s, want it to contain %s", response.Body.String(), want)
+		}
+	}
+}
+
+func newTelemetryListTestRouter(plots plotService, alerts alertService, telemetry telemetryService) http.Handler {
+	return NewRouterWithBackendServices("test", pingerStub{}, authServiceStub{}, plots, nil, nil, alerts, nil, nil, telemetry, "service-key")
+}
+
+func TestTelemetryListRequiresAuthentication(t *testing.T) {
+	router := newTelemetryListTestRouter(&plotServiceStub{}, &alertServiceStub{}, &telemetryServiceStub{})
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/telemetry/latest", nil)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized || !strings.Contains(response.Body.String(), `"code":40101`) {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+}
+
+func TestTelemetryListReturnsAllPlotsWithStatus(t *testing.T) {
+	plotStub := &plotServiceStub{plots: []plot.Plot{
+		{ID: 11, OwnerID: 7, Code: "A1", Name: "西侧棚", Status: plot.StatusActive},
+		{ID: 12, OwnerID: 7, Code: "A3", Name: "东侧棚", Status: plot.StatusActive},
+	}}
+	telemetryStub := &telemetryServiceStub{latestList: []telemetry.Latest{
+		{PlotID: 12, SoilMoisture: &telemetry.MetricValue{Value: 27.8, Unit: "%"}},
+	}}
+	alertStub := &alertServiceStub{listResult: alert.ListResult{Items: []alert.ListItem{{PlotID: 12}}}}
+
+	router := newTelemetryListTestRouter(plotStub, alertStub, telemetryStub)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/telemetry/latest", nil)
+	request.Header.Set("Authorization", "Bearer signed-token")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if len(telemetryStub.plotIDs) != 2 {
+		t.Fatalf("LatestByPlots plotIDs = %v, want 2 plot IDs", telemetryStub.plotIDs)
+	}
+	for _, want := range []string{
+		`"plotId":11`, `"plotCode":"A1"`, `"status":"NORMAL"`, `"soilMoisture":null`,
+		`"plotId":12`, `"plotCode":"A3"`, `"status":"ALERT"`, `"soilMoisture":27.8`,
 	} {
 		if !strings.Contains(response.Body.String(), want) {
 			t.Fatalf("body = %s, want it to contain %s", response.Body.String(), want)
