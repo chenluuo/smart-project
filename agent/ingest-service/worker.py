@@ -11,7 +11,10 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "ingest-service"))
+sys.path.insert(0, str(ROOT / "agent-service"))  # 复用 llm 适配
 
 from shared.config import get_config  # noqa: E402
 from shared.redis_client import get_redis  # noqa: E402
