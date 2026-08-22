@@ -1,0 +1,28 @@
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: smart-agriculture-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: smart_agriculture
+      MYSQL_USER: smart_agriculture
+      MYSQL_PASSWORD: smart_agriculture
+      MYSQL_ROOT_PASSWORD: root
+      TZ: UTC
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+      - --default-time-zone=+00:00
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-usmart_agriculture", "-psmart_agriculture"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 15s
+
+volumes:
+  mysql-data:
