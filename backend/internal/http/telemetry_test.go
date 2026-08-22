@@ -15,11 +15,13 @@ import (
 )
 
 type telemetryServiceStub struct {
-	latest     *telemetry.Latest
-	latestList []telemetry.Latest
-	err        error
-	plotID     uint64
-	plotIDs    []uint64
+	latest       *telemetry.Latest
+	latestList   []telemetry.Latest
+	history      *telemetry.History
+	err          error
+	plotID       uint64
+	plotIDs      []uint64
+	historyQuery telemetry.HistoryQuery
 }
 
 func (s *telemetryServiceStub) LatestByPlot(_ context.Context, plotID uint64) (*telemetry.Latest, error) {
@@ -30,6 +32,11 @@ func (s *telemetryServiceStub) LatestByPlot(_ context.Context, plotID uint64) (*
 func (s *telemetryServiceStub) LatestByPlots(_ context.Context, plotIDs []uint64) ([]telemetry.Latest, error) {
 	s.plotIDs = plotIDs
 	return s.latestList, s.err
+}
+
+func (s *telemetryServiceStub) History(_ context.Context, q telemetry.HistoryQuery) (*telemetry.History, error) {
+	s.historyQuery = q
+	return s.history, s.err
 }
 
 func newTelemetryTestRouter(plots plotService, devices deviceService, telemetry telemetryService) http.Handler {
@@ -150,6 +157,75 @@ func TestTelemetryListReturnsAllPlotsWithStatus(t *testing.T) {
 	for _, want := range []string{
 		`"plotId":11`, `"plotCode":"A1"`, `"status":"NORMAL"`, `"soilMoisture":null`,
 		`"plotId":12`, `"plotCode":"A3"`, `"status":"ALERT"`, `"soilMoisture":27.8`,
+	} {
+		if !strings.Contains(response.Body.String(), want) {
+			t.Fatalf("body = %s, want it to contain %s", response.Body.String(), want)
+		}
+	}
+}
+
+func newTelemetryHistoryTestRouter(plots plotService, telemetry telemetryService) http.Handler {
+	return NewRouterWithBackendServices("test", pingerStub{}, authServiceStub{}, plots, nil, nil, nil, nil, nil, telemetry, "service-key")
+}
+
+func TestTelemetryHistoryRequiresAuthentication(t *testing.T) {
+	router := newTelemetryHistoryTestRouter(&plotServiceStub{}, &telemetryServiceStub{})
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/telemetry/history?plotId=11&metric=soilMoisture&range=7d", nil)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized || !strings.Contains(response.Body.String(), `"code":40101`) {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+}
+
+func TestTelemetryHistoryValidatesParams(t *testing.T) {
+	tests := []struct {
+		name       string
+		path       string
+		plots      plotService
+		wantStatus int
+		wantCode   string
+	}{
+		{name: "missing plotId", path: "/api/v1/telemetry/history?metric=soilMoisture&range=7d", plots: &plotServiceStub{}, wantStatus: http.StatusBadRequest, wantCode: `"code":40001`},
+		{name: "invalid metric", path: "/api/v1/telemetry/history?plotId=11&metric=wind&range=7d", plots: &plotServiceStub{plot: &plot.Plot{ID: 11, OwnerID: 7, Status: plot.StatusActive}}, wantStatus: http.StatusBadRequest, wantCode: `"code":40001`},
+		{name: "foreign plot", path: "/api/v1/telemetry/history?plotId=99&metric=soilMoisture&range=7d", plots: &plotServiceStub{getErr: plot.ErrNotFound}, wantStatus: http.StatusNotFound, wantCode: `"code":40401`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			router := newTelemetryHistoryTestRouter(tt.plots, &telemetryServiceStub{})
+			request := httptest.NewRequest(http.MethodGet, tt.path, nil)
+			request.Header.Set("Authorization", "Bearer signed-token")
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+			if response.Code != tt.wantStatus || !strings.Contains(response.Body.String(), tt.wantCode) {
+				t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestTelemetryHistoryReturnsPoints(t *testing.T) {
+	plotStub := &plotServiceStub{plot: &plot.Plot{ID: 11, OwnerID: 7, Code: "A3", Status: plot.StatusActive}}
+	sample := time.Date(2026, 8, 16, 0, 0, 0, 0, time.FixedZone("CST", 8*60*60))
+	telemetryStub := &telemetryServiceStub{history: &telemetry.History{
+		PlotID: 11, Metric: "soilMoisture",
+		Points: []telemetry.HistoryPoint{{Time: sample, Avg: 34.2, Min: 28.5, Max: 39.1}},
+	}}
+
+	router := newTelemetryHistoryTestRouter(plotStub, telemetryStub)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/telemetry/history?plotId=11&metric=soilMoisture&startTime=2026-08-15T00:00:00Z&endTime=2026-08-22T00:00:00Z&interval=1d", nil)
+	request.Header.Set("Authorization", "Bearer signed-token")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if telemetryStub.historyQuery.PlotID != 11 || telemetryStub.historyQuery.Metric != "soilMoisture" || telemetryStub.historyQuery.Interval != 24*time.Hour {
+		t.Fatalf("historyQuery = %+v", telemetryStub.historyQuery)
+	}
+	for _, want := range []string{
+		`"plotId":11`, `"metric":"soilMoisture"`, `"unit":"%"`, `"avg":34.2`, `"min":28.5`, `"max":39.1`,
 	} {
 		if !strings.Contains(response.Body.String(), want) {
 			t.Fatalf("body = %s, want it to contain %s", response.Body.String(), want)

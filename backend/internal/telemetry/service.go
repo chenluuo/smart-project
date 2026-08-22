@@ -17,3 +17,7 @@ func (s *Service) LatestByPlot(ctx context.Context, plotID uint64) (*Latest, err
 func (s *Service) LatestByPlots(ctx context.Context, plotIDs []uint64) ([]Latest, error) {
 	return s.store.LatestByPlots(ctx, plotIDs)
 }
+
+func (s *Service) History(ctx context.Context, q HistoryQuery) (*History, error) {
+	return s.store.History(ctx, q)
+}

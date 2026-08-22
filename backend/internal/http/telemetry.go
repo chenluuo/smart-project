@@ -207,3 +207,144 @@ func (h telemetryListHandler) list(c *gin.Context) {
 
 	respondSuccess(c, http.StatusOK, items)
 }
+
+type telemetryHistoryHandler struct {
+	plots     plotService
+	telemetry telemetryService
+}
+
+type historyPointView struct {
+	Time time.Time `json:"time"`
+	Avg  float64   `json:"avg"`
+	Min  float64   `json:"min"`
+	Max  float64   `json:"max"`
+}
+
+type historyView struct {
+	PlotID uint64             `json:"plotId"`
+	Metric string             `json:"metric"`
+	Unit   string             `json:"unit"`
+	Points []historyPointView `json:"points"`
+}
+
+var historyRanges = map[string]time.Duration{
+	"1h":  time.Hour,
+	"24h": 24 * time.Hour,
+	"7d":  7 * 24 * time.Hour,
+	"30d": 30 * 24 * time.Hour,
+}
+
+var historyIntervals = map[string]time.Duration{
+	"5m": 5 * time.Minute,
+	"1h": time.Hour,
+	"1d": 24 * time.Hour,
+}
+
+func registerTelemetryHistoryRoutes(router *gin.Engine, auth authService, plots plotService, telemetry telemetryService) {
+	handler := telemetryHistoryHandler{plots: plots, telemetry: telemetry}
+	router.GET("/api/v1/telemetry/history", jwtAuthentication(auth), handler.history)
+}
+
+func (h telemetryHistoryHandler) history(c *gin.Context) {
+	claims, ok := authenticatedClaims(c)
+	if !ok {
+		respondError(c, http.StatusUnauthorized, 40101, "未登录或访问令牌无效")
+		return
+	}
+	ctx := c.Request.Context()
+
+	plotID, err := strconv.ParseUint(c.Query("plotId"), 10, 64)
+	if err != nil || plotID == 0 {
+		respondError(c, http.StatusBadRequest, 40001, "参数错误：plotId 必须为正整数")
+		return
+	}
+	if _, err := h.plots.Get(ctx, claims.UserID, plotID); err != nil {
+		if errors.Is(err, plot.ErrNotFound) {
+			respondError(c, http.StatusNotFound, 40401, "地块不存在")
+		} else {
+			respondError(c, http.StatusInternalServerError, 50000, "服务器内部错误")
+		}
+		return
+	}
+
+	metric := c.Query("metric")
+	unit, ok := telemetryMetricUnit(metric)
+	if !ok {
+		respondError(c, http.StatusBadRequest, 40001, "参数错误：metric 必须是 soilMoisture 或 temperature")
+		return
+	}
+
+	// 时间窗口：range 或 startTime+endTime
+	now := time.Now()
+	var start, end time.Time
+	if raw := c.Query("range"); raw != "" {
+		d, ok := historyRanges[raw]
+		if !ok {
+			respondError(c, http.StatusBadRequest, 40001, "参数错误：range 必须是 1h/24h/7d/30d")
+			return
+		}
+		end = now
+		start = now.Add(-d)
+	} else {
+		startRaw, endRaw := c.Query("startTime"), c.Query("endTime")
+		if startRaw == "" || endRaw == "" {
+			respondError(c, http.StatusBadRequest, 40001, "参数错误：缺少时间范围（range 或 startTime+endTime）")
+			return
+		}
+		start, err = time.Parse(time.RFC3339, startRaw)
+		if err != nil {
+			respondError(c, http.StatusBadRequest, 40001, "参数错误：startTime 必须是 RFC3339 格式")
+			return
+		}
+		end, err = time.Parse(time.RFC3339, endRaw)
+		if err != nil {
+			respondError(c, http.StatusBadRequest, 40001, "参数错误：endTime 必须是 RFC3339 格式")
+			return
+		}
+	}
+	if !start.Before(end) {
+		respondError(c, http.StatusBadRequest, 40001, "参数错误：startTime 必须早于 endTime")
+		return
+	}
+	if end.Sub(start) > 30*24*time.Hour {
+		respondError(c, http.StatusBadRequest, 40001, "参数错误：时间范围不能超过 30 天")
+		return
+	}
+
+	// 聚合粒度，默认 1h
+	interval := time.Hour
+	if raw := c.Query("interval"); raw != "" {
+		d, ok := historyIntervals[raw]
+		if !ok {
+			respondError(c, http.StatusBadRequest, 40001, "参数错误：interval 必须是 5m/1h/1d")
+			return
+		}
+		interval = d
+	}
+
+	result, err := h.telemetry.History(ctx, telemetry.HistoryQuery{
+		PlotID: plotID, Metric: metric, StartTime: start, EndTime: end, Interval: interval,
+	})
+	if err != nil {
+		respondError(c, http.StatusInternalServerError, 50000, "服务器内部错误")
+		return
+	}
+
+	points := make([]historyPointView, 0, len(result.Points))
+	for _, p := range result.Points {
+		points = append(points, historyPointView{Time: p.Time, Avg: p.Avg, Min: p.Min, Max: p.Max})
+	}
+
+	respondSuccess(c, http.StatusOK, historyView{PlotID: plotID, Metric: metric, Unit: unit, Points: points})
+}
+
+func telemetryMetricUnit(metric string) (string, bool) {
+	switch metric {
+	case "soilMoisture":
+		return "%", true
+	case "temperature":
+		return "°C", true
+	default:
+		return "", false
+	}
+}
