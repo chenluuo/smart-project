@@ -96,8 +96,8 @@ async def handle_question(
     # ---------- 会话状态 ----------
     state = get_session(session_id) if session_id else None
     if state is None:
-        state = create_session(user_id, session_id or "sess_" + ensure_trace_id()[:12], plot_id)
-        session_id = session_id or state.get("session_id", "")
+        session_id = session_id or "sess_" + ensure_trace_id()[:12]
+        state = create_session(user_id, session_id, plot_id)
     if state["status"] == STATUS_CLOSED:
         yield {"type": "error", "message": "会话已结束，请发起新会话"}
         return
@@ -227,6 +227,18 @@ async def _tool_loop(question: str, plot_id: str | None, authorization: str) -> 
         msg = resp.choices[0].message
         if not msg.tool_calls:
             break
+        # 协议要求：tool 消息前必须先有带 tool_calls 的 assistant 消息
+        tool_calls_payload = [
+            {
+                "id": tc.id,
+                "type": "function",
+                "function": {"name": tc.function.name, "arguments": tc.function.arguments or "{}"},
+            }
+            for tc in msg.tool_calls
+        ]
+        messages.append(
+            {"role": "assistant", "content": msg.content or "", "tool_calls": tool_calls_payload}
+        )
         for tc in msg.tool_calls:
             name = tc.function.name
             try:

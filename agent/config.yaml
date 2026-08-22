@@ -7,7 +7,7 @@ services:
     host: localhost
     port: 6379
     db: 0
-    password: ${REDIS_PASSWORD}
+    password: ""            # 本地无密码；生产用 ${REDIS_PASSWORD}
     stream_prefix: "queue:"
     consumer_group: "ingest"
 
@@ -22,8 +22,8 @@ services:
 
   llm:
     base_url: "https://api.deepseek.com/v1"
-    api_key: ${LLM_API_KEY}
-    model: "deepseek-chat"
+    api_key: "sk-9a563ed2c213414ab730b99cc8daee2a"
+    model: "deepseek-v4-flash"
     temperature: 0.3
     max_tokens: 1024
 
@@ -35,7 +35,7 @@ services:
   milvus:
     host: localhost
     port: 19530
-    token: ${MILVUS_TOKEN}
+    token: ""               # 本地无认证；生产用 ${MILVUS_TOKEN}
     dimension: 1024
     knowledge_collection: "knowledge"
     memory_collection: "memory"
@@ -62,7 +62,7 @@ services:
   tool:
     port: 8002
     base_url: "http://localhost:8002"
-    mock_go: false          # true 时工具返回契约示例数据（Go 未就绪联调用）
+    mock_go: true           # 测试期：工具返回契约示例数据（Go 就绪后改回 false）
     top_k: 5                # search_knowledge 默认 top_k
     plots_full_threshold: 5 # get_user_plots 全量返回阈值
 

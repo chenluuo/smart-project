@@ -40,8 +40,8 @@ def get_session(session_id: str) -> dict[str, Any] | None:
 
 
 def create_session(user_id: str, session_id: str, plot_id: str | None = None) -> dict[str, Any]:
-    state = {"user_id": user_id, "status": STATUS_ACTIVE, "last_message_at": _now_iso(),
-             "plot_id": plot_id, "message_count": 0}
+    state = {"session_id": session_id, "user_id": user_id, "status": STATUS_ACTIVE,
+             "last_message_at": _now_iso(), "plot_id": plot_id, "message_count": 0}
     get_redis().session_set(session_id, state)
     return state
 
