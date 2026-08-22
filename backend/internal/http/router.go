@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/chenluuo/smart-project/backend/internal/identity"
+	"github.com/chenluuo/smart-project/backend/internal/plot"
 	"github.com/gin-gonic/gin"
 )
 
@@ -30,10 +31,21 @@ func NewRouter(mode string, db databasePinger, authServices ...authService) *gin
 	return router
 }
 
+func NewRouterWithPlotService(mode string, db databasePinger, auth authService, plots plotService) *gin.Engine {
+	router := NewRouter(mode, db, auth)
+	registerPlotRoutes(router, auth, plots)
+	return router
+}
+
 type authService interface {
 	Register(context.Context, identity.RegisterInput) (*identity.User, error)
 	Login(context.Context, string, string) (*identity.LoginResult, error)
 	Authenticate(string) (identity.Claims, error)
+}
+
+type plotService interface {
+	List(context.Context, uint64) ([]plot.Plot, error)
+	Get(context.Context, uint64, uint64) (*plot.Plot, error)
 }
 
 type healthHandler struct {

@@ -14,6 +14,7 @@ import (
 	httpserver "github.com/chenluuo/smart-project/backend/internal/http"
 	"github.com/chenluuo/smart-project/backend/internal/identity"
 	"github.com/chenluuo/smart-project/backend/internal/platform/database"
+	"github.com/chenluuo/smart-project/backend/internal/plot"
 )
 
 func main() {
@@ -47,10 +48,11 @@ func main() {
 		os.Exit(1)
 	}
 	authService := identity.NewAuthService(identity.NewRepositories(db), tokenManager)
+	plotService := plot.NewService(plot.NewRepositories(db))
 
 	server := &http.Server{
 		Addr:              ":" + cfg.Server.Port,
-		Handler:           httpserver.NewRouter(cfg.Server.Mode, sqlDB, authService),
+		Handler:           httpserver.NewRouterWithPlotService(cfg.Server.Mode, sqlDB, authService, plotService),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,

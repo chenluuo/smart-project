@@ -83,6 +83,15 @@ POST /api/v1/auth/login     # username、password
 GET  /api/v1/users/me       # Authorization: Bearer <access_token>
 ```
 
+地块接口：
+
+```text
+GET  /api/v1/plots          # 当前用户的地块列表
+GET  /api/v1/plots/{plotId} # 当前用户的地块详情
+```
+
+两个地块接口都要求 Bearer Token，并按令牌中的用户 ID 隔离数据。实时遥测接入前，列表中的 `soilMoisture`、`temperature` 和 `deviceStatus` 返回 `null`。
+
 ## 配置
 
 本地默认连接：
