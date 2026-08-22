@@ -27,7 +27,7 @@ func TestCreateTriggeredAlertPersistsOwnerNotificationAndOriginalAgentRequest(t 
 	if err != nil {
 		t.Fatalf("get SQL DB: %v", err)
 	}
-	defer sqlDB.Close()
+	t.Cleanup(func() { _ = sqlDB.Close() })
 	if err := database.Migrate(context.Background(), sqlDB); err != nil {
 		t.Fatalf("migrate MySQL: %v", err)
 	}
@@ -62,28 +62,55 @@ func TestCreateTriggeredAlertPersistsOwnerNotificationAndOriginalAgentRequest(t 
 	if err := db.Create(&rule).Error; err != nil {
 		t.Fatalf("insert rule: %v", err)
 	}
+	var createdAlertID uint64
 	t.Cleanup(func() {
-		db.Exec("DELETE FROM outbox_events WHERE aggregate_type = ? AND aggregate_id IN (SELECT CAST(id AS CHAR) FROM alerts WHERE rule_id = ?)", "ALERT", rule.ID)
+		if createdAlertID != 0 {
+			db.Exec("DELETE FROM outbox_events WHERE aggregate_type = ? AND aggregate_id = ?", "ALERT", strconv.FormatUint(createdAlertID, 10))
+		}
 		db.Exec("DELETE FROM notifications WHERE alert_id IN (SELECT id FROM alerts WHERE rule_id = ?)", rule.ID)
 		db.Exec("DELETE FROM alerts WHERE rule_id = ?", rule.ID)
 		db.Exec("DELETE FROM alert_rules WHERE id = ?", rule.ID)
 		db.Exec("DELETE FROM plots WHERE id = ?", plot.ID)
 		db.Exec("DELETE FROM users WHERE id = ?", owner.ID)
 	})
+	repository := NewRepositories(db)
+	updatedRule := rule
+	updatedRule.Threshold = decimal.NewFromInt(29)
+	updatedRule.Hysteresis = decimal.Zero
+	if err := repository.UpsertRuleByOwner(context.Background(), owner.ID, &updatedRule, nil); err != nil {
+		t.Fatalf("update rule without hysteresis: %v", err)
+	}
+	var storedRule Rule
+	if err := db.First(&storedRule, rule.ID).Error; err != nil {
+		t.Fatalf("read updated rule: %v", err)
+	}
+	if !storedRule.Threshold.Equal(decimal.NewFromInt(29)) || !storedRule.Hysteresis.Equal(decimal.NewFromInt(2)) {
+		t.Fatalf("updated rule threshold=%s hysteresis=%s", storedRule.Threshold, storedRule.Hysteresis)
+	}
 
 	original := json.RawMessage(`{"ruleId":1,"triggerValue":28.6,"extra":{"source":"telemetry"}}`)
 	input := TriggerInput{RuleID: rule.ID, TriggerValue: 28.6, TriggeredAt: &now, TraceID: "trace-1", ForwardBody: original}
-	repository := NewRepositories(db)
 	first, err := repository.CreateTriggeredAlert(context.Background(), input, now)
 	if err != nil || !first.Created {
 		t.Fatalf("first CreateTriggeredAlert() = (%+v, %v)", first, err)
 	}
+	createdAlertID = first.Alert.ID
 	if first.OwnerID != owner.ID || first.PlotID != plot.ID || first.PlotCode != plotCode || first.Metric != rule.Metric {
 		t.Fatalf("trigger routing metadata = %+v", first)
 	}
 	second, err := repository.CreateTriggeredAlert(context.Background(), input, now.Add(time.Second))
 	if err != nil || second.Created || second.Alert.ID != first.Alert.ID {
 		t.Fatalf("duplicate CreateTriggeredAlert() = (%+v, %v), first=%+v", second, err, first)
+	}
+	confirmedAt := now.Add(2 * time.Second)
+	confirmed, err := repository.ConfirmAlertByOwner(context.Background(), owner.ID, first.Alert.ID, "已处理", confirmedAt)
+	if err != nil || confirmed.AcknowledgedAt == nil || !confirmed.AcknowledgedAt.Equal(confirmedAt) {
+		t.Fatalf("first ConfirmAlertByOwner() = (%+v, %v)", confirmed, err)
+	}
+	retried, err := repository.ConfirmAlertByOwner(context.Background(), owner.ID, first.Alert.ID, "重复确认", now.Add(3*time.Second))
+	if err != nil || retried.AcknowledgedAt == nil || !retried.AcknowledgedAt.Equal(confirmedAt) ||
+		retried.ConfirmationRemark == nil || *retried.ConfirmationRemark != "已处理" {
+		t.Fatalf("retry ConfirmAlertByOwner() = (%+v, %v)", retried, err)
 	}
 
 	var alertCount, notificationCount, outboxCount int64

@@ -69,9 +69,12 @@ func (r *Repository) FindByIdempotencyKeyAndOwner(ctx context.Context, key strin
 	return &result, nil
 }
 
-func (r *Repository) FindLatestByDeviceAndPlot(ctx context.Context, deviceID, plotID uint64) (*Command, error) {
+func (r *Repository) FindLatestSuccessfulByDeviceAndPlot(ctx context.Context, deviceID, plotID uint64) (*Command, error) {
 	var result Command
-	err := r.db.WithContext(ctx).Where("device_id = ? AND plot_id = ?", deviceID, plotID).
+	err := r.db.WithContext(ctx).Where(
+		"device_id = ? AND plot_id = ? AND status IN ?",
+		deviceID, plotID, []Status{StatusAcknowledged, StatusSucceeded},
+	).
 		Order("created_at DESC, id DESC").First(&result).Error
 	if err != nil {
 		return nil, err

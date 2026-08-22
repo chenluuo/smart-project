@@ -25,6 +25,7 @@ type RuleInput struct {
 	Metric          string
 	Operator        ComparisonOperator
 	Value           float64
+	Hysteresis      *float64
 	DurationSeconds int
 	Level           Level
 	Enabled         bool
@@ -36,6 +37,7 @@ type RuleView struct {
 	Metric          string             `json:"metric"`
 	Operator        ComparisonOperator `json:"operator"`
 	Value           float64            `json:"value"`
+	Hysteresis      float64            `json:"hysteresis"`
 	Unit            string             `json:"unit"`
 	DurationSeconds int                `json:"durationSeconds"`
 	Enabled         bool               `json:"enabled"`
@@ -131,7 +133,7 @@ type TriggerResult struct {
 
 type Store interface {
 	ListRulesByOwner(context.Context, uint64, uint64) ([]Rule, error)
-	UpsertRuleByOwner(context.Context, uint64, *Rule) error
+	UpsertRuleByOwner(context.Context, uint64, *Rule, *decimal.Decimal) error
 	ListAlertsByOwner(context.Context, uint64, ListFilter) ([]AlertListRow, int64, error)
 	ConfirmAlertByOwner(context.Context, uint64, uint64, string, time.Time) (*Alert, error)
 	CreateTriggeredAlert(context.Context, TriggerInput, time.Time) (*TriggerRecord, error)
@@ -165,9 +167,10 @@ func (s *Service) ListRules(ctx context.Context, ownerID, plotID uint64) ([]Rule
 	result := make([]RuleView, 0, len(rules))
 	for _, rule := range rules {
 		value, _ := rule.Threshold.Float64()
+		hysteresis, _ := rule.Hysteresis.Float64()
 		result = append(result, RuleView{
 			ID: rule.ID, PlotID: rule.PlotID, Metric: rule.Metric,
-			Operator: rule.ComparisonOperator, Value: value, Unit: metricUnit(rule.Metric),
+			Operator: rule.ComparisonOperator, Value: value, Hysteresis: hysteresis, Unit: metricUnit(rule.Metric),
 			DurationSeconds: rule.DurationSeconds, Enabled: rule.Enabled, Level: rule.Level,
 		})
 	}
@@ -182,6 +185,11 @@ func (s *Service) UpsertRule(ctx context.Context, ownerID, plotID, thresholdID u
 		return nil, ErrInvalidInput
 	}
 	now := s.now()
+	var hysteresis *decimal.Decimal
+	if input.Hysteresis != nil {
+		value := decimal.NewFromFloat(*input.Hysteresis)
+		hysteresis = &value
+	}
 	rule := &Rule{
 		ID: thresholdID, PlotID: plotID, Name: input.Metric + " " + string(input.Operator),
 		Metric: input.Metric, ComparisonOperator: input.Operator,
@@ -189,7 +197,10 @@ func (s *Service) UpsertRule(ctx context.Context, ownerID, plotID, thresholdID u
 		Level: input.Level, Enabled: input.Enabled,
 		Auditable: persistence.Auditable{CreatedAt: now, UpdatedAt: now},
 	}
-	if err := s.store.UpsertRuleByOwner(ctx, ownerID, rule); errors.Is(err, gorm.ErrRecordNotFound) {
+	if hysteresis != nil {
+		rule.Hysteresis = *hysteresis
+	}
+	if err := s.store.UpsertRuleByOwner(ctx, ownerID, rule, hysteresis); errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, ErrNotFound
 	} else if err != nil {
 		return nil, fmt.Errorf("upsert threshold rule: %w", err)
@@ -248,7 +259,11 @@ func (s *Service) Confirm(ctx context.Context, ownerID, alertID uint64, remark s
 	if err != nil {
 		return nil, fmt.Errorf("confirm alert: %w", err)
 	}
-	return &ConfirmResult{ID: result.ID, Status: StatusConfirmed, ConfirmedAt: now}, nil
+	confirmedAt := now
+	if result.AcknowledgedAt != nil {
+		confirmedAt = *result.AcknowledgedAt
+	}
+	return &ConfirmResult{ID: result.ID, Status: StatusConfirmed, ConfirmedAt: confirmedAt}, nil
 }
 
 // Trigger creates one active alert and its delivery records. The repository
@@ -297,6 +312,7 @@ func validRuleInput(input RuleInput) bool {
 	return input.Metric != "" && len(input.Metric) <= 64 &&
 		(input.Operator == OperatorLT || input.Operator == OperatorLTE || input.Operator == OperatorGT || input.Operator == OperatorGTE) &&
 		!math.IsNaN(input.Value) && !math.IsInf(input.Value, 0) &&
+		(input.Hysteresis == nil || *input.Hysteresis >= 0 && !math.IsNaN(*input.Hysteresis) && !math.IsInf(*input.Hysteresis, 0)) &&
 		input.DurationSeconds >= 0 && input.DurationSeconds <= 86400 && validLevel(input.Level)
 }
 

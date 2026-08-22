@@ -125,14 +125,16 @@ func (h dashboardHandler) overview(c *gin.Context) {
 		respondError(c, http.StatusInternalServerError, 50000, "服务器内部错误")
 		return
 	}
-	// pendingConfirm 对应旧状态 ACKNOWLEDGED（已触发待确认）；可随告警语义调整
-	acknowledgedStatus := alert.StatusAcknowledged
-	pendingAlerts, err := h.alerts.List(ctx, claims.UserID, alert.ListFilter{Status: &acknowledgedStatus})
+	confirmedStatus := alert.StatusConfirmed
+	confirmedAlerts, err := h.alerts.List(ctx, claims.UserID, alert.ListFilter{Status: &confirmedStatus})
 	if err != nil {
 		respondError(c, http.StatusInternalServerError, 50000, "服务器内部错误")
 		return
 	}
-	overview.Alerts = alertStat{Active: int(activeAlerts.Total), PendingConfirm: int(pendingAlerts.Total)}
+	overview.Alerts = alertStat{
+		Active:         int(activeAlerts.Total),
+		PendingConfirm: int(confirmedAlerts.Total),
+	}
 
 	respondSuccess(c, http.StatusOK, overview)
 }

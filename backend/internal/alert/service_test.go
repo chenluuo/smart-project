@@ -22,6 +22,7 @@ type alertStoreStub struct {
 	plotID        uint64
 	alertID       uint64
 	rule          *Rule
+	hysteresis    *decimal.Decimal
 	filter        ListFilter
 	confirmRemark string
 	confirmedAt   time.Time
@@ -35,8 +36,8 @@ func (s *alertStoreStub) ListRulesByOwner(_ context.Context, ownerID, plotID uin
 	return s.rules, s.err
 }
 
-func (s *alertStoreStub) UpsertRuleByOwner(_ context.Context, ownerID uint64, rule *Rule) error {
-	s.ownerID, s.rule = ownerID, rule
+func (s *alertStoreStub) UpsertRuleByOwner(_ context.Context, ownerID uint64, rule *Rule, hysteresis *decimal.Decimal) error {
+	s.ownerID, s.rule, s.hysteresis = ownerID, rule, hysteresis
 	return s.err
 }
 
@@ -58,13 +59,13 @@ func (s *alertStoreStub) CreateTriggeredAlert(_ context.Context, input TriggerIn
 func TestListRulesMapsContractFields(t *testing.T) {
 	store := &alertStoreStub{rules: []Rule{{
 		ID: 2, PlotID: 11, Metric: "soilMoisture", ComparisonOperator: OperatorLT,
-		Threshold: decimal.NewFromInt(28), DurationSeconds: 300, Enabled: true, Level: LevelMedium,
+		Threshold: decimal.NewFromInt(28), Hysteresis: decimal.NewFromInt(2), DurationSeconds: 300, Enabled: true, Level: LevelMedium,
 	}}}
 	result, err := NewService(store).ListRules(context.Background(), 7, 11)
 	if err != nil || store.ownerID != 7 || store.plotID != 11 || len(result) != 1 {
 		t.Fatalf("ListRules() = (%+v, %v), store=%+v", result, err, store)
 	}
-	if result[0].Operator != OperatorLT || result[0].Value != 28 || result[0].Unit != "%" {
+	if result[0].Operator != OperatorLT || result[0].Value != 28 || result[0].Hysteresis != 2 || result[0].Unit != "%" {
 		t.Fatalf("rule = %+v", result[0])
 	}
 }
@@ -73,20 +74,30 @@ func TestUpsertRuleNormalizesAndValidatesInput(t *testing.T) {
 	store := &alertStoreStub{}
 	service := NewService(store)
 	now := time.Date(2026, 8, 22, 8, 20, 0, 0, time.UTC)
+	hysteresis := 2.5
 	service.now = func() time.Time { return now }
 	result, err := service.UpsertRule(context.Background(), 7, 11, 2, RuleInput{
-		Metric: " soilMoisture ", Operator: "lt", Value: 28,
+		Metric: " soilMoisture ", Operator: "lt", Value: 28, Hysteresis: &hysteresis,
 		DurationSeconds: 300, Level: "medium", Enabled: true,
 	})
 	if err != nil || result.ID != 2 || !result.UpdatedAt.Equal(now) {
 		t.Fatalf("UpsertRule() = (%+v, %v)", result, err)
 	}
-	if store.ownerID != 7 || store.rule.PlotID != 11 || store.rule.Metric != "soilMoisture" || store.rule.Level != LevelMedium {
+	if store.ownerID != 7 || store.rule.PlotID != 11 || store.rule.Metric != "soilMoisture" || store.rule.Level != LevelMedium ||
+		store.hysteresis == nil || !store.hysteresis.Equal(decimal.RequireFromString("2.5")) {
 		t.Fatalf("stored rule = %+v", store.rule)
 	}
 	_, err = service.UpsertRule(context.Background(), 7, 11, 2, RuleInput{Metric: "soilMoisture", Operator: OperatorLT, Level: "urgent"})
 	if !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("invalid UpsertRule() error = %v", err)
+	}
+	negativeHysteresis := -1.0
+	_, err = service.UpsertRule(context.Background(), 7, 11, 2, RuleInput{
+		Metric: "soilMoisture", Operator: OperatorLT, Value: 28, Hysteresis: &negativeHysteresis,
+		DurationSeconds: 300, Level: LevelMedium, Enabled: true,
+	})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("negative hysteresis error = %v, want ErrInvalidInput", err)
 	}
 }
 
@@ -108,12 +119,13 @@ func TestListDefaultsAndMapsLegacyConfirmedState(t *testing.T) {
 }
 
 func TestConfirmTrimsRemarkAndMapsStoreErrors(t *testing.T) {
-	store := &alertStoreStub{confirmed: &Alert{ID: 3}}
+	confirmedAt := time.Date(2026, 8, 22, 8, 22, 30, 0, time.UTC)
+	store := &alertStoreStub{confirmed: &Alert{ID: 3, AcknowledgedAt: &confirmedAt}}
 	service := NewService(store)
 	now := time.Date(2026, 8, 22, 8, 23, 0, 0, time.UTC)
 	service.now = func() time.Time { return now }
 	result, err := service.Confirm(context.Background(), 7, 3, " 已处理 ")
-	if err != nil || result.Status != StatusConfirmed || !result.ConfirmedAt.Equal(now) || store.confirmRemark != "已处理" {
+	if err != nil || result.Status != StatusConfirmed || !result.ConfirmedAt.Equal(confirmedAt) || store.confirmRemark != "已处理" {
 		t.Fatalf("Confirm() = (%+v, %v), store=%+v", result, err, store)
 	}
 	store.err = gorm.ErrRecordNotFound

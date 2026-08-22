@@ -31,7 +31,10 @@ func TestDashboardOverviewAggregates(t *testing.T) {
 		ID: 11, OwnerID: 7, Code: "A1", Name: "西侧棚", Status: plot.StatusActive,
 	}}}
 	deviceStub := &deviceServiceStub{listResult: device.ListResult{Total: 13}}
-	alertStub := &alertServiceStub{listResult: alert.ListResult{Total: 2}}
+	alertStub := &alertServiceStub{listResults: map[alert.Status]alert.ListResult{
+		alert.StatusActive:    {Total: 1},
+		alert.StatusConfirmed: {Total: 1},
+	}}
 	telemetryStub := &telemetryServiceStub{err: telemetry.ErrNotFound}
 
 	router := newDashboardTestRouter(plotStub, deviceStub, alertStub, telemetryStub)
@@ -51,7 +54,7 @@ func TestDashboardOverviewAggregates(t *testing.T) {
 		`"avgSoilMoisture":null`,
 		`"avgTemperature":null`,
 		`"deviceOnline":{"online":13,"total":13,"offline":0}`,
-		`"alerts":{"active":2,"pendingConfirm":2}`,
+		`"alerts":{"active":1,"pendingConfirm":1}`,
 		`"id":11`,
 		`"code":"A1"`,
 		`"soilMoisture":null`,

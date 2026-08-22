@@ -92,7 +92,7 @@ type Store interface {
 	FindByIdempotencyKeyAndOwner(context.Context, string, uint64) (*Command, error)
 	Create(context.Context, *Command) error
 	Save(context.Context, *Command) error
-	FindLatestByDeviceAndPlot(context.Context, uint64, uint64) (*Command, error)
+	FindLatestSuccessfulByDeviceAndPlot(context.Context, uint64, uint64) (*Command, error)
 	FindByCommandIDAndOwner(context.Context, string, uint64) (*Command, error)
 	ListByOwner(context.Context, uint64, ListFilter) ([]CommandListRow, int64, error)
 }
@@ -144,9 +144,6 @@ func (s *Service) Issue(ctx context.Context, ownerID, plotID uint64, input Issue
 	if err != nil {
 		return nil, err
 	}
-	if input.IdempotencyKey == "" {
-		input.IdempotencyKey = commandID
-	}
 	payload := map[string]any{"mode": input.Mode, "reason": input.Reason}
 	if input.Action == "OPEN" {
 		payload["durationSeconds"] = input.DurationSeconds
@@ -197,7 +194,7 @@ func (s *Service) IrrigationStatus(ctx context.Context, ownerID, plotID uint64) 
 		PlotID: irrigationDevice.PlotID, ValveDeviceID: irrigationDevice.DeviceID,
 		State: "OFF", Mode: "MANUAL", MaxSeconds: MaxIrrigationSeconds,
 	}
-	command, err := s.commands.FindLatestByDeviceAndPlot(ctx, irrigationDevice.DeviceID, irrigationDevice.PlotID)
+	command, err := s.commands.FindLatestSuccessfulByDeviceAndPlot(ctx, irrigationDevice.DeviceID, irrigationDevice.PlotID)
 	if errors.Is(err, gorm.ErrRecordNotFound) || command == nil {
 		return result, nil
 	}
@@ -298,7 +295,7 @@ func ValidStatus(status Status) bool {
 func validIssueInput(input IssueInput) bool {
 	if input.Action != "OPEN" && input.Action != "CLOSE" ||
 		input.Mode != "MANUAL" && input.Mode != "AUTO" && input.Mode != "AI_SUGGESTED" ||
-		len(input.IdempotencyKey) > 64 || len(input.Reason) > 500 {
+		input.IdempotencyKey == "" || len(input.IdempotencyKey) > 64 || len(input.Reason) > 500 {
 		return false
 	}
 	if input.Action == "OPEN" {

@@ -51,7 +51,7 @@ func (r Repositories) ListRulesByOwner(ctx context.Context, ownerID, plotID uint
 	return rules, err
 }
 
-func (r Repositories) UpsertRuleByOwner(ctx context.Context, ownerID uint64, rule *Rule) error {
+func (r Repositories) UpsertRuleByOwner(ctx context.Context, ownerID uint64, rule *Rule, hysteresis *decimal.Decimal) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var plotCount int64
 		if err := tx.Table("plots").Where("id = ? AND owner_id = ?", rule.PlotID, ownerID).Count(&plotCount).Error; err != nil {
@@ -72,9 +72,11 @@ func (r Repositories) UpsertRuleByOwner(ctx context.Context, ownerID uint64, rul
 		if existing.PlotID != rule.PlotID {
 			return gorm.ErrRecordNotFound
 		}
-		return tx.Model(&existing).Select(
-			"name", "metric", "comparison_operator", "threshold", "duration_seconds", "hysteresis", "level", "enabled", "updated_at",
-		).Updates(rule).Error
+		fields := []string{"name", "metric", "comparison_operator", "threshold", "duration_seconds", "level", "enabled", "updated_at"}
+		if hysteresis != nil {
+			fields = append(fields, "hysteresis")
+		}
+		return tx.Model(&existing).Select(fields).Updates(rule).Error
 	})
 }
 
@@ -124,6 +126,9 @@ func (r Repositories) ConfirmAlertByOwner(ctx context.Context, ownerID, alertID 
 			Where("a.id = ? AND p.owner_id = ?", alertID, ownerID).
 			Clauses(clause.Locking{Strength: "UPDATE"}).Take(&result).Error; err != nil {
 			return err
+		}
+		if result.Status == StatusConfirmed || result.Status == StatusAcknowledged {
+			return nil
 		}
 		if result.Status != StatusActive {
 			return ErrConflict

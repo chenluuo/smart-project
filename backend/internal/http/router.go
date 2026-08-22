@@ -105,7 +105,7 @@ type authService interface {
 	Register(context.Context, identity.RegisterInput) (*identity.User, error)
 	Login(context.Context, string, string) (*identity.LoginResult, error)
 	CurrentUser(context.Context, uint64) (*identity.CurrentUserResult, error)
-	Authenticate(string) (identity.Claims, error)
+	Authenticate(context.Context, string) (identity.Claims, error)
 }
 
 type plotService interface {

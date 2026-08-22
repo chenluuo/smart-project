@@ -59,8 +59,8 @@ func (knowledgeServiceStub) Archive(_ context.Context, _, documentID uint64, _ s
 
 type adminAuthServiceStub struct{ authServiceStub }
 
-func (adminAuthServiceStub) Authenticate(token string) (identity.Claims, error) {
-	claims, err := (authServiceStub{}).Authenticate(token)
+func (adminAuthServiceStub) Authenticate(ctx context.Context, token string) (identity.Claims, error) {
+	claims, err := (authServiceStub{}).Authenticate(ctx, token)
 	claims.Role = "SYSTEM_ADMIN"
 	return claims, err
 }
