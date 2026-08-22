@@ -28,15 +28,17 @@ services:
     max_tokens: 1024
 
   embedding:
-    base_url: "http://localhost:9997/v1"
-    api_key: ${LLM_API_KEY}
-    model: "bge-m3"
+    mode: "multimodal"      # multimodal=火山vision（默认）/ standard=OpenAI兼容纯文本（doubao-embedding-text、本地bge-m3等）
+    base_url: "https://ark.cn-beijing.volces.com/api/v3"
+    api_key: "ark-c4453c5a-3ec6-4b67-8b75-d62b9305fc21-fbbba"
+    model: "ep-20260621064553-q2m69"
+    dimensions: 1024        # 自定义输出维度（multimodal 支持 1024，实测 512 不支持）
 
   milvus:
     host: localhost
     port: 19530
     token: ""               # 本地无认证；生产用 ${MILVUS_TOKEN}
-    dimension: 1024
+    dimension: 1024         # 与 embedding.dimensions 一致（火山接口支持 1024）
     knowledge_collection: "knowledge"
     memory_collection: "memory"
 

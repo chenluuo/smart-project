@@ -30,6 +30,8 @@ def _collect_dialogue(session_id: str, user_id: str) -> list[dict]:
 
 def build_summary(session_id: str, user_id: str) -> dict[str, Any]:
     """生成并写入记忆向量。返回 {session_id, status}。"""
+    import asyncio
+
     cfg = get_config("agent")
     min_messages = int(cfg.get("min_messages_for_summary", 2))
 
@@ -41,7 +43,7 @@ def build_summary(session_id: str, user_id: str) -> dict[str, Any]:
     try:
         from llm import get_llm  # ingest 复用 agent 的 llm 适配（或独立配置）
 
-        summary = get_llm().chat([{"role": "user", "content": _SUMMARY_PROMPT.format(dialogue=dialogue_text)}])
+        summary = asyncio.run(get_llm().chat([{"role": "user", "content": _SUMMARY_PROMPT.format(dialogue=dialogue_text)}]))
     except Exception as e:
         return {"session_id": session_id, "status": "failed", "reason": f"摘要生成失败: {e}"}
 
