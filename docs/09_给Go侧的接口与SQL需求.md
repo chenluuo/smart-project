@@ -132,8 +132,9 @@ PENDING -> SENT -> SUCCEEDED
 | 部分具备 | `GET /api/v1/alerts` | 支持 `plotId/status/page/pageSize`，只返回当前用户告警 |
 | 部分具备 | `GET /api/v1/alerts/logs` | 支持开始/结束时间和状态筛选，包含恢复、确认、关闭记录 |
 | 部分具备 | `POST /api/v1/alerts/{alertId}/confirm` | 幂等确认，保存确认人、时间和备注；写审计 |
+| 已具备 | `POST /internal/alerts/trigger` | 内部密钥鉴权；活动告警去重后，同事务创建 owner 站内通知与 `ALERT_TRIGGERED` Outbox，并把原始 JSON 请求可靠转发到 Agent |
 
-告警引擎还需实现持续时间、回差、活动告警去重和恢复逻辑，避免同一规则产生告警风暴。
+告警触发已按规则行锁实现活动告警去重；告警引擎仍需实现持续时间、回差和恢复逻辑。Agent 转发由 `AGENT_ALERT_URL` 启用，失败采用指数退避，不能回滚已经提交的告警和 owner 通知。
 
 ### 3.7 实时推送 SSE
 

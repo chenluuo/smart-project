@@ -25,6 +25,8 @@ type alertServiceStub struct {
 	ruleInput     alert.RuleInput
 	filter        alert.ListFilter
 	remark        string
+	triggerInput  alert.TriggerInput
+	triggerResult *alert.TriggerResult
 }
 
 func (s *alertServiceStub) ListRules(_ context.Context, ownerID, plotID uint64) ([]alert.RuleView, error) {
@@ -45,6 +47,11 @@ func (s *alertServiceStub) List(_ context.Context, ownerID uint64, filter alert.
 func (s *alertServiceStub) Confirm(_ context.Context, ownerID, alertID uint64, remark string) (*alert.ConfirmResult, error) {
 	s.ownerID, s.alertID, s.remark = ownerID, alertID, remark
 	return s.confirmResult, s.err
+}
+
+func (s *alertServiceStub) Trigger(_ context.Context, input alert.TriggerInput) (*alert.TriggerResult, error) {
+	s.triggerInput = input
+	return s.triggerResult, s.err
 }
 
 func newAlertTestRouter(service alertService) http.Handler {
@@ -143,5 +150,35 @@ func TestConfirmAlertAndErrors(t *testing.T) {
 	newAlertTestRouter(service).ServeHTTP(response, request)
 	if response.Code != http.StatusInternalServerError {
 		t.Fatalf("server error: status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestInternalAlertTriggerRequiresServiceKeyAndParsesPayload(t *testing.T) {
+	now := time.Date(2026, 8, 22, 10, 0, 0, 0, time.UTC)
+	service := &alertServiceStub{triggerResult: &alert.TriggerResult{
+		ID: 9, Status: alert.StatusActive, Created: true, TriggeredAt: now,
+	}}
+	router := NewRouterWithBackendServices(
+		"test", pingerStub{}, authServiceStub{}, nil, nil, nil, service, nil, nil,
+		"test-internal-service-key-32-characters",
+	)
+
+	request := httptest.NewRequest(http.MethodPost, "/internal/alerts/trigger", strings.NewReader(`{"ruleId":2,"deviceId":3,"triggerValue":28.6,"triggeredAt":"2026-08-22T10:00:00Z","traceId":"trace-1"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("missing key status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "/internal/alerts/trigger", strings.NewReader(`{"ruleId":2,"deviceId":3,"triggerValue":28.6,"triggeredAt":"2026-08-22T10:00:00Z","traceId":"trace-1"}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Internal-Service-Key", "test-internal-service-key-32-characters")
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated || service.triggerInput.RuleID != 2 || service.triggerInput.DeviceID == nil ||
+		*service.triggerInput.DeviceID != 3 || service.triggerInput.TriggerValue != 28.6 || service.triggerInput.TriggeredAt == nil ||
+		string(service.triggerInput.ForwardBody) != `{"ruleId":2,"deviceId":3,"triggerValue":28.6,"triggeredAt":"2026-08-22T10:00:00Z","traceId":"trace-1"}` {
+		t.Fatalf("trigger status=%d body=%s input=%+v", response.Code, response.Body.String(), service.triggerInput)
 	}
 }

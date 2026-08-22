@@ -1,7 +1,9 @@
 package http
 
 import (
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -26,6 +28,14 @@ type confirmAlertRequest struct {
 	Remark string `json:"remark"`
 }
 
+type triggerAlertRequest struct {
+	RuleID       uint64   `json:"ruleId"`
+	DeviceID     *uint64  `json:"deviceId"`
+	TriggerValue *float64 `json:"triggerValue"`
+	TriggeredAt  *string  `json:"triggeredAt"`
+	TraceID      string   `json:"traceId"`
+}
+
 func registerAlertRoutes(router *gin.Engine, auth authService, service alertService) {
 	handler := alertHandler{service: service}
 	api := router.Group("/api/v1", jwtAuthentication(auth))
@@ -34,6 +44,12 @@ func registerAlertRoutes(router *gin.Engine, auth authService, service alertServ
 	api.GET("/alerts", handler.list)
 	api.GET("/alerts/logs", handler.logs)
 	api.POST("/alerts/:alertId/confirm", handler.confirm)
+}
+
+func registerInternalAlertRoutes(router *gin.Engine, service alertService, internalServiceKey string) {
+	handler := alertHandler{service: service}
+	internal := router.Group("/internal/alerts", internalServiceAuthentication(internalServiceKey))
+	internal.POST("/trigger", handler.trigger)
 }
 
 func (h alertHandler) listRules(c *gin.Context) {
@@ -150,6 +166,44 @@ func (h alertHandler) confirm(c *gin.Context) {
 		respondError(c, http.StatusInternalServerError, 50000, "服务器内部错误")
 	default:
 		respondSuccess(c, http.StatusOK, result)
+	}
+}
+
+func (h alertHandler) trigger(c *gin.Context) {
+	var request triggerAlertRequest
+	body, err := io.ReadAll(io.LimitReader(c.Request.Body, 1024*1024+1))
+	if err != nil || len(body) == 0 || len(body) > 1024*1024 || json.Unmarshal(body, &request) != nil || request.TriggerValue == nil {
+		respondError(c, http.StatusBadRequest, 40001, "参数错误：ruleId 和 triggerValue 不能为空")
+		return
+	}
+	var triggeredAt *time.Time
+	if request.TriggeredAt != nil {
+		parsed, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(*request.TriggeredAt))
+		if err != nil {
+			respondError(c, http.StatusBadRequest, 40001, "参数错误：triggeredAt 必须为 ISO 8601 时间")
+			return
+		}
+		triggeredAt = &parsed
+	}
+	result, err := h.service.Trigger(c.Request.Context(), alert.TriggerInput{
+		RuleID: request.RuleID, DeviceID: request.DeviceID, TriggerValue: *request.TriggerValue,
+		TriggeredAt: triggeredAt, TraceID: request.TraceID, ForwardBody: append([]byte(nil), body...),
+	})
+	switch {
+	case errors.Is(err, alert.ErrInvalidInput):
+		respondError(c, http.StatusBadRequest, 40001, "参数错误：告警触发数据不合法")
+	case errors.Is(err, alert.ErrNotFound):
+		respondError(c, http.StatusNotFound, 40404, "告警规则或绑定设备不存在")
+	case errors.Is(err, alert.ErrConflict):
+		respondError(c, http.StatusConflict, 40903, "告警规则未启用")
+	case err != nil:
+		respondError(c, http.StatusInternalServerError, 50000, "服务器内部错误")
+	default:
+		status := http.StatusOK
+		if result.Created {
+			status = http.StatusCreated
+		}
+		respondSuccess(c, status, result)
 	}
 }
 

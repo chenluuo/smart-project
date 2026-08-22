@@ -77,6 +77,9 @@ func NewRouterWithBackendServices(
 	internalServiceKey string,
 ) *gin.Engine {
 	router := NewRouterWithAllServices(mode, db, auth, plots, devices, controls, alerts)
+	if alerts != nil {
+		registerInternalAlertRoutes(router, alerts, internalServiceKey)
+	}
 	if agents != nil {
 		registerAgentRoutes(router, auth, agents, internalServiceKey)
 	}
@@ -117,6 +120,7 @@ type alertService interface {
 	UpsertRule(context.Context, uint64, uint64, uint64, alert.RuleInput) (*alert.RuleUpdateResult, error)
 	List(context.Context, uint64, alert.ListFilter) (alert.ListResult, error)
 	Confirm(context.Context, uint64, uint64, string) (*alert.ConfirmResult, error)
+	Trigger(context.Context, alert.TriggerInput) (*alert.TriggerResult, error)
 }
 
 type agentService interface {

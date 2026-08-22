@@ -7,7 +7,7 @@ import (
 )
 
 func TestLoadDefaults(t *testing.T) {
-	for _, key := range []string{"DB_DSN", "DB_URL", "DB_USERNAME", "DB_PASSWORD", "DB_POOL_MAX_SIZE", "DB_POOL_MIN_IDLE", "DB_MIGRATE", "SERVER_PORT", "GIN_MODE", "JWT_SECRET", "JWT_ISSUER", "JWT_TTL", "INTERNAL_SERVICE_KEY", "KNOWLEDGE_NOTIFY_URL", "OUTBOX_DISPATCH_INTERVAL", "OUTBOX_BATCH_SIZE", "AGENT_HTTP_TIMEOUT", "OBJECT_STORAGE_ENABLED", "MINIO_SECURE", "KNOWLEDGE_MAX_UPLOAD_BYTES", "MINIO_SIGNED_URL_TTL"} {
+	for _, key := range []string{"DB_DSN", "DB_URL", "DB_USERNAME", "DB_PASSWORD", "DB_POOL_MAX_SIZE", "DB_POOL_MIN_IDLE", "DB_MIGRATE", "SERVER_PORT", "GIN_MODE", "JWT_SECRET", "JWT_ISSUER", "JWT_TTL", "INTERNAL_SERVICE_KEY", "KNOWLEDGE_NOTIFY_URL", "AGENT_ALERT_URL", "OUTBOX_DISPATCH_INTERVAL", "OUTBOX_BATCH_SIZE", "AGENT_HTTP_TIMEOUT", "OBJECT_STORAGE_ENABLED", "MINIO_SECURE", "KNOWLEDGE_MAX_UPLOAD_BYTES", "MINIO_SIGNED_URL_TTL"} {
 		t.Setenv(key, "")
 	}
 
@@ -33,7 +33,7 @@ func TestLoadDefaults(t *testing.T) {
 	if len(cfg.Internal.ServiceKey) < 32 {
 		t.Fatalf("internal service key is too short: %q", cfg.Internal.ServiceKey)
 	}
-	if cfg.Internal.KnowledgeNotifyURL != "" || cfg.Internal.OutboxBatchSize != 50 || cfg.Internal.OutboxDispatchInterval != 2*time.Second {
+	if cfg.Internal.KnowledgeNotifyURL != "" || cfg.Internal.AgentAlertURL != "" || cfg.Internal.OutboxBatchSize != 50 || cfg.Internal.OutboxDispatchInterval != 2*time.Second {
 		t.Fatalf("unexpected internal defaults: %+v", cfg.Internal)
 	}
 	if cfg.ObjectStorage.Enabled || cfg.ObjectStorage.MaxUploadBytes != 20*1024*1024 || cfg.ObjectStorage.SignedURLTimeout != 15*time.Minute {

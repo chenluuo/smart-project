@@ -3,9 +3,15 @@ package alert
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strconv"
 	"time"
 
+	"github.com/chenluuo/smart-project/backend/internal/notification"
+	"github.com/chenluuo/smart-project/backend/internal/outbox"
 	"github.com/chenluuo/smart-project/backend/internal/shared/persistence"
+	"github.com/shopspring/decimal"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -136,4 +142,94 @@ func (r Repositories) ConfirmAlertByOwner(ctx context.Context, ownerID, alertID 
 		return nil, err
 	}
 	return &result, nil
+}
+
+type triggerPlot struct {
+	OwnerID uint64
+	Code    string
+}
+
+func (r Repositories) CreateTriggeredAlert(ctx context.Context, input TriggerInput, now time.Time) (*TriggerRecord, error) {
+	result := &TriggerRecord{}
+	triggeredAt := now
+	if input.TriggeredAt != nil {
+		triggeredAt = input.TriggeredAt.UTC()
+	}
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var rule Rule
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", input.RuleID).Take(&rule).Error; err != nil {
+			return err
+		}
+		if !rule.Enabled {
+			return ErrConflict
+		}
+
+		var plot triggerPlot
+		if err := tx.Table("plots").Select("owner_id, code").Where("id = ?", rule.PlotID).Take(&plot).Error; err != nil {
+			return err
+		}
+		if input.DeviceID != nil {
+			var bindingCount int64
+			if err := tx.Table("device_bindings").Where(
+				"device_id = ? AND plot_id = ? AND unbound_at IS NULL", *input.DeviceID, rule.PlotID,
+			).Count(&bindingCount).Error; err != nil {
+				return err
+			}
+			if bindingCount == 0 {
+				return gorm.ErrRecordNotFound
+			}
+		}
+
+		var existing Alert
+		err := tx.Where("rule_id = ? AND status IN ?", rule.ID, []Status{StatusActive, StatusConfirmed, StatusAcknowledged}).
+			Order("id DESC").Take(&existing).Error
+		if err == nil {
+			result.Alert, result.Created = existing, false
+			return nil
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+
+		alert := Alert{
+			RuleID: rule.ID, DeviceID: input.DeviceID, Level: rule.Level,
+			Status: StatusActive, TriggerValue: decimalFromFloat(input.TriggerValue),
+			TriggeredAt: triggeredAt,
+			Auditable:   persistence.Auditable{CreatedAt: now, UpdatedAt: now},
+		}
+		if err := tx.Create(&alert).Error; err != nil {
+			return err
+		}
+
+		content := fmt.Sprintf("%s 地块 %s 告警：当前值 %s%s，阈值 %s%s", plot.Code, rule.Metric,
+			alert.TriggerValue.String(), metricUnit(rule.Metric), rule.Threshold.String(), metricUnit(rule.Metric))
+		sentAt := now
+		ownerNotification := notification.Notification{
+			AlertID: alert.ID, UserID: plot.OwnerID, Channel: notification.ChannelInApp,
+			Content: content, Status: notification.StatusSent, SentAt: &sentAt,
+			Auditable: persistence.Auditable{CreatedAt: now, UpdatedAt: now},
+		}
+		if err := tx.Create(&ownerNotification).Error; err != nil {
+			return err
+		}
+
+		event := outbox.Event{
+			AggregateType: "ALERT", AggregateID: strconv.FormatUint(alert.ID, 10),
+			EventType: "ALERT_TRIGGERED", Payload: datatypes.JSON(append([]byte(nil), input.ForwardBody...)), Status: outbox.StatusPending,
+			AvailableAt: now, Auditable: persistence.Auditable{CreatedAt: now, UpdatedAt: now},
+		}
+		if err := tx.Create(&event).Error; err != nil {
+			return err
+		}
+		result.Alert, result.Created = alert, true
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func decimalFromFloat(value float64) decimal.Decimal {
+	return decimal.NewFromFloat(value)
 }

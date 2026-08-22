@@ -97,6 +97,19 @@ func main() {
 		}
 		go dispatcher.Run(workerContext, cfg.Internal.OutboxDispatchInterval, cfg.Internal.OutboxBatchSize)
 	}
+	if cfg.Internal.AgentAlertURL != "" {
+		dispatcher, err := alert.NewDispatcher(
+			outbox.NewRepository(db),
+			&http.Client{Timeout: cfg.Internal.AgentHTTPTimeout},
+			cfg.Internal.AgentAlertURL,
+			cfg.Internal.ServiceKey,
+		)
+		if err != nil {
+			slog.Error("configure alert outbox dispatcher", "error", err)
+			os.Exit(1)
+		}
+		go dispatcher.Run(workerContext, cfg.Internal.OutboxDispatchInterval, cfg.Internal.OutboxBatchSize)
+	}
 
 	server := &http.Server{
 		Addr: ":" + cfg.Server.Port,

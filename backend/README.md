@@ -101,7 +101,10 @@ POST /api/v1/ai/sessions                       # 创建当前用户会话
 GET  /api/v1/ai/sessions/{id}/messages         # 分页读取当前用户会话消息
 POST /api/v1/ai/sessions/{id}/close            # 幂等关闭会话
 POST /internal/agent/sessions/{id}/messages    # 智能体实时写入消息，使用内部服务密钥
+POST /internal/alerts/trigger                  # 告警引擎触发告警；自动通知 owner 并转发原请求到 Agent
 ```
+
+告警触发接口在一个 MySQL 事务中完成活动告警去重、告警落库、owner 站内通知和 `ALERT_TRIGGERED` Outbox 写入。Agent 转发使用收到的原始 JSON 请求体；Agent 不可用时按指数退避重试，不影响 owner 告警和通知落库。
 
 知识文档元数据接口：
 
@@ -152,7 +155,8 @@ password: smart_agriculture
 | `KNOWLEDGE_MAX_UPLOAD_BYTES` | `20971520` | 单个知识文档最大字节数 |
 | `MINIO_SIGNED_URL_TTL` | `15m` | 下载签名地址有效期 |
 | `KNOWLEDGE_NOTIFY_URL` | 空 | 智能体通知完整 URL；为空时不启动 Outbox 派发器 |
-| `OUTBOX_DISPATCH_INTERVAL` | `2s` | 知识文档 Outbox 扫描周期 |
+| `AGENT_ALERT_URL` | 空 | 告警原始请求转发到 Agent 的完整 URL；为空时事件保留在 Outbox |
+| `OUTBOX_DISPATCH_INTERVAL` | `2s` | Outbox 扫描周期 |
 | `OUTBOX_BATCH_SIZE` | `50` | 单批认领数量，范围 1-500 |
 | `AGENT_HTTP_TIMEOUT` | `5s` | 调用智能体通知接口的超时 |
 
@@ -164,5 +168,5 @@ password: smart_agriculture
 
 1. 接入 EMQX、TDengine 和 Redis。
 2. 将控制命令演示桩替换为 MQTT 下发/回执状态机。
-3. 配置智能体服务并联调知识文档通知。
+3. 配置智能体服务并联调知识文档通知与告警转发。
 4. 实现 `/api/v1/ai/chat` 的智能体编排和 AI 建议采纳流程。

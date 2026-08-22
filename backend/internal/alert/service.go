@@ -2,6 +2,7 @@ package alert
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -101,11 +102,33 @@ type ConfirmResult struct {
 	ConfirmedAt time.Time `json:"confirmedAt"`
 }
 
+type TriggerInput struct {
+	RuleID       uint64
+	DeviceID     *uint64
+	TriggerValue float64
+	TriggeredAt  *time.Time
+	TraceID      string
+	ForwardBody  json.RawMessage
+}
+
+type TriggerRecord struct {
+	Alert   Alert
+	Created bool
+}
+
+type TriggerResult struct {
+	ID          uint64    `json:"id"`
+	Status      Status    `json:"status"`
+	Created     bool      `json:"created"`
+	TriggeredAt time.Time `json:"triggeredAt"`
+}
+
 type Store interface {
 	ListRulesByOwner(context.Context, uint64, uint64) ([]Rule, error)
 	UpsertRuleByOwner(context.Context, uint64, *Rule) error
 	ListAlertsByOwner(context.Context, uint64, ListFilter) ([]AlertListRow, int64, error)
 	ConfirmAlertByOwner(context.Context, uint64, uint64, string, time.Time) (*Alert, error)
+	CreateTriggeredAlert(context.Context, TriggerInput, time.Time) (*TriggerRecord, error)
 }
 
 type Service struct {
@@ -215,6 +238,39 @@ func (s *Service) Confirm(ctx context.Context, ownerID, alertID uint64, remark s
 		return nil, fmt.Errorf("confirm alert: %w", err)
 	}
 	return &ConfirmResult{ID: result.ID, Status: StatusConfirmed, ConfirmedAt: now}, nil
+}
+
+// Trigger creates one active alert and its delivery records. The repository
+// serializes triggers for the same rule so repeated telemetry does not produce
+// duplicate active alerts or duplicate owner/agent notifications.
+func (s *Service) Trigger(ctx context.Context, input TriggerInput) (*TriggerResult, error) {
+	input.TraceID = strings.TrimSpace(input.TraceID)
+	if input.RuleID == 0 || input.DeviceID != nil && *input.DeviceID == 0 ||
+		math.IsNaN(input.TriggerValue) || math.IsInf(input.TriggerValue, 0) || len(input.TraceID) > 64 ||
+		len(input.ForwardBody) == 0 || len(input.ForwardBody) > 1024*1024 || !json.Valid(input.ForwardBody) {
+		return nil, ErrInvalidInput
+	}
+	now := s.now().UTC()
+	if input.TriggeredAt == nil {
+		input.TriggeredAt = &now
+	} else {
+		triggeredAt := input.TriggeredAt.UTC()
+		input.TriggeredAt = &triggeredAt
+	}
+	record, err := s.store.CreateTriggeredAlert(ctx, input, now)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrNotFound
+	}
+	if errors.Is(err, ErrConflict) {
+		return nil, ErrConflict
+	}
+	if err != nil {
+		return nil, fmt.Errorf("trigger alert: %w", err)
+	}
+	return &TriggerResult{
+		ID: record.Alert.ID, Status: record.Alert.Status,
+		Created: record.Created, TriggeredAt: record.Alert.TriggeredAt,
+	}, nil
 }
 
 func validRuleInput(input RuleInput) bool {

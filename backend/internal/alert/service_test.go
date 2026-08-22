@@ -2,6 +2,7 @@ package alert
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -23,6 +24,9 @@ type alertStoreStub struct {
 	filter        ListFilter
 	confirmRemark string
 	confirmedAt   time.Time
+	triggerInput  TriggerInput
+	triggeredAt   time.Time
+	triggerRecord *TriggerRecord
 }
 
 func (s *alertStoreStub) ListRulesByOwner(_ context.Context, ownerID, plotID uint64) ([]Rule, error) {
@@ -43,6 +47,11 @@ func (s *alertStoreStub) ListAlertsByOwner(_ context.Context, ownerID uint64, fi
 func (s *alertStoreStub) ConfirmAlertByOwner(_ context.Context, ownerID, alertID uint64, remark string, now time.Time) (*Alert, error) {
 	s.ownerID, s.alertID, s.confirmRemark, s.confirmedAt = ownerID, alertID, remark, now
 	return s.confirmed, s.err
+}
+
+func (s *alertStoreStub) CreateTriggeredAlert(_ context.Context, input TriggerInput, now time.Time) (*TriggerRecord, error) {
+	s.triggerInput, s.triggeredAt = input, now
+	return s.triggerRecord, s.err
 }
 
 func TestListRulesMapsContractFields(t *testing.T) {
@@ -113,5 +122,42 @@ func TestConfirmTrimsRemarkAndMapsStoreErrors(t *testing.T) {
 	store.err = ErrConflict
 	if _, err := service.Confirm(context.Background(), 7, 3, "已处理"); !errors.Is(err, ErrConflict) {
 		t.Fatalf("Confirm() error = %v, want ErrConflict", err)
+	}
+}
+
+func TestTriggerCreatesDeliveryRecordAndDefaultsTime(t *testing.T) {
+	now := time.Date(2026, 8, 22, 10, 0, 0, 0, time.UTC)
+	store := &alertStoreStub{triggerRecord: &TriggerRecord{Alert: Alert{
+		ID: 9, Status: StatusActive, TriggeredAt: now,
+	}, Created: true}}
+	service := NewService(store)
+	service.now = func() time.Time { return now }
+
+	result, err := service.Trigger(context.Background(), TriggerInput{
+		RuleID: 2, TriggerValue: 28.6, TraceID: " trace-1 ", ForwardBody: json.RawMessage(`{"ruleId":2,"triggerValue":28.6}`),
+	})
+	if err != nil || result.ID != 9 || !result.Created || result.Status != StatusActive {
+		t.Fatalf("Trigger() = (%+v, %v)", result, err)
+	}
+	if store.triggerInput.TriggeredAt == nil || !store.triggerInput.TriggeredAt.Equal(now) ||
+		store.triggerInput.TraceID != "trace-1" || !store.triggeredAt.Equal(now) {
+		t.Fatalf("stored trigger = %+v at %s", store.triggerInput, store.triggeredAt)
+	}
+}
+
+func TestTriggerValidatesAndMapsStoreErrors(t *testing.T) {
+	store := &alertStoreStub{triggerRecord: &TriggerRecord{}}
+	service := NewService(store)
+	if _, err := service.Trigger(context.Background(), TriggerInput{}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("invalid Trigger() error = %v", err)
+	}
+	store.err = gorm.ErrRecordNotFound
+	input := TriggerInput{RuleID: 2, TriggerValue: 1, ForwardBody: json.RawMessage(`{"ruleId":2,"triggerValue":1}`)}
+	if _, err := service.Trigger(context.Background(), input); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing Trigger() error = %v", err)
+	}
+	store.err = ErrConflict
+	if _, err := service.Trigger(context.Background(), input); !errors.Is(err, ErrConflict) {
+		t.Fatalf("disabled Trigger() error = %v", err)
 	}
 }

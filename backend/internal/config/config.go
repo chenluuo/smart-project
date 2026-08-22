@@ -42,6 +42,7 @@ type AuthConfig struct {
 type InternalConfig struct {
 	ServiceKey             string
 	KnowledgeNotifyURL     string
+	AgentAlertURL          string
 	OutboxDispatchInterval time.Duration
 	OutboxBatchSize        int
 	AgentHTTPTimeout       time.Duration
@@ -138,6 +139,7 @@ func Load() (Config, error) {
 		},
 		Internal: InternalConfig{
 			ServiceKey: internalServiceKey, KnowledgeNotifyURL: strings.TrimSpace(os.Getenv("KNOWLEDGE_NOTIFY_URL")),
+			AgentAlertURL:          strings.TrimSpace(os.Getenv("AGENT_ALERT_URL")),
 			OutboxDispatchInterval: outboxDispatchInterval, OutboxBatchSize: outboxBatchSize, AgentHTTPTimeout: agentHTTPTimeout,
 		},
 		ObjectStorage: ObjectStorageConfig{
