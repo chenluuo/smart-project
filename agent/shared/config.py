@@ -33,7 +33,7 @@ def _resolve(value: Any, base_dir: Path) -> Any:
         def repl(m: re.Match) -> str:
             name = m.group(1)
             val = os.environ.get(name)
-            if val is None or val == "":
+            if val is None:
                 raise ConfigError(
                     f"缺少环境变量 {name}（在 {base_dir.name}/config.yaml 中声明），"
                     "请在 .env 或系统环境变量中配置"

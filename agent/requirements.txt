@@ -9,3 +9,4 @@ openai>=1.30
 pymilvus>=2.4
 minio>=7.2
 sse-starlette>=2.1
+jsonschema>=4.21
