@@ -28,10 +28,11 @@ services:
     max_tokens: 1024
 
   embedding:
+    mode: "multimodal"      # multimodal=火山vision（默认）/ standard=OpenAI兼容纯文本（doubao-embedding-text、本地bge-m3等）
     base_url: "https://ark.cn-beijing.volces.com/api/v3"
     api_key: "ark-c4453c5a-3ec6-4b67-8b75-d62b9305fc21-fbbba"
     model: "ep-20260621064553-q2m69"
-    dimensions: 1024        # 自定义输出维度（接口支持 1024，实测 512 不支持）
+    dimensions: 1024        # 自定义输出维度（multimodal 支持 1024，实测 512 不支持）
 
   milvus:
     host: localhost
