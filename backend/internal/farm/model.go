@@ -1,6 +1,8 @@
 package farm
 
 import (
+	"time"
+
 	"github.com/chenluuo/smart-project/backend/internal/shared/persistence"
 	"github.com/shopspring/decimal"
 )
@@ -49,3 +51,55 @@ type Plot struct {
 }
 
 func (Plot) TableName() string { return "plots" }
+
+// 指标数值对象
+type MetricValue struct {
+	Value         float64 `json:"value"`
+	Unit          string  `json:"unit"`
+	ThresholdDiff float64 `json:"thresholdDiff,omitempty"`
+	DayDiff       float64 `json:"dayDiff,omitempty"`
+	Status        string  `json:"status,omitempty"`
+}
+
+type DeviceOnlineStat struct {
+	Online  int `json:"online"`
+	Total   int `json:"total"`
+	Offline int `json:"offline"`
+}
+
+type AlertStat struct {
+	Active         int `json:"active"`
+	PendingConfirm int `json:"pendingConfirm"`
+}
+
+type DashboardPlotItem struct {
+	Id           string  `json:"id"`
+	Code         string  `json:"code"`
+	SoilMoisture float64 `json:"soilMoisture"`
+	Temperature  float64 `json:"temperature"`
+	Status       string  `json:"status"`
+}
+
+type DashboardOverview struct {
+	FarmId          string              `json:"farmId"`
+	FarmName        string              `json:"farmName"`
+	SampleTime      string              `json:"sampleTime"`
+	AvgSoilMoisture MetricValue         `json:"avgSoilMoisture"`
+	AvgTemperature  MetricValue         `json:"avgTemperature"`
+	DeviceOnline    DeviceOnlineStat    `json:"deviceOnline"`
+	Alerts          AlertStat           `json:"alerts"`
+	Plots           []DashboardPlotItem `json:"plots"`
+}
+type SourceDevice struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Status  string `json:"status"`
+	Battery int    `json:"battery"`
+}
+
+type PlotLatestTelemetry struct {
+	PlotId        string                 `json:"plotId"`
+	SampleTime    time.Time              `json:"sampleTime"`
+	Metrics       map[string]MetricValue `json:"metrics"`
+	SourceDevices []SourceDevice         `json:"sourceDevices"`
+}

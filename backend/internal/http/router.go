@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/chenluuo/smart-project/backend/internal/farm"
 	"github.com/gin-gonic/gin"
 )
 
@@ -22,6 +23,16 @@ func NewRouter(mode string, db databasePinger) *gin.Engine {
 	actuator.GET("", health.readiness)
 	actuator.GET("/liveness", health.liveness)
 	actuator.GET("/readiness", health.readiness)
+	apiV1 := router.Group("/api/v1")
+	{
+		apiV1.GET("/dashboard/overview", farm.GetDashboardOverview)
+		apiV1.GET("/plots/:plotId/telemetry/latest", farm.GetPlotLatestTelemetry)
+
+	}
+
+	router.NoRoute(func(c *gin.Context) {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "Not Found"})
+	})
 
 	return router
 }
