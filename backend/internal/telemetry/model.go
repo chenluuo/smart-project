@@ -15,3 +15,27 @@ type Latest struct {
 	SoilMoisture *MetricValue
 	Temperature  *MetricValue
 }
+
+// HistoryPoint 是某个聚合时间窗口内的统计值。
+type HistoryPoint struct {
+	Time time.Time `json:"time"`
+	Avg  float64   `json:"avg"`
+	Min  float64   `json:"min"`
+	Max  float64   `json:"max"`
+}
+
+// History 是某地块单个指标的历史趋势。
+type History struct {
+	PlotID uint64
+	Metric string
+	Points []HistoryPoint
+}
+
+// HistoryQuery 描述一次历史趋势查询。
+type HistoryQuery struct {
+	PlotID    uint64
+	Metric    string
+	StartTime time.Time
+	EndTime   time.Time
+	Interval  time.Duration
+}

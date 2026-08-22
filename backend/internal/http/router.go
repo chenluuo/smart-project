@@ -92,6 +92,8 @@ func NewRouterWithBackendServices(
 	if telemetry != nil {
 		registerDashboardRoutes(router, auth, plots, devices, alerts, telemetry)
 		registerTelemetryRoutes(router, auth, plots, devices, telemetry)
+		registerTelemetryListRoutes(router, auth, plots, alerts, telemetry)
+		registerTelemetryHistoryRoutes(router, auth, plots, telemetry)
 	}
 	if len(eventSubscribers) > 0 && eventSubscribers[0] != nil {
 		registerEventRoutes(router, auth, eventSubscribers[0])
@@ -151,6 +153,8 @@ type knowledgeService interface {
 
 type telemetryService interface {
 	LatestByPlot(context.Context, uint64) (*telemetry.Latest, error)
+	LatestByPlots(context.Context, []uint64) ([]telemetry.Latest, error)
+	History(context.Context, telemetry.HistoryQuery) (*telemetry.History, error)
 }
 
 type healthHandler struct {
