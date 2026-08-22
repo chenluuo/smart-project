@@ -52,7 +52,7 @@ class RedisClient:
     def xread_group(
         self, stream: str, consumer: str, count: int = 10, block_ms: int = 5000
     ) -> list[dict[str, Any]]:
-        """读取一批未 ACK 消息并立即 ACK（至少一次语义，业务侧自行幂等）。"""
+        """读取一批消息（**不自动 ACK**，由调用方成功后 xack，失败可重投）。"""
         full = self.stream_prefix + stream
         self.ensure_group(stream)
         try:
@@ -76,8 +76,28 @@ class RedisClient:
                         "trace_id": fields.get("trace_id"),
                     }
                 )
-                self._r.xack(full, self.group, msg_id)
         return out
+
+    def xack(self, stream: str, msg_id: str) -> None:
+        """处理成功后确认（删除消费组消息）。"""
+        full = self.stream_prefix + stream
+        self._r.xack(full, self.group, msg_id)
+
+    def retry_later(self, stream: str, fields: dict[str, Any], retry_key: str | None = None,
+                    max_retries: int = 3, delay_ms: int = 1000) -> bool:
+        """失败消息重投：带重试计数，超限丢弃。返回是否已重投。"""
+        import time
+
+        retries = int(fields.pop(retry_key, 0)) if retry_key else 0
+        if retries >= max_retries:
+            return False  # 超限丢弃
+        payload = dict(fields)
+        if retry_key:
+            payload[retry_key] = retries + 1
+        self.xadd(stream, payload, maxlen=10000)
+        if delay_ms:
+            time.sleep(delay_ms / 1000)
+        return True
 
     # ---------- 短期窗口 ctx:{userId} ----------
     def window_get(self, user_id: str) -> list[dict[str, Any]]:

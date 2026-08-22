@@ -46,9 +46,17 @@ def run_once() -> None:
         for ev in events:
             try:
                 result = HANDLERS[stream](ev)
+                r.xack(stream, ev["id"])  # 处理成功才 ACK
                 log.info("[%s] %s -> %s", stream, ev.get("payload") or ev, result)
             except Exception as e:
-                log.error("[%s] 处理失败: %s", stream, e)
+                # 失败重投（带重试计数，超限丢弃），失败消息不再丢失
+                requeued = r.retry_later(stream, ev, retry_key="retry", max_retries=3)
+                if requeued:
+                    r.xack(stream, ev["id"])  # 原消息已重投，可 ACK
+                    log.warning("[%s] 处理失败，已重投: %s", stream, e)
+                else:
+                    r.xack(stream, ev["id"])
+                    log.error("[%s] 处理失败且重试超限，丢弃: %s", stream, e)
 
 
 def main() -> None:
