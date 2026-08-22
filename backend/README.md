@@ -1,6 +1,6 @@
 # 智慧农业 Gin 后端骨架
 
-该目录是依据《智慧农业系统架构设计（修订版）》建立的 Go 模块化单体骨架。目前包含 Gin HTTP 服务、MySQL 领域模型、GORM Repository 和嵌入式数据库迁移；业务 REST API 尚未实现。
+该目录是依据《智慧农业系统架构设计（修订版）》建立的 Go 模块化单体。目前包含 Gin HTTP 服务、MySQL 领域模型、GORM Repository、嵌入式数据库迁移，以及基于 JWT 的注册登录功能。
 
 ## 技术基线
 
@@ -75,6 +75,14 @@ GET http://localhost:8080/actuator/health/liveness
 GET http://localhost:8080/actuator/health/readiness
 ```
 
+认证接口：
+
+```text
+POST /api/v1/auth/register  # mobile、username、password，无手机验证码
+POST /api/v1/auth/login     # username、password
+GET  /api/v1/users/me       # Authorization: Bearer <access_token>
+```
+
 ## 配置
 
 本地默认连接：
@@ -98,6 +106,9 @@ password: smart_agriculture
 | `DB_POOL_MAX_SIZE` | `10` | 最大连接数 |
 | `DB_POOL_MIN_IDLE` | `2` | 最大空闲连接数 |
 | `DB_MIGRATE` | `true` | 启动时执行嵌入式 SQL 迁移 |
+| `JWT_SECRET` | 仅供本地开发的默认密钥 | HS256 签名密钥，至少 32 个字符 |
+| `JWT_ISSUER` | `smart-agriculture-api` | JWT 签发方 |
+| `JWT_TTL` | `2h` | 访问令牌有效期（Go duration） |
 
 已有 Flyway 数据库可直接升级：启动时会读取 `flyway_schema_history`，把成功版本导入新的 `schema_migrations`，不会重复建表。
 
@@ -106,6 +117,6 @@ password: smart_agriculture
 ## 下一步
 
 1. 实现应用服务和事务边界。
-2. 增加用户认证与农场/地块数据权限。
+2. 增加农场/地块数据权限。
 3. 接入 EMQX、TDengine 和 Redis。
 4. 增加 REST Handler、DTO 和接口契约。

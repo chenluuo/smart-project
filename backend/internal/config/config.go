@@ -14,6 +14,7 @@ import (
 type Config struct {
 	Server   ServerConfig
 	Database DatabaseConfig
+	Auth     AuthConfig
 }
 
 type ServerConfig struct {
@@ -28,6 +29,12 @@ type DatabaseConfig struct {
 	MaxIdleConns    int
 	ConnMaxLifetime time.Duration
 	Migrate         bool
+}
+
+type AuthConfig struct {
+	JWTSecret string
+	Issuer    string
+	TokenTTL  time.Duration
 }
 
 func Load() (Config, error) {
@@ -48,6 +55,14 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	tokenTTL, err := durationValue("JWT_TTL", 2*time.Hour)
+	if err != nil {
+		return Config{}, err
+	}
+	jwtSecret := value("JWT_SECRET", "dev-only-jwt-secret-change-me-32-chars")
+	if len(jwtSecret) < 32 {
+		return Config{}, fmt.Errorf("JWT_SECRET must contain at least 32 characters")
+	}
 
 	return Config{
 		Server: ServerConfig{
@@ -61,6 +76,11 @@ func Load() (Config, error) {
 			MaxIdleConns:    maxIdle,
 			ConnMaxLifetime: 30 * time.Minute,
 			Migrate:         migrate,
+		},
+		Auth: AuthConfig{
+			JWTSecret: jwtSecret,
+			Issuer:    value("JWT_ISSUER", "smart-agriculture-api"),
+			TokenTTL:  tokenTTL,
 		},
 	}, nil
 }
@@ -136,6 +156,18 @@ func boolValue(key string, fallback bool) (bool, error) {
 	result, err := strconv.ParseBool(raw)
 	if err != nil {
 		return false, fmt.Errorf("%s must be a boolean", key)
+	}
+	return result, nil
+}
+
+func durationValue(key string, fallback time.Duration) (time.Duration, error) {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return fallback, nil
+	}
+	result, err := time.ParseDuration(raw)
+	if err != nil || result <= 0 {
+		return 0, fmt.Errorf("%s must be a positive duration", key)
 	}
 	return result, nil
 }

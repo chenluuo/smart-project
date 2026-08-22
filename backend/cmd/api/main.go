@@ -12,6 +12,7 @@ import (
 
 	"github.com/chenluuo/smart-project/backend/internal/config"
 	httpserver "github.com/chenluuo/smart-project/backend/internal/http"
+	"github.com/chenluuo/smart-project/backend/internal/identity"
 	"github.com/chenluuo/smart-project/backend/internal/platform/database"
 )
 
@@ -40,10 +41,16 @@ func main() {
 			os.Exit(1)
 		}
 	}
+	tokenManager, err := identity.NewTokenManager(cfg.Auth.JWTSecret, cfg.Auth.Issuer, cfg.Auth.TokenTTL)
+	if err != nil {
+		slog.Error("configure JWT", "error", err)
+		os.Exit(1)
+	}
+	authService := identity.NewAuthService(identity.NewRepositories(db), tokenManager)
 
 	server := &http.Server{
 		Addr:              ":" + cfg.Server.Port,
-		Handler:           httpserver.NewRouter(cfg.Server.Mode, sqlDB),
+		Handler:           httpserver.NewRouter(cfg.Server.Mode, sqlDB, authService),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,

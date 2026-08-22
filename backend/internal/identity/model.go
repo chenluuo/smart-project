@@ -11,7 +11,7 @@ const (
 
 type User struct {
 	ID           uint64     `json:"id" gorm:"primaryKey;autoIncrement"`
-	Name         string     `json:"name" gorm:"size:64;not null"`
+	AccountName  string     `json:"username" gorm:"column:name;size:64;not null;uniqueIndex:uk_users_name"`
 	Mobile       string     `json:"mobile" gorm:"size:32;not null;uniqueIndex:uk_users_mobile"`
 	PasswordHash string     `json:"-" gorm:"column:password_hash;size:255;not null"`
 	Status       UserStatus `json:"status" gorm:"size:32;not null"`
