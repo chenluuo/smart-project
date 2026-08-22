@@ -16,18 +16,28 @@
 
 ```text
 src/main/java/com/smartagriculture/
-├─ identity/       # 用户与角色
-├─ farm/           # 农场、成员和地块
-├─ device/         # 设备与绑定关系
-├─ telemetry/      # 遥测边界，后续接入 EMQX/TDengine/Redis
-├─ alert/          # 告警规则与告警记录
-├─ control/        # 设备控制命令
-├─ notification/   # 告警通知
-├─ audit/          # 操作审计
-├─ outbox/         # 可靠异步事件
-├─ agent/          # 智能问答边界，后续接入 RAG
-└─ shared/         # 公共持久化基础类
+├─ identity/                 # 用户与角色
+│  ├─ controller/            # HTTP 接口层（暂为空）
+│  ├─ service/               # 应用服务与事务（暂为空）
+│  ├─ dto/                   # 请求与响应对象（暂为空）
+│  ├─ domain/                # 实体、枚举和领域规则
+│  └─ repository/            # 数据访问
+├─ farm/                     # 农场、成员和地块
+├─ device/                   # 设备与绑定关系
+├─ telemetry/                # 遥测，后续接入 EMQX/TDengine/Redis
+├─ alert/                    # 告警规则与告警记录
+├─ control/                  # 设备控制命令
+├─ notification/             # 告警通知
+├─ audit/                    # 操作审计
+├─ outbox/                   # 可靠异步事件
+├─ agent/                    # 智能问答，后续接入 RAG
+└─ shared/
+   ├─ config/                # 公共配置（暂为空）
+   ├─ exception/             # 统一异常（暂为空）
+   └─ persistence/           # 公共持久化基础类
 ```
+
+其他业务模块与 `identity` 采用相同的 `controller / service / dto / domain / repository` 分层；暂未实现的目录使用 `.gitkeep` 让 Git 保留。
 
 ## 已建立的 MySQL 表
 
