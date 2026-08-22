@@ -10,13 +10,20 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/chenluuo/smart-project/backend/internal/agent"
+	"github.com/chenluuo/smart-project/backend/internal/alert"
 	"github.com/chenluuo/smart-project/backend/internal/config"
 	"github.com/chenluuo/smart-project/backend/internal/control"
 	"github.com/chenluuo/smart-project/backend/internal/device"
+	"github.com/chenluuo/smart-project/backend/internal/events"
 	httpserver "github.com/chenluuo/smart-project/backend/internal/http"
 	"github.com/chenluuo/smart-project/backend/internal/identity"
+	"github.com/chenluuo/smart-project/backend/internal/knowledge"
+	"github.com/chenluuo/smart-project/backend/internal/outbox"
 	"github.com/chenluuo/smart-project/backend/internal/platform/database"
+	"github.com/chenluuo/smart-project/backend/internal/platform/objectstore"
 	"github.com/chenluuo/smart-project/backend/internal/plot"
+	"github.com/chenluuo/smart-project/backend/internal/telemetry"
 )
 
 func main() {
@@ -52,15 +59,74 @@ func main() {
 	authService := identity.NewAuthService(identity.NewRepositories(db), tokenManager)
 	plotService := plot.NewService(plot.NewRepositories(db))
 	deviceService := device.NewService(device.NewRepositories(db))
-	controlService := control.NewService(control.NewRepository(db))
+	eventBroker := events.NewBroker(512)
+	controlService := control.NewService(control.NewRepository(db), eventBroker)
+	alertService := alert.NewService(alert.NewRepositories(db), eventBroker)
+	telemetryService := telemetry.NewService(telemetry.NullStore{})
+	agentService := agent.NewService(agent.NewRepository(db))
+	var knowledgeObjectStore knowledge.ObjectStore
+	if cfg.ObjectStorage.Enabled {
+		minioStore, err := objectstore.NewMinIO(objectstore.Config{
+			Endpoint: cfg.ObjectStorage.Endpoint, AccessKey: cfg.ObjectStorage.AccessKey,
+			SecretKey: cfg.ObjectStorage.SecretKey, Bucket: cfg.ObjectStorage.Bucket,
+			Region: cfg.ObjectStorage.Region, Secure: cfg.ObjectStorage.Secure,
+		})
+		if err != nil {
+			slog.Error("configure object storage", "error", err)
+			os.Exit(1)
+		}
+		bucketCtx, bucketCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if err := minioStore.EnsureBucket(bucketCtx); err != nil {
+			bucketCancel()
+			slog.Error("prepare object storage", "error", err)
+			os.Exit(1)
+		}
+		bucketCancel()
+		knowledgeObjectStore = minioStore
+	}
+	knowledgeService := knowledge.NewService(knowledge.NewRepository(db), knowledgeObjectStore)
+	knowledgeService.ConfigureObjectAccess(cfg.ObjectStorage.MaxUploadBytes, cfg.ObjectStorage.SignedURLTimeout)
+	workerContext, stopWorkers := context.WithCancel(context.Background())
+	defer stopWorkers()
+	if cfg.Internal.KnowledgeNotifyURL != "" {
+		dispatcher, err := knowledge.NewDispatcher(
+			outbox.NewRepository(db),
+			&http.Client{Timeout: cfg.Internal.AgentHTTPTimeout},
+			cfg.Internal.KnowledgeNotifyURL,
+			cfg.Internal.ServiceKey,
+		)
+		if err != nil {
+			slog.Error("configure knowledge outbox dispatcher", "error", err)
+			os.Exit(1)
+		}
+		go dispatcher.Run(workerContext, cfg.Internal.OutboxDispatchInterval, cfg.Internal.OutboxBatchSize)
+	}
+	if cfg.Internal.AgentAlertURL != "" {
+		dispatcher, err := alert.NewDispatcher(
+			outbox.NewRepository(db),
+			&http.Client{Timeout: cfg.Internal.AgentHTTPTimeout},
+			cfg.Internal.AgentAlertURL,
+			cfg.Internal.ServiceKey,
+		)
+		if err != nil {
+			slog.Error("configure alert outbox dispatcher", "error", err)
+			os.Exit(1)
+		}
+		go dispatcher.Run(workerContext, cfg.Internal.OutboxDispatchInterval, cfg.Internal.OutboxBatchSize)
+	}
 
 	server := &http.Server{
-		Addr:              ":" + cfg.Server.Port,
-		Handler:           httpserver.NewRouterWithServices(cfg.Server.Mode, sqlDB, authService, plotService, deviceService, controlService),
+		Addr: ":" + cfg.Server.Port,
+		Handler: httpserver.NewRouterWithBackendServices(
+			cfg.Server.Mode, sqlDB, authService, plotService, deviceService, controlService, alertService,
+			agentService, knowledgeService, telemetryService, cfg.Internal.ServiceKey, eventBroker,
+		),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      15 * time.Second,
-		IdleTimeout:       60 * time.Second,
+		// SSE responses are intentionally long-lived; handlers still bound their
+		// own downstream calls and ReadHeaderTimeout protects request intake.
+		WriteTimeout: 0,
+		IdleTimeout:  60 * time.Second,
 	}
 
 	serverErr := make(chan error, 1)
@@ -81,6 +147,7 @@ func main() {
 			os.Exit(1)
 		}
 	}
+	stopWorkers()
 
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
 	defer cancel()

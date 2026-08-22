@@ -27,6 +27,7 @@ var mobilePattern = regexp.MustCompile(`^\+?[1-9][0-9]{5,14}$`)
 type UserStore interface {
 	FindUserByAccountName(context.Context, string) (*User, error)
 	FindUserByMobile(context.Context, string) (*User, error)
+	FindUserByID(context.Context, uint64) (*User, error)
 	CreateUser(context.Context, *User) error
 	FindRoleCodesByUserID(context.Context, uint64) ([]string, error)
 }
@@ -42,6 +43,11 @@ type LoginResult struct {
 	ExpiresIn   int64
 	User        *User
 	Role        string
+}
+
+type CurrentUserResult struct {
+	User *User
+	Role string
 }
 
 type AuthService struct {
@@ -125,8 +131,40 @@ func (s *AuthService) Login(ctx context.Context, accountName, password string) (
 	return &LoginResult{AccessToken: token, ExpiresIn: expiresIn, User: user, Role: roles[0]}, nil
 }
 
-func (s *AuthService) Authenticate(token string) (Claims, error) {
-	return s.tokens.Parse(token)
+func (s *AuthService) Authenticate(ctx context.Context, token string) (Claims, error) {
+	claims, err := s.tokens.Parse(token)
+	if err != nil {
+		return Claims{}, err
+	}
+	user, err := s.users.FindUserByID(ctx, claims.UserID)
+	if errors.Is(err, ErrUserNotFound) {
+		return Claims{}, ErrInvalidToken
+	}
+	if err != nil {
+		return Claims{}, fmt.Errorf("verify token user: %w", err)
+	}
+	if user.Status != UserStatusActive {
+		return Claims{}, ErrInvalidToken
+	}
+	return claims, nil
+}
+
+func (s *AuthService) CurrentUser(ctx context.Context, userID uint64) (*CurrentUserResult, error) {
+	if userID == 0 {
+		return nil, ErrUserNotFound
+	}
+	user, err := s.users.FindUserByID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	roles, err := s.users.FindRoleCodesByUserID(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("find user roles: %w", err)
+	}
+	if len(roles) == 0 {
+		return nil, errors.New("user has no assigned role")
+	}
+	return &CurrentUserResult{User: user, Role: roles[0]}, nil
 }
 
 func validAccountName(value string) bool {

@@ -3,7 +3,6 @@ package http
 import (
 	"bytes"
 	"context"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -31,11 +30,20 @@ func (authServiceStub) Login(_ context.Context, accountName, password string) (*
 	}, nil
 }
 
-func (authServiceStub) Authenticate(token string) (identity.Claims, error) {
+func (authServiceStub) Authenticate(_ context.Context, token string) (identity.Claims, error) {
 	if token != "signed-token" {
-		return identity.Claims{}, errors.New("invalid token")
+		return identity.Claims{}, identity.ErrInvalidToken
 	}
 	return identity.Claims{UserID: 7, AccountName: "grower", Role: "FARMER"}, nil
+}
+
+func (authServiceStub) CurrentUser(_ context.Context, userID uint64) (*identity.CurrentUserResult, error) {
+	style := "plain"
+	reliance := "data"
+	return &identity.CurrentUserResult{User: &identity.User{
+		ID: userID, AccountName: "grower", Status: identity.UserStatusActive,
+		InteractionStyle: &style, KnowledgeReliance: &reliance,
+	}, Role: "FARMER"}, nil
 }
 
 func TestAuthEndpoints(t *testing.T) {
@@ -53,7 +61,7 @@ func TestAuthEndpoints(t *testing.T) {
 		{name: "login", method: http.MethodPost, path: "/api/v1/auth/login", body: `{"username":"grower","password":"strong-password"}`, wantStatus: http.StatusOK, wantBody: `"accessToken":"signed-token"`},
 		{name: "login rejects wrong password", method: http.MethodPost, path: "/api/v1/auth/login", body: `{"username":"grower","password":"wrong"}`, wantStatus: http.StatusUnauthorized, wantBody: `"code":40101`},
 		{name: "me requires token", method: http.MethodGet, path: "/api/v1/users/me", wantStatus: http.StatusUnauthorized, wantBody: `"code":40101`},
-		{name: "me returns token identity", method: http.MethodGet, path: "/api/v1/users/me", token: "signed-token", wantStatus: http.StatusOK, wantBody: `"id":7`},
+		{name: "me returns stored profile", method: http.MethodGet, path: "/api/v1/users/me", token: "signed-token", wantStatus: http.StatusOK, wantBody: `"interactionStyle":"plain"`},
 	}
 
 	for _, tt := range tests {
