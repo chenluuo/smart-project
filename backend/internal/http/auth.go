@@ -107,7 +107,7 @@ func (h authHandler) me(c *gin.Context) {
 		return
 	}
 	respondSuccess(c, http.StatusOK, gin.H{
-		"id": claims.UserID, "name": claims.AccountName, "role": claims.Role, "farmIds": []string{},
+		"id": claims.UserID, "name": claims.AccountName, "role": claims.Role,
 	})
 }
 

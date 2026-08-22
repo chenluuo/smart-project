@@ -103,6 +103,7 @@ func databaseDSN() (string, error) {
 	params.Del("useUnicode")
 	params.Del("characterEncoding")
 	params.Del("serverTimezone")
+	params.Del("allowPublicKeyRetrieval")
 	params.Set("charset", "utf8mb4")
 	params.Set("parseTime", "true")
 	params.Set("loc", "UTC")

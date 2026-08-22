@@ -24,6 +24,9 @@ func TestLoadDefaults(t *testing.T) {
 	if !strings.Contains(cfg.Database.DSN, "parseTime=true") || !strings.Contains(cfg.Database.DSN, "multiStatements=true") {
 		t.Fatalf("default DSN is missing required options: %q", cfg.Database.DSN)
 	}
+	if strings.Contains(cfg.Database.DSN, "allowPublicKeyRetrieval") {
+		t.Fatalf("default DSN contains unsupported JDBC option: %q", cfg.Database.DSN)
+	}
 	if cfg.Auth.TokenTTL != 2*time.Hour || cfg.Auth.Issuer != "smart-agriculture-api" {
 		t.Fatalf("unexpected auth defaults: %+v", cfg.Auth)
 	}

@@ -21,7 +21,7 @@ backend/
 │  ├─ platform/database/      # MySQL 连接与嵌入式 SQL 迁移
 │  ├─ shared/persistence/     # 公共模型与泛型 Repository
 │  ├─ identity/               # 用户与角色
-│  ├─ farm/                   # 农场、成员和地块
+│  ├─ plot/                   # 农户所属田块
 │  ├─ device/                 # 设备与绑定关系
 │  ├─ alert/                  # 告警规则与告警记录
 │  ├─ control/                # 设备控制命令
@@ -36,7 +36,7 @@ backend/
 ## 已建立的 MySQL 表
 
 - `users`、`roles`、`user_roles`
-- `farms`、`farm_users`、`plots`
+- `plots`（通过 `owner_id` 归属农户）
 - `devices`、`device_bindings`
 - `alert_rules`、`alerts`
 - `device_commands`
@@ -117,6 +117,6 @@ password: smart_agriculture
 ## 下一步
 
 1. 实现应用服务和事务边界。
-2. 增加农场/地块数据权限。
+2. 增加按农户隔离的田块数据权限。
 3. 接入 EMQX、TDengine 和 Redis。
 4. 增加 REST Handler、DTO 和接口契约。
