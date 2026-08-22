@@ -91,6 +91,26 @@ class GoClient:
         )
         return data if isinstance(data, dict) else {}
 
+    # ---------- 控制（JWT，复用 Go 已有接口） ----------
+    def get_irrigation_status(self, authorization: str, plot_id: str) -> dict[str, Any]:
+        data = self._request(
+            "GET", f"/plots/{plot_id}/irrigation/status", authorization=authorization
+        )
+        return data if isinstance(data, dict) else {}
+
+    def post_irrigation_command(self, authorization: str, plot_id: str,
+                                body: dict[str, Any]) -> dict[str, Any]:
+        data = self._request(
+            "POST", f"/plots/{plot_id}/irrigation/commands", authorization=authorization, json=body
+        )
+        return data if isinstance(data, dict) else {}
+
+    def get_command_result(self, authorization: str, command_id: str) -> dict[str, Any]:
+        data = self._request(
+            "GET", f"/commands/{command_id}", authorization=authorization
+        )
+        return data if isinstance(data, dict) else {}
+
     # ---------- 知识库（JWT） ----------
     def get_knowledge_docs(self, authorization: str = "", **query: Any) -> list[Any]:
         return self._request("GET", "/knowledge/docs", authorization=authorization, params=query)

@@ -103,7 +103,7 @@ def test_service_level() -> None:
 
     # tool 清单 + mock 执行
     r = c.get(f"{TOOL}/tools")
-    check("tool 清单 9 个", r.status_code == 200 and len(r.json()) == 9, r.text[:100])
+    check("tool 清单 12 个", r.status_code == 200 and len(r.json()) == 12, r.text[:100])
     r = c.post(f"{TOOL}/tools/get_user_plots/execute", json={"args": {}})
     check("tool get_user_plots(mock)", r.status_code == 200 and r.json()["ok"], r.text[:200])
     r = c.post(f"{TOOL}/tools/get_latest_telemetry/execute", json={"args": {"plot_id": "plot_a3"}})
