@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/chenluuo/smart-project/backend/internal/control"
+	"github.com/chenluuo/smart-project/backend/internal/device"
 	"github.com/chenluuo/smart-project/backend/internal/identity"
 	"github.com/chenluuo/smart-project/backend/internal/plot"
 	"github.com/gin-gonic/gin"
@@ -37,6 +39,20 @@ func NewRouterWithPlotService(mode string, db databasePinger, auth authService, 
 	return router
 }
 
+func NewRouterWithServices(mode string, db databasePinger, auth authService, plots plotService, devices deviceService, controls ...controlService) *gin.Engine {
+	router := NewRouter(mode, db, auth)
+	if plots != nil {
+		registerPlotRoutes(router, auth, plots)
+	}
+	if devices != nil {
+		registerDeviceRoutes(router, auth, devices)
+	}
+	if len(controls) > 0 && controls[0] != nil {
+		registerControlRoutes(router, auth, controls[0])
+	}
+	return router
+}
+
 type authService interface {
 	Register(context.Context, identity.RegisterInput) (*identity.User, error)
 	Login(context.Context, string, string) (*identity.LoginResult, error)
@@ -46,6 +62,20 @@ type authService interface {
 type plotService interface {
 	List(context.Context, uint64) ([]plot.Plot, error)
 	Get(context.Context, uint64, uint64) (*plot.Plot, error)
+}
+
+type deviceService interface {
+	List(context.Context, uint64, device.ListFilter) (device.ListResult, error)
+	Bind(context.Context, uint64, device.BindInput) (*device.Device, error)
+	Unbind(context.Context, uint64, uint64) error
+	Status(context.Context, uint64, uint64) (*device.Device, error)
+}
+
+type controlService interface {
+	Issue(context.Context, uint64, uint64, control.IssueInput) (*control.IssueResult, error)
+	IrrigationStatus(context.Context, uint64, uint64) (*control.IrrigationStatus, error)
+	Command(context.Context, uint64, string) (*control.CommandResult, error)
+	List(context.Context, uint64, control.ListFilter) (control.ListResult, error)
 }
 
 type healthHandler struct {

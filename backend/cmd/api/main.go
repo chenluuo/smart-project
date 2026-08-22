@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/chenluuo/smart-project/backend/internal/config"
+	"github.com/chenluuo/smart-project/backend/internal/control"
+	"github.com/chenluuo/smart-project/backend/internal/device"
 	httpserver "github.com/chenluuo/smart-project/backend/internal/http"
 	"github.com/chenluuo/smart-project/backend/internal/identity"
 	"github.com/chenluuo/smart-project/backend/internal/platform/database"
@@ -49,10 +51,12 @@ func main() {
 	}
 	authService := identity.NewAuthService(identity.NewRepositories(db), tokenManager)
 	plotService := plot.NewService(plot.NewRepositories(db))
+	deviceService := device.NewService(device.NewRepositories(db))
+	controlService := control.NewService(control.NewRepository(db))
 
 	server := &http.Server{
 		Addr:              ":" + cfg.Server.Port,
-		Handler:           httpserver.NewRouterWithPlotService(cfg.Server.Mode, sqlDB, authService, plotService),
+		Handler:           httpserver.NewRouterWithServices(cfg.Server.Mode, sqlDB, authService, plotService, deviceService, controlService),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,
