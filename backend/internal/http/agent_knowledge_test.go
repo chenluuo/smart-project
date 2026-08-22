@@ -67,7 +67,7 @@ func (adminAuthServiceStub) Authenticate(token string) (identity.Claims, error) 
 
 func TestAgentRoutesAndInternalAuthentication(t *testing.T) {
 	const key = "test-internal-service-key-32-characters"
-	router := NewRouterWithBackendServices("test", pingerStub{}, authServiceStub{}, nil, nil, nil, nil, agentServiceStub{}, nil, key)
+	router := NewRouterWithBackendServices("test", pingerStub{}, authServiceStub{}, nil, nil, nil, nil, agentServiceStub{}, nil, nil, key)
 
 	tests := []struct {
 		name       string
@@ -104,7 +104,7 @@ func TestAgentRoutesAndInternalAuthentication(t *testing.T) {
 }
 
 func TestKnowledgeRoutesRequireSystemAdmin(t *testing.T) {
-	farmerRouter := NewRouterWithBackendServices("test", pingerStub{}, authServiceStub{}, nil, nil, nil, nil, nil, knowledgeServiceStub{}, "unused-internal-service-key-32-chars")
+	farmerRouter := NewRouterWithBackendServices("test", pingerStub{}, authServiceStub{}, nil, nil, nil, nil, nil, knowledgeServiceStub{}, nil, "unused-internal-service-key-32-chars")
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/knowledge/docs", strings.NewReader(`{"title":"指南","category":"general","objectKey":"knowledge/guide.pdf","fileHash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`))
 	request.Header.Set("Authorization", "Bearer signed-token")
 	request.Header.Set("Content-Type", "application/json")
@@ -114,7 +114,7 @@ func TestKnowledgeRoutesRequireSystemAdmin(t *testing.T) {
 		t.Fatalf("farmer status=%d body=%s, want 403", response.Code, response.Body.String())
 	}
 
-	adminRouter := NewRouterWithBackendServices("test", pingerStub{}, adminAuthServiceStub{}, nil, nil, nil, nil, nil, knowledgeServiceStub{}, "unused-internal-service-key-32-chars")
+	adminRouter := NewRouterWithBackendServices("test", pingerStub{}, adminAuthServiceStub{}, nil, nil, nil, nil, nil, knowledgeServiceStub{}, nil, "unused-internal-service-key-32-chars")
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
 	_ = writer.WriteField("title", "指南")
