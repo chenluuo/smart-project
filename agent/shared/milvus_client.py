@@ -32,21 +32,73 @@ def _collection(name: str) -> str:
 
 
 def ensure_collections() -> None:
-    """幂等建 collection（ingest 启动时调用）。"""
-    from pymilvus import DataType
+    """幂等建 collection（ingest 启动时调用）。完整 schema：VARCHAR 主键 + 业务字段。"""
+    from pymilvus import CollectionSchema, DataType, FieldSchema
 
     conn = _get_conn()
+    dim = int(get_config("milvus").get("dimension", 1024))
     for name in ("knowledge", "memory"):
         col = _collection(name)
         if conn.has_collection(col):
             continue
-        conn.create_collection(
-            collection_name=col,
-            dimension=int(get_config("milvus").get("dimension", 1024)),
-            metric_type="COSINE",
-        )
-        # 公共标量字段
-        conn.create_index(col, "user_id", index_name="idx_user") if name == "memory" else None
+        fields = [
+            FieldSchema(name="id", dtype=DataType.VARCHAR, is_primary=True, max_length=255),
+            FieldSchema(name="vector", dtype=DataType.FLOAT_VECTOR, dim=dim),
+        ]
+        if name == "knowledge":
+            fields += [
+                FieldSchema(name="doc_id", dtype=DataType.VARCHAR, max_length=128),
+                FieldSchema(name="title", dtype=DataType.VARCHAR, max_length=255),
+                FieldSchema(name="version", dtype=DataType.INT64),
+                FieldSchema(name="category", dtype=DataType.VARCHAR, max_length=64),
+                FieldSchema(name="source", dtype=DataType.VARCHAR, max_length=512),
+                FieldSchema(name="content", dtype=DataType.VARCHAR, max_length=4096),
+            ]
+        else:  # memory
+            fields += [
+                FieldSchema(name="user_id", dtype=DataType.VARCHAR, max_length=128),
+                FieldSchema(name="session_id", dtype=DataType.VARCHAR, max_length=128),
+                FieldSchema(name="summary_text", dtype=DataType.VARCHAR, max_length=4096),
+                FieldSchema(name="generated_at", dtype=DataType.VARCHAR, max_length=64),
+                FieldSchema(name="model_version", dtype=DataType.VARCHAR, max_length=64),
+            ]
+        schema = CollectionSchema(fields, description=f"{name} collection")
+        conn.create_collection(collection_name=col, schema=schema)
+        # 向量索引（FLAT 精确检索，小数据量够用；量大再换 IVF/HNSW）
+        try:
+            from pymilvus.milvus_client.index import IndexParams
+
+            vidx = IndexParams()
+            vidx.add_index(field_name="vector", index_type="FLAT", metric_type="COSINE")
+            conn.create_index(col, vidx)
+        except Exception:
+            pass
+        # memory collection 建 user_id 标量索引（user_id 强过滤）
+        if name == "memory":
+            try:
+                from pymilvus.milvus_client.index import IndexParams
+
+                idx = IndexParams()
+                idx.add_index(field_name="user_id", index_type="INVERTED")
+                conn.create_index(col, idx)
+            except Exception:
+                pass  # 索引建失败不阻塞（可后续补建）
+
+
+def _load(col: str) -> None:
+    """load collection 并等待加载完成（Milvus 异步加载）。"""
+    import time
+
+    conn = _get_conn()
+    conn.load_collection(col)
+    for _ in range(60):
+        try:
+            state = conn.get_load_state(col)
+            if state.get("state") == "Loaded":
+                return
+        except Exception:
+            pass
+        time.sleep(1)
 
 
 def search_knowledge(query_embedding: list[float], top_k: int = 5,
@@ -54,6 +106,7 @@ def search_knowledge(query_embedding: list[float], top_k: int = 5,
     """知识检索（向量召回，category 可选过滤）。"""
     conn = _get_conn()
     col = _collection("knowledge")
+    _load(col)
     filter_expr = f'category == "{category}"' if category else None
     hits = conn.search(
         collection_name=col,
@@ -81,6 +134,7 @@ def search_memory(user_id: str, query_embedding: list[float], top_k: int = 3) ->
     """长期记忆召回（user_id 强过滤 + generated_at 时间衰减降权）。"""
     conn = _get_conn()
     col = _collection("memory")
+    _load(col)
     hits = conn.search(
         collection_name=col,
         data=[query_embedding],
