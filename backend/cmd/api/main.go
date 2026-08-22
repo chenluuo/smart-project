@@ -22,6 +22,7 @@ import (
 	"github.com/chenluuo/smart-project/backend/internal/platform/database"
 	"github.com/chenluuo/smart-project/backend/internal/platform/objectstore"
 	"github.com/chenluuo/smart-project/backend/internal/plot"
+	"github.com/chenluuo/smart-project/backend/internal/telemetry"
 )
 
 func main() {
@@ -59,6 +60,7 @@ func main() {
 	deviceService := device.NewService(device.NewRepositories(db))
 	controlService := control.NewService(control.NewRepository(db))
 	alertService := alert.NewService(alert.NewRepositories(db))
+	telemetryService := telemetry.NewService(telemetry.NullStore{})
 	agentService := agent.NewService(agent.NewRepository(db))
 	var knowledgeObjectStore knowledge.ObjectStore
 	if cfg.ObjectStorage.Enabled {
@@ -115,7 +117,7 @@ func main() {
 		Addr: ":" + cfg.Server.Port,
 		Handler: httpserver.NewRouterWithBackendServices(
 			cfg.Server.Mode, sqlDB, authService, plotService, deviceService, controlService, alertService,
-			agentService, knowledgeService, cfg.Internal.ServiceKey,
+			agentService, knowledgeService, telemetryService, cfg.Internal.ServiceKey,
 		),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,

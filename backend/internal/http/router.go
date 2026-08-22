@@ -12,6 +12,7 @@ import (
 	"github.com/chenluuo/smart-project/backend/internal/identity"
 	"github.com/chenluuo/smart-project/backend/internal/knowledge"
 	"github.com/chenluuo/smart-project/backend/internal/plot"
+	"github.com/chenluuo/smart-project/backend/internal/telemetry"
 	"github.com/gin-gonic/gin"
 )
 
@@ -74,6 +75,7 @@ func NewRouterWithBackendServices(
 	alerts alertService,
 	agents agentService,
 	knowledgeDocuments knowledgeService,
+	telemetry telemetryService,
 	internalServiceKey string,
 ) *gin.Engine {
 	router := NewRouterWithAllServices(mode, db, auth, plots, devices, controls, alerts)
@@ -85,6 +87,10 @@ func NewRouterWithBackendServices(
 	}
 	if knowledgeDocuments != nil {
 		registerKnowledgeRoutes(router, auth, knowledgeDocuments)
+	}
+	if telemetry != nil {
+		registerDashboardRoutes(router, auth, plots, devices, alerts, telemetry)
+		registerTelemetryRoutes(router, auth, plots, devices, telemetry)
 	}
 	return router
 }
@@ -137,6 +143,10 @@ type knowledgeService interface {
 	Approve(context.Context, uint64, uint64, string) (*knowledge.Document, error)
 	Publish(context.Context, uint64, uint64, string) (*knowledge.Document, error)
 	Archive(context.Context, uint64, uint64, string) (*knowledge.Document, error)
+}
+
+type telemetryService interface {
+	LatestByPlot(context.Context, uint64) (*telemetry.Latest, error)
 }
 
 type healthHandler struct {
