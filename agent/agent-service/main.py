@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
 from pathlib import Path
@@ -13,6 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from fastapi import FastAPI, Header, HTTPException, Request  # noqa: E402
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.responses import StreamingResponse  # noqa: E402
 from pydantic import BaseModel, Field  # noqa: E402
 
@@ -24,6 +26,28 @@ from shared.redis_client import get_redis  # noqa: E402
 from shared.trace import ensure_trace_id  # noqa: E402
 
 app = FastAPI(title="agent-service", version="0.1.0")
+
+# 测试期放开跨域（极简前端直连 agent/chat；生产收紧为白名单）
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ---------- 并发控制：最大并发对话数（config.yaml agent.max_concurrency） ----------
+_sem: asyncio.Semaphore | None = None
+
+
+def _get_sem() -> asyncio.Semaphore:
+    global _sem
+    if _sem is None:
+        _sem = asyncio.Semaphore(int(get_config("agent").get("max_concurrency", 4)))
+    return _sem
+
+
+def _wait_seconds() -> float:
+    return float(get_config("agent").get("concurrency_wait_seconds", 30))
 
 
 class ChatRequest(BaseModel):
@@ -43,7 +67,18 @@ def _require_user(authorization: str) -> str:
 
 @app.get("/healthz")
 def healthz() -> dict:
-    return {"ok": True}
+    sem = _get_sem()
+    max_c = int(get_config("agent").get("max_concurrency", 4))
+    waiters = sem._waiters or []
+    return {
+        "ok": True,
+        "concurrency": {
+            "max": max_c,
+            "in_flight": max_c - sem._value,          # 已占用槽位
+            "waiting": len(waiters),                  # 排队中的请求
+            "available": sem._value,                  # 剩余槽位
+        },
+    }
 
 
 @app.post("/agent/chat")
@@ -56,6 +91,22 @@ async def chat(req: ChatRequest, request: Request,
     async def event_stream():
         # 先发占位事件：立即发出响应头，避免客户端长时间等待首 token（TTFT）
         yield "event: started\ndata: {\"type\": \"started\"}\n\n"
+        # 并发控制：wait=0 时并发满立即拒绝（不排队）；wait>0 时排队等待
+        sem = _get_sem()
+        if _wait_seconds() <= 0:
+            # 非阻塞：locked()=True 表示无可用槽位 → 立即繁忙（同事件循环内无竞争）
+            if sem.locked():
+                yield ("event: error\ndata: {\"type\": \"error\", "
+                       "\"message\": \"系统繁忙，请稍后重试\"}\n\n")
+                return
+            await sem.acquire()
+        else:
+            try:
+                await asyncio.wait_for(sem.acquire(), timeout=_wait_seconds())
+            except asyncio.TimeoutError:
+                yield ("event: error\ndata: {\"type\": \"error\", "
+                       "\"message\": \"系统繁忙，请稍后重试\"}\n\n")
+                return
         try:
             async for ev in handle_question(
                 user_id=user_id,
@@ -67,6 +118,8 @@ async def chat(req: ChatRequest, request: Request,
                 yield f"event: {ev['type']}\ndata: {json.dumps(ev, ensure_ascii=False)}\n\n"
         except Exception as e:  # 兜底，避免 SSE 中断无响应
             yield f"event: error\ndata: {json.dumps({'type':'error','message':str(e)}, ensure_ascii=False)}\n\n"
+        finally:
+            sem.release()
 
     return StreamingResponse(
         event_stream(),

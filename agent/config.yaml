@@ -56,6 +56,8 @@ services:
     close_timeout_minutes: 5
     min_messages_for_summary: 2
     memory_top_k: 3
+    max_concurrency: 20         # 最大并发对话数（并发满立即拒绝，不排队）
+    concurrency_wait_seconds: 0 # 并发等待上限=0：并发满立即拒绝（组内暂不排队）
 
   context:
     port: 8001
