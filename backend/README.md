@@ -106,7 +106,14 @@ GET  /api/v1/events/stream   # Bearer Token；支持 Last-Event-ID 断线续传
 
 支持的实时事件为 `telemetry.updated`、`alert.created`、`alert.recovered`、`device.status.changed` 和 `command.result`。告警创建和控制命令完成已接入现有业务流程；其余类型的发布函数供 MQTT 遥测、告警恢复和设备心跳模块接入。
 
-后续 MQTT 适配器必须通过 `telemetry.DecodePayload` 和 `IngestService` 接入。设备 JSON 仅允许 `temperature/soilMoisture/light` 与 `temperatureWarning/soilMoistureWarning/lightWarning` 六个必填字段；设备、owner、地块和接收时间从可信 Topic 与绑定关系补充。未知字段会被拒绝。
+MQTT 客户端订阅 `agri/+/+/telemetry`，并通过 `telemetry.DecodePayload` 和 `IngestService` 接入。设备 JSON 仅允许 `temperature/soilMoisture/light` 与 `temperatureWarning/soilMoistureWarning/lightWarning` 六个必填字段；设备、owner、地块和接收时间从可信 Topic 与绑定关系补充。未知字段会被拒绝。客户端使用 QoS 1、自动重连；BearPi-HM Nano 暂未上线或 Broker 暂不可达时不会阻塞 HTTP API 启动。
+
+BearPi-HM Nano 发布示例：
+
+```text
+Topic: agri/{ownerId}/{deviceSn}/telemetry
+Payload: {"temperature":26.5,"soilMoisture":48,"light":920,"temperatureWarning":false,"soilMoistureWarning":false,"lightWarning":false}
+```
 
 智能问答会话接口：
 
@@ -164,6 +171,14 @@ password: smart_agriculture
 | `REDIS_QUERY_CACHE_TTL` | `1m` | 地块和设备查询缓存时长 |
 | `REDIS_ALERT_CACHE_TTL` | `10s` | 活动告警查询缓存时长 |
 | `REDIS_TELEMETRY_TTL` | `5m` | 最新地块遥测快照时长 |
+| `MQTT_ENABLED` | `true` | 是否启动 MQTT 客户端 |
+| `MQTT_BROKER_URL` | `tcp://localhost:1883` | EMQX MQTT 地址 |
+| `MQTT_CLIENT_ID` | `smart-agriculture-api` | 服务端 MQTT Client ID，多实例部署时必须唯一 |
+| `MQTT_USERNAME` / `MQTT_PASSWORD` | 空 | Broker 认证信息 |
+| `MQTT_TOPIC_PREFIX` | `agri` | 遥测 Topic 前缀 |
+| `MQTT_CONNECT_TIMEOUT` | `5s` | 单次连接/订阅等待时间 |
+| `MQTT_RECONNECT_BACKOFF` | `5s` | 断线重连间隔 |
+| `MQTT_MESSAGE_TIMEOUT` | `10s` | 单条遥测处理超时 |
 | `REDIS_IRRIGATION_TTL` | `35m` | 灌溉状态快照时长 |
 | `REDIS_DEVICE_ACTIVITY_TTL` | `24h` | 设备最后接收时间保留时长 |
 | `DEVICE_OFFLINE_AFTER` | `2m` | 超过该时间未收到遥测则推导为离线 |
@@ -198,7 +213,7 @@ API 日志输出到标准输出，格式为单行 JSON。每个 HTTP 请求都�
 
 ## 下一步
 
-1. 接入 EMQX 和 TDengine，并把 MQTT 消息交给现有遥测写入服务。
+1. 接入 TDengine，将遥测历史批量落库。
 2. 将控制命令演示桩替换为 MQTT 下发/回执状态机。
 3. 配置智能体服务并联调知识文档通知与告警转发。
 4. 实现 `/api/v1/ai/chat` 的智能体编排和 AI 建议采纳流程。

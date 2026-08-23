@@ -1,4 +1,18 @@
 services:
+  emqx:
+    image: emqx/emqx:5.8.8
+    container_name: smart-agriculture-emqx
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+      - "18083:18083"
+    healthcheck:
+      test: ["CMD", "/opt/emqx/bin/emqx", "ctl", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
   redis:
     image: redis:8.4-alpine
     container_name: smart-agriculture-redis

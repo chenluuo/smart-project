@@ -15,9 +15,22 @@ type Config struct {
 	Server        ServerConfig
 	Database      DatabaseConfig
 	Redis         RedisConfig
+	MQTT          MQTTConfig
 	Auth          AuthConfig
 	Internal      InternalConfig
 	ObjectStorage ObjectStorageConfig
+}
+
+type MQTTConfig struct {
+	Enabled          bool
+	BrokerURL        string
+	ClientID         string
+	Username         string
+	Password         string
+	TopicPrefix      string
+	ConnectTimeout   time.Duration
+	ReconnectBackoff time.Duration
+	MessageTimeout   time.Duration
 }
 
 type RedisConfig struct {
@@ -136,6 +149,30 @@ func Load() (Config, error) {
 	if deviceActivityTTL <= deviceOfflineAfter {
 		return Config{}, fmt.Errorf("REDIS_DEVICE_ACTIVITY_TTL must be greater than DEVICE_OFFLINE_AFTER")
 	}
+	mqttEnabled, err := boolValue("MQTT_ENABLED", true)
+	if err != nil {
+		return Config{}, err
+	}
+	mqttBrokerURL := strings.TrimSpace(value("MQTT_BROKER_URL", "tcp://localhost:1883"))
+	if err := validateMQTTBrokerURL(mqttBrokerURL); err != nil {
+		return Config{}, err
+	}
+	mqttTopicPrefix := strings.Trim(strings.TrimSpace(value("MQTT_TOPIC_PREFIX", "agri")), "/")
+	if mqttTopicPrefix == "" || strings.ContainsAny(mqttTopicPrefix, "+#") {
+		return Config{}, fmt.Errorf("MQTT_TOPIC_PREFIX must not be empty or contain MQTT wildcards")
+	}
+	mqttConnectTimeout, err := durationValue("MQTT_CONNECT_TIMEOUT", 5*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	mqttReconnectBackoff, err := durationValue("MQTT_RECONNECT_BACKOFF", 5*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	mqttMessageTimeout, err := durationValue("MQTT_MESSAGE_TIMEOUT", 10*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
 
 	dsn, err := databaseDSN()
 	if err != nil {
@@ -201,6 +238,13 @@ func Load() (Config, error) {
 			QueryCacheTTL: queryCacheTTL, AlertCacheTTL: alertCacheTTL, TelemetryTTL: telemetryTTL,
 			IrrigationTTL: irrigationTTL, DeviceActivityTTL: deviceActivityTTL, DeviceOfflineAfter: deviceOfflineAfter,
 		},
+		MQTT: MQTTConfig{
+			Enabled: mqttEnabled, BrokerURL: mqttBrokerURL,
+			ClientID: strings.TrimSpace(value("MQTT_CLIENT_ID", "smart-agriculture-api")),
+			Username: strings.TrimSpace(os.Getenv("MQTT_USERNAME")), Password: os.Getenv("MQTT_PASSWORD"),
+			TopicPrefix: mqttTopicPrefix, ConnectTimeout: mqttConnectTimeout,
+			ReconnectBackoff: mqttReconnectBackoff, MessageTimeout: mqttMessageTimeout,
+		},
 		Auth: AuthConfig{
 			JWTSecret: jwtSecret,
 			Issuer:    value("JWT_ISSUER", "smart-agriculture-api"),
@@ -218,6 +262,19 @@ func Load() (Config, error) {
 			Secure: objectStorageSecure, MaxUploadBytes: maxUploadBytes, SignedURLTimeout: signedURLTimeout,
 		},
 	}, nil
+}
+
+func validateMQTTBrokerURL(raw string) error {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Host == "" {
+		return fmt.Errorf("MQTT_BROKER_URL must be a valid MQTT URL: %q", raw)
+	}
+	switch parsed.Scheme {
+	case "tcp", "ssl", "tls", "ws", "wss":
+		return nil
+	default:
+		return fmt.Errorf("MQTT_BROKER_URL uses unsupported scheme %q", parsed.Scheme)
+	}
 }
 
 func databaseDSN() (string, error) {

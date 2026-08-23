@@ -20,6 +20,7 @@ import (
 	httpserver "github.com/chenluuo/smart-project/backend/internal/http"
 	"github.com/chenluuo/smart-project/backend/internal/identity"
 	"github.com/chenluuo/smart-project/backend/internal/knowledge"
+	"github.com/chenluuo/smart-project/backend/internal/mqttclient"
 	"github.com/chenluuo/smart-project/backend/internal/outbox"
 	"github.com/chenluuo/smart-project/backend/internal/platform/database"
 	"github.com/chenluuo/smart-project/backend/internal/platform/objectstore"
@@ -99,11 +100,18 @@ func main() {
 		controlService.ConfigureSnapshotStore(control.NewRedisIrrigationStore(redisClient.Client, cfg.Redis.IrrigationTTL))
 	}
 	telemetryService := telemetry.NewService(latestStore, telemetry.NullStore{})
-	// The ingestor is intentionally kept internal until the MQTT adapter is
-	// introduced. Its payload accepts only temperature, soil moisture, light and
-	// the three warning flags; routing identity comes from trusted broker context.
 	telemetryIngestService := telemetry.NewIngestService(latestStore, activityStore, alertService, eventBroker)
-	_ = telemetryIngestService
+	var mqttClient *mqttclient.Client
+	if cfg.MQTT.Enabled {
+		mqttHandler := mqttclient.NewHandler(
+			cfg.MQTT.TopicPrefix,
+			mqttclient.NewGormSourceResolver(db),
+			telemetryIngestService,
+		)
+		mqttClient = mqttclient.New(cfg.MQTT, mqttHandler)
+		mqttClient.Start()
+		defer mqttClient.Close()
+	}
 	agentService := agent.NewService(agent.NewRepository(db))
 	var knowledgeObjectStore knowledge.ObjectStore
 	if cfg.ObjectStorage.Enabled {
