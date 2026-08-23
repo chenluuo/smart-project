@@ -127,7 +127,8 @@ func main() {
 	var knowledgeObjectStore knowledge.ObjectStore
 	if cfg.ObjectStorage.Enabled {
 		minioStore, err := objectstore.NewMinIO(objectstore.Config{
-			Endpoint: cfg.ObjectStorage.Endpoint, AccessKey: cfg.ObjectStorage.AccessKey,
+			Endpoint: cfg.ObjectStorage.Endpoint, PublicEndpoint: cfg.ObjectStorage.PublicEndpoint,
+			AccessKey: cfg.ObjectStorage.AccessKey,
 			SecretKey: cfg.ObjectStorage.SecretKey, Bucket: cfg.ObjectStorage.Bucket,
 			Region: cfg.ObjectStorage.Region, Secure: cfg.ObjectStorage.Secure,
 		})
