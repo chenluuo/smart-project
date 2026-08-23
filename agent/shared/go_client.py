@@ -89,6 +89,17 @@ class GoClient:
         return data if isinstance(data, dict) else {}
 
     # ---------- 会话（JWT） ----------
+    def create_session(self, authorization: str, plot_id: str | None = None) -> dict[str, Any]:
+        """在 Go 侧创建会话（返回 Go 的 session_id，落库需用它）。
+
+        plot_id 不随创建传入：Go 按 JWT 归属校验 plot 所有权，
+        传错会 404；会话创建后落库消息时再带 plot_id。
+        """
+        data = self._request(
+            "POST", "/ai/sessions", authorization=authorization, json={}
+        )
+        return data if isinstance(data, dict) else {}
+
     def post_message(self, authorization: str, session_id: str, body: dict[str, Any]) -> dict[str, Any]:
         data = self._request(
             "POST", f"/agent/sessions/{session_id}/messages", authorization=authorization, json=body
