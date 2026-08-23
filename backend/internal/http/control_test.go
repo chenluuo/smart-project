@@ -33,6 +33,11 @@ func (s *controlServiceStub) Issue(_ context.Context, ownerID, plotID uint64, in
 	return s.issueResult, s.issueErr
 }
 
+func (s *controlServiceStub) IssueTargetHumidity(_ context.Context, ownerID, plotID uint64, input control.TargetHumidityInput) (*control.IssueResult, error) {
+	s.ownerID, s.plotID = ownerID, plotID
+	return s.issueResult, s.issueErr
+}
+
 func (s *controlServiceStub) IrrigationStatus(_ context.Context, ownerID, plotID uint64) (*control.IrrigationStatus, error) {
 	s.ownerID, s.plotID = ownerID, plotID
 	return s.irrigationResult, s.irrigationErr

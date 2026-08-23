@@ -122,6 +122,7 @@ type deviceService interface {
 
 type controlService interface {
 	Issue(context.Context, uint64, uint64, control.IssueInput) (*control.IssueResult, error)
+	IssueTargetHumidity(context.Context, uint64, uint64, control.TargetHumidityInput) (*control.IssueResult, error)
 	IrrigationStatus(context.Context, uint64, uint64) (*control.IrrigationStatus, error)
 	Command(context.Context, uint64, string) (*control.CommandResult, error)
 	List(context.Context, uint64, control.ListFilter) (control.ListResult, error)

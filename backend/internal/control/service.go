@@ -32,9 +32,14 @@ type IssueInput struct {
 	Mode            string
 	Reason          string
 	IdempotencyKey  string
-	// TargetHumidity 目标湿度模式：设备侧闭环（设备开泵、自测湿度、达标自停）。
-	// 提供时 OPEN 命令不依赖 DurationSeconds（设备按湿度达标控制，时长作兜底）。
-	TargetHumidity *float64
+}
+
+// TargetHumidityInput 目标湿度灌溉（设备侧闭环）：独立接口入参，不改动原 IssueInput。
+type TargetHumidityInput struct {
+	TargetHumidity float64
+	Mode           string
+	Reason         string
+	IdempotencyKey string
 }
 
 type IssueResult struct {
@@ -170,12 +175,7 @@ func (s *Service) Issue(ctx context.Context, ownerID, plotID uint64, input Issue
 	}
 	payload := map[string]any{"mode": input.Mode, "reason": input.Reason}
 	if input.Action == "OPEN" {
-		if input.TargetHumidity != nil {
-			// 目标湿度模式：设备侧闭环，设备自测湿度达标自停
-			payload["targetHumidity"] = *input.TargetHumidity
-		} else {
-			payload["durationSeconds"] = input.DurationSeconds
-		}
+		payload["durationSeconds"] = input.DurationSeconds
 	}
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
@@ -219,11 +219,7 @@ func (s *Service) Issue(ctx context.Context, ownerID, plotID uint64, input Issue
 			"reason":    input.Reason,
 		}
 		if input.Action == "OPEN" {
-			if input.TargetHumidity != nil {
-				cmdPayload["targetHumidity"] = *input.TargetHumidity
-			} else {
-				cmdPayload["durationSeconds"] = input.DurationSeconds
-			}
+			cmdPayload["durationSeconds"] = input.DurationSeconds
 		}
 		cmdJSON, err := json.Marshal(cmdPayload)
 		if err != nil {
@@ -232,6 +228,102 @@ func (s *Service) Issue(ctx context.Context, ownerID, plotID uint64, input Issue
 			slog.Warn("publish MQTT command", "commandId", command.CommandID, "deviceSn", irrigationDevice.DeviceSN, "error", err)
 		} else {
 			slog.Info("MQTT command published", "commandId", command.CommandID, "deviceSn", irrigationDevice.DeviceSN)
+		}
+	}
+	if s.publisher != nil {
+		_, _ = events.PublishCommandResult(s.publisher, events.CommandResult{
+			OwnerID: ownerID, CommandID: command.CommandID, Status: string(command.Status),
+			PlotID: plotID, AckAt: command.ExecutedAt, ChangedAt: command.UpdatedAt,
+		})
+	}
+	return issueResult(command), nil
+}
+
+// IssueTargetHumidity 目标湿度灌溉（独立接口，不改动原 Issue 契约）：
+// 设备侧闭环——下发 targetHumidity 命令，设备开泵、自测湿度、达标自停。
+func (s *Service) IssueTargetHumidity(ctx context.Context, ownerID, plotID uint64, input TargetHumidityInput) (*IssueResult, error) {
+	input.Mode = strings.ToUpper(strings.TrimSpace(input.Mode))
+	input.Reason = strings.TrimSpace(input.Reason)
+	input.IdempotencyKey = strings.TrimSpace(input.IdempotencyKey)
+	if ownerID == 0 || plotID == 0 || input.TargetHumidity <= 0 || input.TargetHumidity > 100 ||
+		input.Mode != "MANUAL" && input.Mode != "AUTO" && input.Mode != "AI_SUGGESTED" ||
+		input.IdempotencyKey == "" || len(input.IdempotencyKey) > 64 || len(input.Reason) > 500 {
+		return nil, ErrInvalidInput
+	}
+	if input.IdempotencyKey != "" {
+		existing, err := s.commands.FindByIdempotencyKeyAndOwner(ctx, input.IdempotencyKey, ownerID)
+		if err == nil && existing != nil {
+			return issueResult(existing), nil
+		}
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("find idempotent command: %w", err)
+		}
+	}
+
+	irrigationDevice, err := s.commands.FindIrrigationDevice(ctx, ownerID, plotID)
+	if errors.Is(err, gorm.ErrRecordNotFound) || irrigationDevice == nil {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("find irrigation device: %w", err)
+	}
+	if irrigationDevice.Status != device.StatusOnline {
+		return nil, ErrDeviceOffline
+	}
+
+	commandID, err := newCommandID()
+	if err != nil {
+		return nil, err
+	}
+	payload := map[string]any{
+		"mode": input.Mode, "reason": input.Reason, "targetHumidity": input.TargetHumidity,
+	}
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("encode irrigation command: %w", err)
+	}
+	now := s.now()
+	command := &Command{
+		CommandID: commandID, DeviceID: irrigationDevice.DeviceID, PlotID: plotID, IssuedBy: ownerID,
+		Action: ActionIrrigationOn, ParametersJSON: datatypes.JSON(payloadJSON),
+		IdempotencyKey: input.IdempotencyKey, Status: StatusPending,
+		IssuedAt: now, ExpiresAt: now.Add(30 * time.Second),
+		Auditable: persistence.Auditable{CreatedAt: now, UpdatedAt: now},
+	}
+	if err := s.commands.Create(ctx, command); err != nil {
+		return nil, fmt.Errorf("create irrigation command: %w", err)
+	}
+	command.Status = StatusSucceeded
+	command.ExecutedAt = &now
+	command.UpdatedAt = now
+	if err := s.commands.Save(ctx, command); err != nil {
+		return nil, fmt.Errorf("complete irrigation command: %w", err)
+	}
+	if s.snapshots != nil {
+		snapshot := IrrigationStatus{
+			PlotID: plotID, ValveDeviceID: irrigationDevice.DeviceID, State: "ON", Mode: input.Mode,
+			MaxSeconds: MaxIrrigationSeconds, LastCommandID: &command.CommandID,
+			RemainingSeconds: MaxIrrigationSeconds, // 目标湿度模式：设备达标自停，剩余时长作兜底展示
+		}
+		if err := s.snapshots.Put(ctx, snapshot, now.UTC()); err != nil {
+			slog.Warn("write irrigation Redis snapshot", "plotId", plotID, "commandId", command.CommandID, "error", err)
+		}
+	}
+	if s.commandPub != nil && irrigationDevice.DeviceSN != "" {
+		cmdPayload := map[string]any{
+			"commandId": command.CommandID,
+			"action":    "OPEN",
+			"mode":      input.Mode,
+			"reason":    input.Reason,
+			"targetHumidity": input.TargetHumidity,
+		}
+		cmdJSON, err := json.Marshal(cmdPayload)
+		if err != nil {
+			slog.Warn("encode MQTT command payload", "commandId", command.CommandID, "error", err)
+		} else if err := s.commandPub.PublishCommand(ownerID, irrigationDevice.DeviceSN, cmdJSON); err != nil {
+			slog.Warn("publish MQTT command", "commandId", command.CommandID, "deviceSn", irrigationDevice.DeviceSN, "error", err)
+		} else {
+			slog.Info("MQTT target-humidity command published", "commandId", command.CommandID, "deviceSn", irrigationDevice.DeviceSN, "target", input.TargetHumidity)
 		}
 	}
 	if s.publisher != nil {
@@ -374,10 +466,6 @@ func validIssueInput(input IssueInput) bool {
 		return false
 	}
 	if input.Action == "OPEN" {
-		if input.TargetHumidity != nil {
-			// 目标湿度模式：设备侧闭环，0 < 目标 <= 100
-			return *input.TargetHumidity > 0 && *input.TargetHumidity <= 100
-		}
 		return input.DurationSeconds >= 60 && input.DurationSeconds <= MaxIrrigationSeconds
 	}
 	return input.DurationSeconds == 0

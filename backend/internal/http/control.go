@@ -13,11 +13,16 @@ import (
 type controlHandler struct{ service controlService }
 
 type irrigationCommandRequest struct {
-	Action          string   `json:"action"`
-	DurationSeconds int      `json:"durationSeconds"`
-	Mode            string   `json:"mode"`
-	Reason          string   `json:"reason"`
-	TargetHumidity  *float64 `json:"targetHumidity"`
+	Action          string `json:"action"`
+	DurationSeconds int    `json:"durationSeconds"`
+	Mode            string `json:"mode"`
+	Reason          string `json:"reason"`
+}
+
+type targetHumidityCommandRequest struct {
+	TargetHumidity float64 `json:"targetHumidity"`
+	Mode           string  `json:"mode"`
+	Reason         string  `json:"reason"`
 }
 
 func registerControlRoutes(router *gin.Engine, auth authService, service controlService) {
@@ -25,6 +30,7 @@ func registerControlRoutes(router *gin.Engine, auth authService, service control
 	api := router.Group("/api/v1", jwtAuthentication(auth))
 	api.GET("/plots/:plotId/irrigation/status", handler.irrigationStatus)
 	api.POST("/plots/:plotId/irrigation/commands", handler.issue)
+	api.POST("/plots/:plotId/irrigation/target-commands", handler.issueTargetHumidity)
 	api.GET("/commands/:commandId", handler.command)
 	api.GET("/commands", handler.list)
 }
@@ -48,11 +54,44 @@ func (h controlHandler) issue(c *gin.Context) {
 	result, err := h.service.Issue(c.Request.Context(), claims.UserID, plotID, control.IssueInput{
 		Action: request.Action, DurationSeconds: request.DurationSeconds,
 		Mode: request.Mode, Reason: request.Reason, IdempotencyKey: c.GetHeader("Idempotency-Key"),
-		TargetHumidity: request.TargetHumidity,
 	})
 	switch {
 	case errors.Is(err, control.ErrInvalidInput):
 		respondError(c, http.StatusBadRequest, 40001, "参数错误：action、durationSeconds、mode、reason 或 Idempotency-Key 不合法")
+	case errors.Is(err, control.ErrNotFound):
+		respondError(c, http.StatusNotFound, 40401, "地块不存在或未绑定灌溉阀门")
+	case errors.Is(err, control.ErrDeviceOffline):
+		respondError(c, http.StatusConflict, 40902, "灌溉阀门不在线，无法执行实时控制")
+	case err != nil:
+		respondError(c, http.StatusInternalServerError, 50000, "服务器内部错误")
+	default:
+		respondSuccess(c, http.StatusOK, result)
+	}
+}
+
+func (h controlHandler) issueTargetHumidity(c *gin.Context) {
+	claims, ok := authenticatedClaims(c)
+	if !ok {
+		respondError(c, http.StatusUnauthorized, 40101, "未登录或访问令牌无效")
+		return
+	}
+	plotID, err := strconv.ParseUint(c.Param("plotId"), 10, 64)
+	if err != nil || plotID == 0 {
+		respondError(c, http.StatusBadRequest, 40001, "参数错误：plotId 必须为正整数")
+		return
+	}
+	var request targetHumidityCommandRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		respondError(c, http.StatusBadRequest, 40001, "参数错误：请求体格式不正确")
+		return
+	}
+	result, err := h.service.IssueTargetHumidity(c.Request.Context(), claims.UserID, plotID, control.TargetHumidityInput{
+		TargetHumidity: request.TargetHumidity, Mode: request.Mode,
+		Reason: request.Reason, IdempotencyKey: c.GetHeader("Idempotency-Key"),
+	})
+	switch {
+	case errors.Is(err, control.ErrInvalidInput):
+		respondError(c, http.StatusBadRequest, 40001, "参数错误：targetHumidity(0-100)、mode、reason 或 Idempotency-Key 不合法")
 	case errors.Is(err, control.ErrNotFound):
 		respondError(c, http.StatusNotFound, 40401, "地块不存在或未绑定灌溉阀门")
 	case errors.Is(err, control.ErrDeviceOffline):
