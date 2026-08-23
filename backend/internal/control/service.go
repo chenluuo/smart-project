@@ -219,7 +219,11 @@ func (s *Service) Issue(ctx context.Context, ownerID, plotID uint64, input Issue
 			"reason":    input.Reason,
 		}
 		if input.Action == "OPEN" {
-			cmdPayload["durationSeconds"] = input.DurationSeconds
+			if input.TargetHumidity != nil {
+				cmdPayload["targetHumidity"] = *input.TargetHumidity
+			} else {
+				cmdPayload["durationSeconds"] = input.DurationSeconds
+			}
 		}
 		cmdJSON, err := json.Marshal(cmdPayload)
 		if err != nil {
