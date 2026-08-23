@@ -214,7 +214,7 @@ Go 进程启动时按以下顺序初始化：
 - 单地块和多地块最新值读取 `agri:v1:telemetry:latest:{plotId}`，批量读取使用 `MGET`。
 - 快照包含温度、土壤湿度、光照和三类警告状态，按服务端接收时间拒绝旧值覆盖。
 - 设备在线状态由 owner 维度 Sorted Set 中的最后接收时间推导，不接受设备自报状态、电量或信号。
-- 历史趋势仍由 `NullStore` 返回空点集，等待 TDengine 适配器。
+- 历史趋势已接入 TDengine（`TDENGINE_ENABLED=true` 时装配 `TDengineStore`）：MQTT 遥测经 `IngestService` 批量异步写入 `readings` 超级表，趋势查询用 `INTERVAL` 时间桶聚合 avg/min/max 并 `FILL(PREV)` 补空桶；未启用时仍由 `NullStore` 返回空点集。
 
 Redis 关闭时最新值使用 `NullStore`；Redis 启用但运行期不可用时，实时接口明确返回服务错误。内部 `IngestService` 已限制设备负载只能包含温度、土壤湿度、光照及三类布尔警告，设备、owner、地块和接收时间由可信消息上下文补充。
 
@@ -432,7 +432,7 @@ Outbox 用于处理“数据库已经提交，但外部通知可能失败”的�
 
 以下是理解和部署当前 Go 服务时必须注意的事实：
 
-1. 最新遥测和设备活跃状态已接入 Redis；历史趋势仍使用 `NullStore`，等待 TDengine。
+1. 最新遥测已接入 Redis，历史趋势已接入 TDengine（启用 `TDENGINE_ENABLED` 时）：MQTT 遥测批量写入 `readings` 超级表（`agri_telemetry` 库，`t_{plotId}_{deviceId}` 子表，tag=owner/plot/device），趋势接口按 `INTERVAL` 桶聚合；TDengine 关闭时历史趋势降级为 `NullStore` 空点集。
 2. 灌溉命令当前是演示执行路径，保存后立即成功，没有真实设备消息下发和回执。
 3. SSE Broker 和事件重放历史保存在单个 Go 进程内，重启会丢失历史，多实例之间不共享。
 4. Go 会话模块只负责会话和消息数据，不负责回答生成。
@@ -457,7 +457,7 @@ Outbox 用于处理“数据库已经提交，但外部通知可能失败”的�
 
 后续接入真实遥测、设备消息或多实例部署时，应优先替换现有抽象层，而不是让 Handler 直接依赖具体基础设施：
 
-- 为 `telemetry.Store` 提供真实最新值和历史趋势实现。
+- 为 `telemetry.Store` 提供更多真实来源（当前已装配 Redis 最新值 + TDengine 历史趋势）。
 - 将控制模块的演示成功逻辑替换为异步命令状态机。
 - 将 SSE 历史和跨实例广播迁移到共享事件设施。
 - 为新增外部通知继续使用事务 Outbox，保持核心业务与外部可用性解耦。
