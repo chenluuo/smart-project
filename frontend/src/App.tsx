@@ -25,6 +25,9 @@ import type {
 
 type View = 'overview' | 'plots' | 'ask' | 'manage';
 
+const telemetryUpdatedEvent = 'telemetry.updated';
+const celsiusUnit = String.fromCharCode(176) + 'C';
+
 export default function App() {
   const [authMode, setAuthMode] = useState<AuthMode>('login');
   const [credentials, setCredentials] = useState(defaultCredentials);
@@ -116,6 +119,10 @@ export default function App() {
     if (!user) return;
     const controller = new AbortController();
     streamEvents((event) => {
+      if (event.type === telemetryUpdatedEvent) {
+        setData((current) => applyTelemetryEvent(current, event));
+        return;
+      }
       setEvents((current) => [event, ...current].slice(0, 5));
     }, controller.signal).catch(() => undefined);
     return () => controller.abort();
@@ -215,9 +222,12 @@ export default function App() {
     const form = new FormData(event.currentTarget);
     setBusy(true);
     try {
-      await api.uploadKnowledge(form);
+      const uploaded = await api.uploadKnowledge(form);
       const knowledge = await api.knowledge();
-      setData((current) => ({ ...current, knowledge }));
+      setData((current) => ({
+        ...current,
+        knowledge: [uploaded, ...knowledge.filter((document) => document.id !== uploaded.id)]
+      }));
       event.currentTarget.reset();
       setNotice('知识文档已上传');
     } catch (error) {
@@ -533,6 +543,121 @@ const emptyData: AppData = {
   sessions: [],
   messages: []
 };
+
+function applyTelemetryEvent(current: AppData, event: EventNotice): AppData {
+  const plotId = eventNumber(event.data.plotId);
+  const soilMoisture = eventNumber(event.data.soilMoisture);
+  const temperature = eventNumber(event.data.temperature);
+  if (plotId == null || (soilMoisture == null && temperature == null)) {
+    return current;
+  }
+
+  const existing = current.telemetry[plotId];
+  const sampleTime = eventTime(event) ?? existing?.sampleTime ?? null;
+  if (isOlderSample(sampleTime, existing?.sampleTime)) {
+    return current;
+  }
+
+  const metrics = {
+    ...existing?.metrics,
+    ...(soilMoisture == null
+      ? {}
+      : { soilMoisture: { value: soilMoisture, unit: existing?.metrics.soilMoisture?.unit ?? '%' } }),
+    ...(temperature == null
+      ? {}
+      : {
+          temperature: {
+            value: temperature,
+            unit: existing?.metrics.temperature?.unit ?? current.dashboard?.avgTemperature?.unit ?? celsiusUnit
+          }
+        })
+  };
+  const telemetry: Record<number, TelemetryLatest> = {
+    ...current.telemetry,
+    [plotId]: {
+      plotId,
+      sampleTime,
+      metrics,
+      sourceDevices: existing?.sourceDevices ?? []
+    }
+  };
+
+  const plots = current.plots.map((plot) =>
+    plot.id === plotId
+      ? {
+          ...plot,
+          ...(soilMoisture == null ? {} : { soilMoisture }),
+          ...(temperature == null ? {} : { temperature })
+        }
+      : plot
+  );
+
+  return {
+    ...current,
+    telemetry,
+    plots,
+    dashboard: updateDashboardTelemetry(current.dashboard, plotId, soilMoisture, temperature, sampleTime)
+  };
+}
+
+function updateDashboardTelemetry(
+  dashboard: DashboardOverview | null,
+  plotId: number,
+  soilMoisture: number | undefined,
+  temperature: number | undefined,
+  sampleTime: string | null
+) {
+  if (!dashboard) return dashboard;
+
+  let updated = false;
+  const plots = dashboard.plots.map((plot) => {
+    if (plot.id !== plotId) return plot;
+    updated = true;
+    return {
+      ...plot,
+      ...(soilMoisture == null ? {} : { soilMoisture }),
+      ...(temperature == null ? {} : { temperature })
+    };
+  });
+  if (!updated) return dashboard;
+
+  return {
+    ...dashboard,
+    sampleTime: sampleTime ?? dashboard.sampleTime,
+    avgSoilMoisture: averageMetric(plots, 'soilMoisture', '%'),
+    avgTemperature: averageMetric(plots, 'temperature', dashboard.avgTemperature?.unit ?? celsiusUnit),
+    plots
+  };
+}
+
+function averageMetric(
+  plots: DashboardOverview['plots'],
+  key: 'soilMoisture' | 'temperature',
+  unit: string
+) {
+  const values = plots
+    .map((plot) => plot[key])
+    .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+  if (values.length === 0) return null;
+  return { value: values.reduce((sum, value) => sum + value, 0) / values.length, unit };
+}
+
+function eventNumber(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function eventTime(event: EventNotice) {
+  const sampleTime = event.data.sampleTime;
+  if (typeof sampleTime === 'string' && !Number.isNaN(new Date(sampleTime).getTime())) {
+    return sampleTime;
+  }
+  return event.receivedAt;
+}
+
+function isOlderSample(incoming: string | null, current?: string | null) {
+  if (!incoming || !current) return false;
+  return new Date(incoming).getTime() < new Date(current).getTime();
+}
 
 function emptyPage<T>() {
   return { items: [] as T[], page: 1, pageSize: 20, total: 0 };

@@ -64,6 +64,7 @@ type DocumentView struct {
 	ID          uint64     `json:"id"`
 	Title       string     `json:"title"`
 	Category    string     `json:"category"`
+	Status      Status     `json:"status"`
 	Version     int        `json:"version"`
 	Source      *string    `json:"source,omitempty"`
 	DownloadURL string     `json:"downloadUrl,omitempty"`
@@ -111,6 +112,7 @@ func (s *Service) ListActive(ctx context.Context, category string) ([]DocumentVi
 	for index := range documents {
 		view := DocumentView{
 			ID: documents[index].ID, Title: documents[index].Title, Category: documents[index].Category,
+			Status: documents[index].Status,
 			Version: documents[index].Version, Source: documents[index].Source,
 			PublishedAt: documents[index].PublishedAt, UpdatedAt: documents[index].UpdatedAt,
 		}
