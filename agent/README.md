@@ -30,8 +30,9 @@
 │  │ queue:session.activity LRU 逐出判定            │   │
 │  └───────────────────────────────────────────────┘   │
 │                                                       │
-│  外部依赖：Redis（窗口/队列/会话）· Milvus（知识/记忆向量）· │
-│  MinIO（知识原文）· DeepSeek（LLM）· 火山方舟（embedding） │
+│  外部依赖：Redis（窗口/队列/会话，agent 侧独立实例 agent-redis）·  │
+│  Milvus（知识/记忆向量）· MinIO（知识原文）· DeepSeek（LLM）·    │
+│  火山方舟（embedding）                                          │
 └───────────────────────────────────────────────────────┘
 ```
 

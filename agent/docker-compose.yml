@@ -2,8 +2,10 @@
 # 用法：docker compose -f agent/docker-compose.yml up -d
 # 敏感配置经 .env 注入（agent/.env，不入库）
 services:
+  # agent 侧独立 Redis（不复用 go 端/共享实例），宿主 6379 独占
   redis:
     image: redis:7-alpine
+    container_name: agent-redis
     ports: ["6379:6379"]
     command: ["redis-server", "--appendonly", "yes"]
 
