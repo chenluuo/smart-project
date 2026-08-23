@@ -19,6 +19,7 @@ type thresholdRuleRequest struct {
 	Metric          string                   `json:"metric"`
 	Operator        alert.ComparisonOperator `json:"operator"`
 	Value           *float64                 `json:"value"`
+	Hysteresis      *float64                 `json:"hysteresis"`
 	DurationSeconds int                      `json:"durationSeconds"`
 	Level           alert.Level              `json:"level"`
 	Enabled         *bool                    `json:"enabled"`
@@ -94,7 +95,7 @@ func (h alertHandler) upsertRule(c *gin.Context) {
 		return
 	}
 	result, err := h.service.UpsertRule(c.Request.Context(), claims.UserID, plotID, thresholdID, alert.RuleInput{
-		Metric: request.Metric, Operator: request.Operator, Value: *request.Value,
+		Metric: request.Metric, Operator: request.Operator, Value: *request.Value, Hysteresis: request.Hysteresis,
 		DurationSeconds: request.DurationSeconds, Level: request.Level, Enabled: *request.Enabled,
 	})
 	switch {

@@ -12,13 +12,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from fastapi import FastAPI, Header, HTTPException  # noqa: E402
+from fastapi import FastAPI, Header, HTTPException, Request  # noqa: E402
 from pydantic import BaseModel, Field  # noqa: E402
 
 from assemble import assemble  # noqa: E402
 from shared.go_client import get_go_client  # noqa: E402
+from shared.observability import install_observability  # noqa: E402
+from shared.trace import set_actor_id  # noqa: E402
 
 app = FastAPI(title="context-service", version="0.1.0")
+install_observability(app, "context-service")
 
 
 class BuildRequest(BaseModel):
@@ -43,9 +46,11 @@ def healthz() -> dict:
 
 
 @app.post("/context/build", response_model=BuildResponse)
-def build(req: BuildRequest, authorization: str = Header(default="")) -> BuildResponse:
+def build(req: BuildRequest, request: Request, authorization: str = Header(default="")) -> BuildResponse:
     if not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="缺少 JWT")
+    set_actor_id(req.user_id)
+    request.state.actor_id = req.user_id
 
     # 用户标签经 Go 获取（JWT 透传），失败时用默认标签不阻塞问答
     profile = {"interaction_style": None, "knowledge_reliance": None}

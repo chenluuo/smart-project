@@ -14,7 +14,7 @@ from typing import Any
 import httpx
 
 from shared.config import get_config
-from shared.trace import HEADER, ensure_trace_id
+from shared.trace import HEADER, REQUEST_HEADER, ensure_request_id, ensure_trace_id
 
 
 class GoClient:
@@ -23,9 +23,17 @@ class GoClient:
         self.base_url = cfg.get("base_url", "http://go-backend:8080/api/v1")
         self.timeout = float(cfg.get("timeout_seconds", 10))
         self.internal_key = cfg.get("internal_key")  # ${GO_INTERNAL_KEY}
+        # connect 短超时：Go 不可达（SYN 被丢弃/拒绝）时快速降级，避免拖慢问答
+        self._timeout = httpx.Timeout(
+            connect=1.0, read=self.timeout, write=self.timeout, pool=self.timeout
+        )
 
     def _headers(self, authorization: str = "", internal: bool = False) -> dict[str, str]:
-        h = {HEADER: ensure_trace_id(), "Content-Type": "application/json"}
+        h = {
+            HEADER: ensure_trace_id(),
+            REQUEST_HEADER: ensure_request_id(),
+            "Content-Type": "application/json",
+        }
         if internal:
             if not self.internal_key:
                 raise RuntimeError("未配置 GO_INTERNAL_KEY")
@@ -38,7 +46,7 @@ class GoClient:
         self, method: str, path: str, authorization: str = "", internal: bool = False, **kwargs: Any
     ) -> dict[str, Any] | list[Any]:
         url = f"{self.base_url}{path}"
-        with httpx.Client(timeout=self.timeout) as client:
+        with httpx.Client(timeout=self._timeout, trust_env=False) as client:
             resp = client.request(method, url, headers=self._headers(authorization, internal), **kwargs)
             resp.raise_for_status()
             body = resp.json()
@@ -81,9 +89,47 @@ class GoClient:
         return data if isinstance(data, dict) else {}
 
     # ---------- 会话（JWT） ----------
+    def create_session(self, authorization: str, plot_id: str | None = None) -> dict[str, Any]:
+        """在 Go 侧创建会话（返回 Go 的 session_id，落库需用它）。
+
+        plot_id 不随创建传入：Go 按 JWT 归属校验 plot 所有权，
+        传错会 404；会话创建后落库消息时再带 plot_id。
+        """
+        data = self._request(
+            "POST", "/ai/sessions", authorization=authorization, json={}
+        )
+        return data if isinstance(data, dict) else {}
+
     def post_message(self, authorization: str, session_id: str, body: dict[str, Any]) -> dict[str, Any]:
         data = self._request(
             "POST", f"/agent/sessions/{session_id}/messages", authorization=authorization, json=body
+        )
+        return data if isinstance(data, dict) else {}
+
+    def close_session(self, authorization: str, session_id: str) -> dict[str, Any]:
+        """关闭 Go 侧会话（幂等；本地会话不存在时 Go 返回 404，调用方容忍）。"""
+        data = self._request(
+            "POST", f"/ai/sessions/{session_id}/close", authorization=authorization
+        )
+        return data if isinstance(data, dict) else {}
+
+    # ---------- 控制（JWT，复用 Go 已有接口） ----------
+    def get_irrigation_status(self, authorization: str, plot_id: str) -> dict[str, Any]:
+        data = self._request(
+            "GET", f"/plots/{plot_id}/irrigation/status", authorization=authorization
+        )
+        return data if isinstance(data, dict) else {}
+
+    def post_irrigation_command(self, authorization: str, plot_id: str,
+                                body: dict[str, Any]) -> dict[str, Any]:
+        data = self._request(
+            "POST", f"/plots/{plot_id}/irrigation/commands", authorization=authorization, json=body
+        )
+        return data if isinstance(data, dict) else {}
+
+    def get_command_result(self, authorization: str, command_id: str) -> dict[str, Any]:
+        data = self._request(
+            "GET", f"/commands/{command_id}", authorization=authorization
         )
         return data if isinstance(data, dict) else {}
 

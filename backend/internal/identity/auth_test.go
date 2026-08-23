@@ -84,8 +84,31 @@ func TestAuthServiceRegisterAndLogin(t *testing.T) {
 	if result.AccessToken == "" || result.ExpiresIn != 3600 || result.User.ID != user.ID || result.Role != "FARMER" {
 		t.Fatalf("unexpected login result: %+v", result)
 	}
-	if _, err := service.Authenticate(result.AccessToken); err != nil {
+	if _, err := service.Authenticate(context.Background(), result.AccessToken); err != nil {
 		t.Fatalf("Authenticate() error = %v", err)
+	}
+}
+
+func TestAuthenticateRejectsDisabledUserToken(t *testing.T) {
+	store := &memoryUserStore{}
+	tokens, err := NewTokenManager(strings.Repeat("s", 32), "test-api", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewAuthService(store, tokens)
+	user, err := service.Register(context.Background(), RegisterInput{
+		Mobile: "13812345678", AccountName: "grower", Password: "strong-password",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	login, err := service.Login(context.Background(), user.AccountName, "strong-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	user.Status = UserStatusDisabled
+	if _, err := service.Authenticate(context.Background(), login.AccessToken); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("Authenticate() error = %v, want ErrInvalidToken", err)
 	}
 }
 

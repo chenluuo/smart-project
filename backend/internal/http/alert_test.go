@@ -16,6 +16,7 @@ type alertServiceStub struct {
 	rules         []alert.RuleView
 	updateResult  *alert.RuleUpdateResult
 	listResult    alert.ListResult
+	listResults   map[alert.Status]alert.ListResult
 	confirmResult *alert.ConfirmResult
 	err           error
 	ownerID       uint64
@@ -41,6 +42,11 @@ func (s *alertServiceStub) UpsertRule(_ context.Context, ownerID, plotID, thresh
 
 func (s *alertServiceStub) List(_ context.Context, ownerID uint64, filter alert.ListFilter) (alert.ListResult, error) {
 	s.ownerID, s.filter = ownerID, filter
+	if filter.Status != nil && s.listResults != nil {
+		if result, ok := s.listResults[*filter.Status]; ok {
+			return result, s.err
+		}
+	}
 	return s.listResult, s.err
 }
 
@@ -80,7 +86,7 @@ func TestAlertEndpointsRequireAuthentication(t *testing.T) {
 func TestThresholdEndpointsFollowContract(t *testing.T) {
 	now := time.Date(2026, 8, 22, 8, 20, 0, 0, time.UTC)
 	service := &alertServiceStub{
-		rules:        []alert.RuleView{{ID: 2, PlotID: 11, Metric: "soilMoisture", Operator: alert.OperatorLT, Value: 28, Unit: "%", DurationSeconds: 300, Enabled: true, Level: alert.LevelMedium}},
+		rules:        []alert.RuleView{{ID: 2, PlotID: 11, Metric: "soilMoisture", Operator: alert.OperatorLT, Value: 28, Hysteresis: 2, Unit: "%", DurationSeconds: 300, Enabled: true, Level: alert.LevelMedium}},
 		updateResult: &alert.RuleUpdateResult{ID: 2, UpdatedAt: now},
 	}
 
@@ -88,16 +94,16 @@ func TestThresholdEndpointsFollowContract(t *testing.T) {
 	request.Header.Set("Authorization", "Bearer signed-token")
 	response := httptest.NewRecorder()
 	newAlertTestRouter(service).ServeHTTP(response, request)
-	if response.Code != http.StatusOK || service.ownerID != 7 || service.plotID != 11 || !strings.Contains(response.Body.String(), `"operator":"LT"`) {
+	if response.Code != http.StatusOK || service.ownerID != 7 || service.plotID != 11 || !strings.Contains(response.Body.String(), `"operator":"LT"`) || !strings.Contains(response.Body.String(), `"hysteresis":2`) {
 		t.Fatalf("GET thresholds: status=%d body=%s service=%+v", response.Code, response.Body.String(), service)
 	}
 
-	request = httptest.NewRequest(http.MethodPut, "/api/v1/plots/11/thresholds/2", strings.NewReader(`{"metric":"soilMoisture","operator":"LT","value":28,"durationSeconds":300,"level":"MEDIUM","enabled":false}`))
+	request = httptest.NewRequest(http.MethodPut, "/api/v1/plots/11/thresholds/2", strings.NewReader(`{"metric":"soilMoisture","operator":"LT","value":28,"hysteresis":2.5,"durationSeconds":300,"level":"MEDIUM","enabled":false}`))
 	request.Header.Set("Authorization", "Bearer signed-token")
 	request.Header.Set("Content-Type", "application/json")
 	response = httptest.NewRecorder()
 	newAlertTestRouter(service).ServeHTTP(response, request)
-	if response.Code != http.StatusOK || service.thresholdID != 2 || service.ruleInput.Enabled || service.ruleInput.Value != 28 {
+	if response.Code != http.StatusOK || service.thresholdID != 2 || service.ruleInput.Enabled || service.ruleInput.Value != 28 || service.ruleInput.Hysteresis == nil || *service.ruleInput.Hysteresis != 2.5 {
 		t.Fatalf("PUT threshold: status=%d body=%s service=%+v", response.Code, response.Body.String(), service)
 	}
 }

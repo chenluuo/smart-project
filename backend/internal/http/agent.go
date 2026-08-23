@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/chenluuo/smart-project/backend/internal/agent"
 	"github.com/gin-gonic/gin"
@@ -27,15 +28,67 @@ type appendAgentMessageRequest struct {
 	TraceID      string          `json:"traceId"`
 }
 
+type appendPythonAgentMessageRequest struct {
+	Role         string          `json:"role" binding:"required"`
+	Content      string          `json:"content" binding:"required"`
+	Citations    json.RawMessage `json:"citations"`
+	PlotID       *string         `json:"plot_id"`
+	ModelVersion string          `json:"model_version"`
+	TraceID      string          `json:"trace_id"`
+}
+
 func registerAgentRoutes(router *gin.Engine, auth authService, service agentService, internalServiceKey string) {
 	handler := agentHandler{service: service}
 	api := router.Group("/api/v1/ai", jwtAuthentication(auth))
 	api.POST("/sessions", handler.createSession)
 	api.GET("/sessions/:sessionId/messages", handler.listMessages)
 	api.POST("/sessions/:sessionId/close", handler.closeSession)
+	pythonAPI := router.Group("/api/v1/agent", jwtAuthentication(auth))
+	pythonAPI.POST("/sessions/:sessionId/messages", handler.appendPythonMessage)
 
 	internal := router.Group("/internal/agent", internalServiceAuthentication(internalServiceKey))
 	internal.POST("/sessions/:sessionId/messages", handler.appendMessage)
+}
+
+func (h agentHandler) appendPythonMessage(c *gin.Context) {
+	claims, ok := authenticatedClaims(c)
+	if !ok {
+		return
+	}
+	var request appendPythonAgentMessageRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		respondError(c, http.StatusBadRequest, 40001, "参数错误：role 和 content 不能为空")
+		return
+	}
+	plotID, err := parsePythonPlotID(request.PlotID)
+	if err != nil {
+		respondError(c, http.StatusBadRequest, 40001, "参数错误：plot_id 必须是正整数")
+		return
+	}
+	traceID := strings.TrimSpace(request.TraceID)
+	if traceID == "" {
+		traceID = strings.TrimSpace(c.GetHeader("X-Trace-Id"))
+	}
+	result, err := h.service.AppendMessageByOwner(c.Request.Context(), claims.UserID, c.Param("sessionId"), agent.MessageInput{
+		Role: request.Role, Content: request.Content, Citations: request.Citations,
+		PlotID: plotID, ModelVersion: request.ModelVersion, TraceID: traceID,
+	})
+	if err != nil {
+		respondAgentError(c, err)
+		return
+	}
+	respondSuccess(c, http.StatusCreated, gin.H{"messageId": result.ID, "createdAt": result.CreatedAt})
+}
+
+func parsePythonPlotID(value *string) (*uint64, error) {
+	if value == nil || strings.TrimSpace(*value) == "" {
+		return nil, nil
+	}
+	parsed, err := strconv.ParseUint(strings.TrimSpace(*value), 10, 64)
+	if err != nil || parsed == 0 {
+		return nil, agent.ErrInvalidInput
+	}
+	return &parsed, nil
 }
 
 func (h agentHandler) createSession(c *gin.Context) {

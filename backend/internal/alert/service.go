@@ -25,6 +25,7 @@ type RuleInput struct {
 	Metric          string
 	Operator        ComparisonOperator
 	Value           float64
+	Hysteresis      *float64
 	DurationSeconds int
 	Level           Level
 	Enabled         bool
@@ -36,6 +37,7 @@ type RuleView struct {
 	Metric          string             `json:"metric"`
 	Operator        ComparisonOperator `json:"operator"`
 	Value           float64            `json:"value"`
+	Hysteresis      float64            `json:"hysteresis"`
 	Unit            string             `json:"unit"`
 	DurationSeconds int                `json:"durationSeconds"`
 	Enabled         bool               `json:"enabled"`
@@ -61,8 +63,9 @@ type AlertListRow struct {
 	PlotID             uint64
 	PlotCode           string
 	Metric             string
+	WarningType        *WarningType
 	Operator           ComparisonOperator
-	Threshold          decimal.Decimal
+	Threshold          *decimal.Decimal
 	DurationSeconds    int
 	Level              Level
 	Status             Status
@@ -83,7 +86,7 @@ type ListItem struct {
 	Title          string     `json:"title"`
 	Content        string     `json:"content"`
 	CurrentValue   float64    `json:"currentValue"`
-	ThresholdValue float64    `json:"thresholdValue"`
+	ThresholdValue *float64   `json:"thresholdValue"`
 	StartedAt      time.Time  `json:"startedAt"`
 	ConfirmedAt    *time.Time `json:"confirmedAt,omitempty"`
 	ConfirmRemark  *string    `json:"confirmRemark,omitempty"`
@@ -129,12 +132,36 @@ type TriggerResult struct {
 	TriggeredAt time.Time `json:"triggeredAt"`
 }
 
+type DeviceWarningInput struct {
+	OwnerID             uint64
+	PlotID              uint64
+	DeviceID            uint64
+	Temperature         float64
+	SoilMoisture        float64
+	Light               float64
+	TemperatureWarning  bool
+	SoilMoistureWarning bool
+	LightWarning        bool
+	OccurredAt          time.Time
+}
+
+type WarningTransition struct {
+	Alert     Alert
+	Created   bool
+	Recovered bool
+	OwnerID   uint64
+	PlotID    uint64
+	PlotCode  string
+	Metric    string
+}
+
 type Store interface {
 	ListRulesByOwner(context.Context, uint64, uint64) ([]Rule, error)
-	UpsertRuleByOwner(context.Context, uint64, *Rule) error
+	UpsertRuleByOwner(context.Context, uint64, *Rule, *decimal.Decimal) error
 	ListAlertsByOwner(context.Context, uint64, ListFilter) ([]AlertListRow, int64, error)
 	ConfirmAlertByOwner(context.Context, uint64, uint64, string, time.Time) (*Alert, error)
 	CreateTriggeredAlert(context.Context, TriggerInput, time.Time) (*TriggerRecord, error)
+	SyncDeviceWarnings(context.Context, DeviceWarningInput, time.Time) ([]WarningTransition, error)
 }
 
 type Service struct {
@@ -165,9 +192,10 @@ func (s *Service) ListRules(ctx context.Context, ownerID, plotID uint64) ([]Rule
 	result := make([]RuleView, 0, len(rules))
 	for _, rule := range rules {
 		value, _ := rule.Threshold.Float64()
+		hysteresis, _ := rule.Hysteresis.Float64()
 		result = append(result, RuleView{
 			ID: rule.ID, PlotID: rule.PlotID, Metric: rule.Metric,
-			Operator: rule.ComparisonOperator, Value: value, Unit: metricUnit(rule.Metric),
+			Operator: rule.ComparisonOperator, Value: value, Hysteresis: hysteresis, Unit: metricUnit(rule.Metric),
 			DurationSeconds: rule.DurationSeconds, Enabled: rule.Enabled, Level: rule.Level,
 		})
 	}
@@ -182,6 +210,11 @@ func (s *Service) UpsertRule(ctx context.Context, ownerID, plotID, thresholdID u
 		return nil, ErrInvalidInput
 	}
 	now := s.now()
+	var hysteresis *decimal.Decimal
+	if input.Hysteresis != nil {
+		value := decimal.NewFromFloat(*input.Hysteresis)
+		hysteresis = &value
+	}
 	rule := &Rule{
 		ID: thresholdID, PlotID: plotID, Name: input.Metric + " " + string(input.Operator),
 		Metric: input.Metric, ComparisonOperator: input.Operator,
@@ -189,7 +222,10 @@ func (s *Service) UpsertRule(ctx context.Context, ownerID, plotID, thresholdID u
 		Level: input.Level, Enabled: input.Enabled,
 		Auditable: persistence.Auditable{CreatedAt: now, UpdatedAt: now},
 	}
-	if err := s.store.UpsertRuleByOwner(ctx, ownerID, rule); errors.Is(err, gorm.ErrRecordNotFound) {
+	if hysteresis != nil {
+		rule.Hysteresis = *hysteresis
+	}
+	if err := s.store.UpsertRuleByOwner(ctx, ownerID, rule, hysteresis); errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, ErrNotFound
 	} else if err != nil {
 		return nil, fmt.Errorf("upsert threshold rule: %w", err)
@@ -215,8 +251,15 @@ func (s *Service) List(ctx context.Context, ownerID uint64, filter ListFilter) (
 	}
 	items := make([]ListItem, 0, len(rows))
 	for _, row := range rows {
+		if row.WarningType != nil {
+			row.Metric = warningMetric(*row.WarningType)
+		}
 		current, _ := row.TriggerValue.Float64()
-		threshold, _ := row.Threshold.Float64()
+		var threshold *float64
+		if row.Threshold != nil {
+			value, _ := row.Threshold.Float64()
+			threshold = &value
+		}
 		status := row.Status
 		if status == StatusAcknowledged {
 			status = StatusConfirmed
@@ -230,6 +273,41 @@ func (s *Service) List(ctx context.Context, ownerID uint64, filter ListFilter) (
 		})
 	}
 	return ListResult{Items: items, Page: filter.Page, PageSize: filter.PageSize, Total: total}, nil
+}
+
+func (s *Service) SyncDeviceWarnings(ctx context.Context, input DeviceWarningInput) ([]WarningTransition, error) {
+	if input.OwnerID == 0 || input.PlotID == 0 || input.DeviceID == 0 || input.OccurredAt.IsZero() ||
+		math.IsNaN(input.Temperature) || math.IsInf(input.Temperature, 0) ||
+		math.IsNaN(input.SoilMoisture) || math.IsInf(input.SoilMoisture, 0) ||
+		math.IsNaN(input.Light) || math.IsInf(input.Light, 0) {
+		return nil, ErrInvalidInput
+	}
+	transitions, err := s.store.SyncDeviceWarnings(ctx, input, s.now().UTC())
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("sync device warnings: %w", err)
+	}
+	for _, transition := range transitions {
+		if s.publisher == nil {
+			continue
+		}
+		if transition.Created {
+			_, _ = events.PublishAlertCreated(s.publisher, events.AlertCreated{
+				OwnerID: transition.OwnerID, AlertID: transition.Alert.ID, PlotID: transition.PlotID,
+				Level: string(transition.Alert.Level), Title: deviceWarningTitle(transition.PlotCode, transition.Metric),
+				CreatedAt: transition.Alert.TriggeredAt,
+			})
+		}
+		if transition.Recovered && transition.Alert.ResolvedAt != nil {
+			_, _ = events.PublishAlertRecovered(s.publisher, events.AlertRecovered{
+				OwnerID: transition.OwnerID, AlertID: transition.Alert.ID, PlotID: transition.PlotID,
+				RecoveredAt: *transition.Alert.ResolvedAt,
+			})
+		}
+	}
+	return transitions, nil
 }
 
 func (s *Service) Confirm(ctx context.Context, ownerID, alertID uint64, remark string) (*ConfirmResult, error) {
@@ -248,7 +326,11 @@ func (s *Service) Confirm(ctx context.Context, ownerID, alertID uint64, remark s
 	if err != nil {
 		return nil, fmt.Errorf("confirm alert: %w", err)
 	}
-	return &ConfirmResult{ID: result.ID, Status: StatusConfirmed, ConfirmedAt: now}, nil
+	confirmedAt := now
+	if result.AcknowledgedAt != nil {
+		confirmedAt = *result.AcknowledgedAt
+	}
+	return &ConfirmResult{ID: result.ID, Status: StatusConfirmed, ConfirmedAt: confirmedAt}, nil
 }
 
 // Trigger creates one active alert and its delivery records. The repository
@@ -297,6 +379,7 @@ func validRuleInput(input RuleInput) bool {
 	return input.Metric != "" && len(input.Metric) <= 64 &&
 		(input.Operator == OperatorLT || input.Operator == OperatorLTE || input.Operator == OperatorGT || input.Operator == OperatorGTE) &&
 		!math.IsNaN(input.Value) && !math.IsInf(input.Value, 0) &&
+		(input.Hysteresis == nil || *input.Hysteresis >= 0 && !math.IsNaN(*input.Hysteresis) && !math.IsInf(*input.Hysteresis, 0)) &&
 		input.DurationSeconds >= 0 && input.DurationSeconds <= 86400 && validLevel(input.Level)
 }
 
@@ -316,12 +399,17 @@ func metricUnit(metric string) string {
 		return "°C"
 	case "rainfall":
 		return "mm"
+	case "light":
+		return "lx"
 	default:
 		return ""
 	}
 }
 
 func alertTitle(row AlertListRow) string {
+	if row.WarningType != nil {
+		return deviceWarningTitle(row.PlotCode, warningMetric(*row.WarningType))
+	}
 	direction := "异常"
 	if row.Operator == OperatorLT || row.Operator == OperatorLTE {
 		direction = "偏低"
@@ -338,6 +426,51 @@ func alertTitle(row AlertListRow) string {
 }
 
 func alertContent(row AlertListRow) string {
+	if row.WarningType != nil && row.Metric == "" {
+		row.Metric = warningMetric(*row.WarningType)
+	}
 	unit := metricUnit(row.Metric)
+	if row.WarningType != nil {
+		return fmt.Sprintf("设备上报%s警告，当前值 %s%s", warningMetricLabel(*row.WarningType), row.TriggerValue.String(), unit)
+	}
 	return fmt.Sprintf("%s%s 触发持续阈值告警", row.TriggerValue.String(), unit)
+}
+
+func warningMetric(value WarningType) string {
+	switch value {
+	case WarningTemperature:
+		return "temperature"
+	case WarningSoilMoisture:
+		return "soilMoisture"
+	case WarningLight:
+		return "light"
+	default:
+		return ""
+	}
+}
+
+func warningMetricLabel(value WarningType) string {
+	switch value {
+	case WarningTemperature:
+		return "温度"
+	case WarningSoilMoisture:
+		return "湿度"
+	case WarningLight:
+		return "光照"
+	default:
+		return "设备"
+	}
+}
+
+func deviceWarningTitle(plotCode, metric string) string {
+	label := metric
+	switch metric {
+	case "temperature":
+		label = "温度"
+	case "soilMoisture":
+		label = "湿度"
+	case "light":
+		label = "光照"
+	}
+	return fmt.Sprintf("%s 地块%s警告", plotCode, label)
 }

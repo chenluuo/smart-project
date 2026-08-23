@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -92,7 +93,7 @@ type Store interface {
 	FindByIdempotencyKeyAndOwner(context.Context, string, uint64) (*Command, error)
 	Create(context.Context, *Command) error
 	Save(context.Context, *Command) error
-	FindLatestByDeviceAndPlot(context.Context, uint64, uint64) (*Command, error)
+	FindLatestSuccessfulByDeviceAndPlot(context.Context, uint64, uint64) (*Command, error)
 	FindByCommandIDAndOwner(context.Context, string, uint64) (*Command, error)
 	ListByOwner(context.Context, uint64, ListFilter) ([]CommandListRow, int64, error)
 }
@@ -100,7 +101,13 @@ type Store interface {
 type Service struct {
 	commands  Store
 	publisher events.Publisher
+	snapshots IrrigationSnapshotStore
 	now       func() time.Time
+}
+
+type IrrigationSnapshotStore interface {
+	Get(context.Context, uint64, time.Time) (*IrrigationStatus, bool, error)
+	Put(context.Context, IrrigationStatus, time.Time) error
 }
 
 func NewService(commands Store, publishers ...events.Publisher) *Service {
@@ -109,6 +116,10 @@ func NewService(commands Store, publishers ...events.Publisher) *Service {
 		service.publisher = publishers[0]
 	}
 	return service
+}
+
+func (s *Service) ConfigureSnapshotStore(store IrrigationSnapshotStore) {
+	s.snapshots = store
 }
 
 func (s *Service) Issue(ctx context.Context, ownerID, plotID uint64, input IssueInput) (*IssueResult, error) {
@@ -144,9 +155,6 @@ func (s *Service) Issue(ctx context.Context, ownerID, plotID uint64, input Issue
 	if err != nil {
 		return nil, err
 	}
-	if input.IdempotencyKey == "" {
-		input.IdempotencyKey = commandID
-	}
 	payload := map[string]any{"mode": input.Mode, "reason": input.Reason}
 	if input.Action == "OPEN" {
 		payload["durationSeconds"] = input.DurationSeconds
@@ -171,6 +179,19 @@ func (s *Service) Issue(ctx context.Context, ownerID, plotID uint64, input Issue
 	command.UpdatedAt = now
 	if err := s.commands.Save(ctx, command); err != nil {
 		return nil, fmt.Errorf("complete irrigation command: %w", err)
+	}
+	if s.snapshots != nil {
+		snapshot := IrrigationStatus{
+			PlotID: plotID, ValveDeviceID: irrigationDevice.DeviceID, State: "OFF", Mode: input.Mode,
+			MaxSeconds: MaxIrrigationSeconds, LastCommandID: &command.CommandID,
+		}
+		if input.Action == "OPEN" {
+			snapshot.State = "ON"
+			snapshot.RemainingSeconds = input.DurationSeconds
+		}
+		if err := s.snapshots.Put(ctx, snapshot, now.UTC()); err != nil {
+			slog.Warn("write irrigation Redis snapshot", "plotId", plotID, "commandId", command.CommandID, "error", err)
+		}
 	}
 	if s.publisher != nil {
 		_, _ = events.PublishCommandResult(s.publisher, events.CommandResult{
@@ -197,7 +218,17 @@ func (s *Service) IrrigationStatus(ctx context.Context, ownerID, plotID uint64) 
 		PlotID: irrigationDevice.PlotID, ValveDeviceID: irrigationDevice.DeviceID,
 		State: "OFF", Mode: "MANUAL", MaxSeconds: MaxIrrigationSeconds,
 	}
-	command, err := s.commands.FindLatestByDeviceAndPlot(ctx, irrigationDevice.DeviceID, irrigationDevice.PlotID)
+	if s.snapshots != nil {
+		cached, hit, err := s.snapshots.Get(ctx, plotID, s.now().UTC())
+		if err != nil {
+			return nil, fmt.Errorf("read irrigation snapshot: %w", err)
+		}
+		if hit {
+			cached.ValveDeviceID = irrigationDevice.DeviceID
+			return cached, nil
+		}
+	}
+	command, err := s.commands.FindLatestSuccessfulByDeviceAndPlot(ctx, irrigationDevice.DeviceID, irrigationDevice.PlotID)
 	if errors.Is(err, gorm.ErrRecordNotFound) || command == nil {
 		return result, nil
 	}
@@ -298,7 +329,7 @@ func ValidStatus(status Status) bool {
 func validIssueInput(input IssueInput) bool {
 	if input.Action != "OPEN" && input.Action != "CLOSE" ||
 		input.Mode != "MANUAL" && input.Mode != "AUTO" && input.Mode != "AI_SUGGESTED" ||
-		len(input.IdempotencyKey) > 64 || len(input.Reason) > 500 {
+		input.IdempotencyKey == "" || len(input.IdempotencyKey) > 64 || len(input.Reason) > 500 {
 		return false
 	}
 	if input.Action == "OPEN" {

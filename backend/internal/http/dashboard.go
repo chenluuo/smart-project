@@ -7,6 +7,7 @@ import (
 	"github.com/chenluuo/smart-project/backend/internal/alert"
 	"github.com/chenluuo/smart-project/backend/internal/device"
 	"github.com/chenluuo/smart-project/backend/internal/plot"
+	"github.com/chenluuo/smart-project/backend/internal/telemetry"
 	"github.com/gin-gonic/gin"
 )
 
@@ -38,6 +39,7 @@ type dashboardPlot struct {
 	Code         string      `json:"code"`
 	SoilMoisture *float64    `json:"soilMoisture"`
 	Temperature  *float64    `json:"temperature"`
+	Light        *float64    `json:"light"`
 	Status       plot.Status `json:"status"`
 }
 
@@ -45,6 +47,7 @@ type dashboardOverview struct {
 	SampleTime      *time.Time       `json:"sampleTime"`
 	AvgSoilMoisture *dashboardMetric `json:"avgSoilMoisture"`
 	AvgTemperature  *dashboardMetric `json:"avgTemperature"`
+	AvgLight        *dashboardMetric `json:"avgLight"`
 	DeviceOnline    deviceOnlineStat `json:"deviceOnline"`
 	Alerts          alertStat        `json:"alerts"`
 	Plots           []dashboardPlot  `json:"plots"`
@@ -70,13 +73,26 @@ func (h dashboardHandler) overview(c *gin.Context) {
 	}
 
 	overview := dashboardOverview{Plots: make([]dashboardPlot, 0, len(allPlots))}
+	plotIDs := make([]uint64, 0, len(allPlots))
+	for _, p := range allPlots {
+		plotIDs = append(plotIDs, p.ID)
+	}
+	latestValues, err := h.telemetry.LatestByPlots(ctx, plotIDs)
+	if err != nil {
+		respondError(c, http.StatusInternalServerError, 50000, "服务器内部错误")
+		return
+	}
+	latestByPlot := make(map[uint64]telemetry.Latest, len(latestValues))
+	for _, latest := range latestValues {
+		latestByPlot[latest.PlotID] = latest
+	}
 
-	var soilSum, tempSum float64
-	var soilCount, tempCount int
+	var soilSum, tempSum, lightSum float64
+	var soilCount, tempCount, lightCount int
 	for _, p := range allPlots {
 		item := dashboardPlot{ID: p.ID, Code: p.Code, Status: p.Status}
-		if latest, err := h.telemetry.LatestByPlot(ctx, p.ID); err == nil && latest != nil {
-			if overview.SampleTime == nil && !latest.SampleTime.IsZero() {
+		if latest, ok := latestByPlot[p.ID]; ok {
+			if !latest.SampleTime.IsZero() && (overview.SampleTime == nil || latest.SampleTime.After(*overview.SampleTime)) {
 				t := latest.SampleTime
 				overview.SampleTime = &t
 			}
@@ -90,6 +106,11 @@ func (h dashboardHandler) overview(c *gin.Context) {
 				tempSum += latest.Temperature.Value
 				tempCount++
 			}
+			if latest.Light != nil {
+				item.Light = &latest.Light.Value
+				lightSum += latest.Light.Value
+				lightCount++
+			}
 		}
 		overview.Plots = append(overview.Plots, item)
 	}
@@ -98,6 +119,9 @@ func (h dashboardHandler) overview(c *gin.Context) {
 	}
 	if tempCount > 0 {
 		overview.AvgTemperature = &dashboardMetric{Value: tempSum / float64(tempCount), Unit: "°C"}
+	}
+	if lightCount > 0 {
+		overview.AvgLight = &dashboardMetric{Value: lightSum / float64(lightCount), Unit: "lx"}
 	}
 
 	// 设备在线统计
@@ -125,14 +149,16 @@ func (h dashboardHandler) overview(c *gin.Context) {
 		respondError(c, http.StatusInternalServerError, 50000, "服务器内部错误")
 		return
 	}
-	// pendingConfirm 对应旧状态 ACKNOWLEDGED（已触发待确认）；可随告警语义调整
-	acknowledgedStatus := alert.StatusAcknowledged
-	pendingAlerts, err := h.alerts.List(ctx, claims.UserID, alert.ListFilter{Status: &acknowledgedStatus})
+	confirmedStatus := alert.StatusConfirmed
+	confirmedAlerts, err := h.alerts.List(ctx, claims.UserID, alert.ListFilter{Status: &confirmedStatus})
 	if err != nil {
 		respondError(c, http.StatusInternalServerError, 50000, "服务器内部错误")
 		return
 	}
-	overview.Alerts = alertStat{Active: int(activeAlerts.Total), PendingConfirm: int(pendingAlerts.Total)}
+	overview.Alerts = alertStat{
+		Active:         int(activeAlerts.Total),
+		PendingConfirm: int(confirmedAlerts.Total),
+	}
 
 	respondSuccess(c, http.StatusOK, overview)
 }
