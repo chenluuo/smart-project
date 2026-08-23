@@ -41,7 +41,7 @@ def _svc_url(service: str) -> str:
 
 
 async def _call_context(payload: dict, authorization: str) -> dict:
-    async with httpx.AsyncClient(timeout=15) as client:
+    async with httpx.AsyncClient(timeout=15, trust_env=False) as client:
         resp = await client.post(
             f"{_context_url}/context/build",
             json=payload,
@@ -52,7 +52,7 @@ async def _call_context(payload: dict, authorization: str) -> dict:
 
 
 async def _call_tool(name: str, args: dict, authorization: str) -> dict:
-    async with httpx.AsyncClient(timeout=15) as client:
+    async with httpx.AsyncClient(timeout=15, trust_env=False) as client:
         resp = await client.post(
             f"{_tool_url}/tools/{name}/execute",
             json={"args": args},
@@ -64,7 +64,7 @@ async def _call_tool(name: str, args: dict, authorization: str) -> dict:
 
 async def _tool_schemas() -> list[dict]:
     """拉取工具清单（启动缓存，失败返回空）。"""
-    async with httpx.AsyncClient(timeout=10) as client:
+    async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
         resp = await client.get(f"{_tool_url}/tools", headers={"X-Trace-Id": ensure_trace_id()})
         resp.raise_for_status()
         defs = resp.json()
@@ -122,22 +122,30 @@ async def handle_question(
         state["status"] = STATUS_ACTIVE  # 新问题/继续 → 回到 active
         get_redis().session_set(session_id, state)
 
-    # ---------- 三路取数（并行） ----------
+    # ---------- 三路取数（知识/记忆并行，同步 embedding 走线程池） ----------
     knowledge = []
     memory = []
-    try:
-        knowledge = rag_search(question)
-    except Exception:
-        pass  # 知识检索失败不阻塞问答
-    try:
-        memory = memory_recall(user_id, question)
-    except Exception:
-        pass
 
-    # 现场数据：走工具（LLM 工具循环）
-    live_data, tool_log = await _tool_loop(question, plot_id, authorization)
+    def _safe_rag():
+        try:
+            return rag_search(question)
+        except Exception:
+            return []
 
-    # ---------- 组装（context-service） ----------
+    def _safe_memory():
+        try:
+            return memory_recall(user_id, question)
+        except Exception:
+            return []
+
+    import asyncio
+
+    knowledge, memory = await asyncio.gather(
+        asyncio.to_thread(_safe_rag),
+        asyncio.to_thread(_safe_memory),
+    )
+
+    # ---------- 组装（context-service，不含 live_data：工具结果走对话上下文） ----------
     window_turns = get_redis().window_get(user_id)
     prompt_result = await _call_context(
         {
@@ -146,7 +154,7 @@ async def handle_question(
             "window_turns": window_turns[-8:],
             "knowledge_chunks": [k.get("content", "") for k in knowledge[:5]],
             "memory_chunks": [m["summary"] for m in memory[:3]],
-            "live_data": live_data,
+            "live_data": [],
         },
         authorization,
     )
@@ -157,13 +165,92 @@ async def handle_question(
         messages.append({"role": t["role"], "content": t["content"]})
     messages.append({"role": "user", "content": question})
 
-    # ---------- LLM 流式 ----------
-    answer_parts: list[str] = []
-    async for delta in get_llm().chat_stream(messages):
-        answer_parts.append(delta)
-        yield {"type": "answer", "delta": delta}
+    # ---------- Agent 循环：LLM 全程控制工具调用，中间回复直出，最终回复前标注 ----------
+    answer = ""
+    max_rounds = int(get_config("agent").get("max_tool_rounds", 5))
+    tool_log: list[dict] = []
+    try:
+        tools = await _tool_schemas()
+    except Exception:
+        tools = []
 
-    answer = "".join(answer_parts)
+    for _ in range(max_rounds):
+        round_parts: list[str] = []
+        tool_calls_acc: dict[int, dict] = {}
+
+        stream = await get_llm()._get_client().chat.completions.create(
+            model=get_config("llm").get("model"),
+            messages=messages,
+            tools=tools or None,
+            tool_choice="auto" if tools else None,
+            stream=True,
+            temperature=get_config("llm").get("temperature", 0.3),
+        )
+        # 本轮先收（不直出），轮结束后按"中间回复 / 最终回复"统一发出
+        async for chunk in stream:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            if delta is None:
+                continue
+            if delta.content:
+                round_parts.append(delta.content)
+            if delta.tool_calls:
+                for tc in delta.tool_calls:
+                    acc = tool_calls_acc.setdefault(tc.index, {"id": "", "name": "", "arguments": ""})
+                    if tc.id:
+                        acc["id"] = tc.id
+                    if tc.function:
+                        if tc.function.name:
+                            acc["name"] += tc.function.name
+                        if tc.function.arguments:
+                            acc["arguments"] += tc.function.arguments
+
+        if not tool_calls_acc:
+            # 最终回复轮（代码判定）：内容前加"【最终回复】"前缀
+            answer = "".join(round_parts)
+            yield {"type": "answer", "delta": "【最终回复】"}
+            for part in round_parts:
+                yield {"type": "answer", "delta": part}
+            break
+
+        # 中间回复（本轮要调工具）：内容直出，再执行工具回填，继续循环
+        for part in round_parts:
+            yield {"type": "answer", "delta": part}
+        tcs = [tool_calls_acc[i] for i in sorted(tool_calls_acc)]
+        yield {
+            "type": "tool_call",
+            "tool_calls": [{"name": t["name"], "arguments": t["arguments"]} for t in tcs],
+        }
+        messages.append({
+            "role": "assistant",
+            "content": "".join(round_parts) or None,
+            "tool_calls": [
+                {
+                    "id": t["id"],
+                    "type": "function",
+                    "function": {"name": t["name"], "arguments": t["arguments"] or "{}"},
+                }
+                for t in tcs
+            ],
+        })
+        for t in tcs:
+            try:
+                args = json.loads(t["arguments"] or "{}")
+            except json.JSONDecodeError:
+                args = {}
+            result = await _call_tool(t["name"], args, authorization)
+            tool_log.append({"tool": t["name"], "args": args, "ok": result.get("ok")})
+            messages.append({
+                "role": "tool",
+                "tool_call_id": t["id"],
+                "content": json.dumps(result, ensure_ascii=False)[:2000],
+            })
+    else:
+        # 达到最大轮数仍未收尾（防御）
+        if not answer:
+            answer = "已尽力查询，但信息有限，建议到系统查看最新数据。"
+
     can_close = _judge_can_close(question, answer)
 
     # ---------- 落库 + 窗口 + activity ----------
@@ -197,70 +284,6 @@ async def handle_question(
     else:
         yield {"type": "done", "sessionId": session_id, "canClose": False,
                "sources": _sources(knowledge), "closed": False}
-
-
-async def _tool_loop(question: str, plot_id: str | None, authorization: str) -> tuple[list[dict], list[str]]:
-    """LLM 工具调用循环（最多 max_tool_rounds 轮）。"""
-    max_rounds = int(get_config("agent").get("max_tool_rounds", 5))
-    live_data: list[dict] = []
-    log: list[str] = []
-    if not plot_id:
-        return live_data, log  # 无地块上下文，交由 LLM 自行决定（可再扩展）
-    try:
-        tools = await _tool_schemas()
-    except Exception:
-        return live_data, log
-    if not tools:
-        return live_data, log
-
-    messages = [
-        {"role": "system", "content": "根据用户问题判断是否需要调用工具获取现场数据。需要则输出工具调用。"},
-        {"role": "user", "content": question},
-    ]
-    for _ in range(max_rounds):
-        resp = await get_llm()._get_client().chat.completions.create(
-            model=get_config("llm").get("model"),
-            messages=messages,
-            tools=tools,
-            tool_choice="auto",
-        )
-        msg = resp.choices[0].message
-        if not msg.tool_calls:
-            break
-        # 协议要求：tool 消息前必须先有带 tool_calls 的 assistant 消息
-        tool_calls_payload = [
-            {
-                "id": tc.id,
-                "type": "function",
-                "function": {"name": tc.function.name, "arguments": tc.function.arguments or "{}"},
-            }
-            for tc in msg.tool_calls
-        ]
-        messages.append(
-            {"role": "assistant", "content": msg.content or "", "tool_calls": tool_calls_payload}
-        )
-        for tc in msg.tool_calls:
-            name = tc.function.name
-            try:
-                args = json.loads(tc.function.arguments or "{}")
-            except json.JSONDecodeError:
-                args = {}
-            result = await _call_tool(name, args, authorization)
-            log.append(f"{name}({args}) -> ok={result.get('ok')}")
-            if name == "get_latest_telemetry" and result.get("ok"):
-                data = result.get("data") or {}
-                metrics = (data.get("metrics") or {})
-                for m, v in metrics.items():
-                    live_data.append({
-                        "plot_id": args.get("plot_id") or data.get("plotId"),
-                        "metric": m, "value": v.get("value"), "unit": v.get("unit"),
-                        "sampled_at": data.get("sampleTime", ""),
-                    })
-            messages.append({
-                "role": "tool", "tool_call_id": tc.id,
-                "content": json.dumps(result, ensure_ascii=False)[:2000],
-            })
-    return live_data, log
 
 
 def _judge_can_close(question: str, answer: str) -> bool:

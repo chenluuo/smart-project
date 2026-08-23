@@ -270,6 +270,80 @@ def get_document_content(authorization: str, args: dict) -> dict:
 
 
 # ============================================================
+# 10. get_irrigation_status：灌溉状态
+# ============================================================
+
+GET_IRRIGATION_STATUS_SCHEMA = {
+    "plot_id": {"type": "string", "description": "地块 ID（必填）"},
+}
+
+
+def get_irrigation_status(authorization: str, args: dict) -> dict:
+    if _mock_enabled():
+        return {"ok": True, "data": {
+            "plotId": args.get("plot_id"), "valveDeviceId": "dev_valve_01",
+            "state": "OFF", "mode": "MANUAL", "remainingSeconds": 0, "maxSeconds": 900,
+        }}
+    data = get_go_client().get_irrigation_status(authorization, args["plot_id"])
+    return {"ok": True, "data": data}
+
+
+# ============================================================
+# 11. send_irrigation_command：下发灌溉命令（控制类，复用 Go §6.2）
+# ============================================================
+
+SEND_IRRIGATION_COMMAND_SCHEMA = {
+    "plot_id": {"type": "string", "description": "地块 ID（必填）"},
+    "action": {"type": "string", "enum": ["OPEN", "CLOSE"], "description": "OPEN 开启 / CLOSE 关闭"},
+    "duration_seconds": {"type": "integer", "minimum": 60, "maximum": 1800,
+                         "description": "开启时长（OPEN 时必填，60-1800 秒）"},
+    "reason": {"type": "string", "description": "命令原因（审计用，agent 填建议依据）"},
+}
+
+
+def send_irrigation_command(authorization: str, args: dict) -> dict:
+    """下发灌溉命令（JWT 权限由 Go 校验；agent 侧生成幂等键防重复）。"""
+    import uuid
+
+    if _mock_enabled():
+        return {"ok": True, "data": {
+            "commandId": f"cmd_mock_{uuid.uuid4().hex[:10]}",
+            "plotId": args.get("plot_id"), "action": args.get("action"),
+            "status": "PENDING", "createdAt": "2026-08-22T08:21:10+08:00",
+        }}
+    body = {
+        "action": args["action"],
+        "reason": args.get("reason", "agent 建议"),
+        "idempotencyKey": uuid.uuid4().hex,
+    }
+    if args.get("duration_seconds"):
+        body["durationSeconds"] = args["duration_seconds"]
+    data = get_go_client().post_irrigation_command(authorization, args["plot_id"], body)
+    return {"ok": True, "data": data}
+
+
+# ============================================================
+# 12. get_command_result：命令执行结果（复用 Go §6.3）
+# ============================================================
+
+GET_COMMAND_RESULT_SCHEMA = {
+    "command_id": {"type": "string", "description": "命令 ID（必填）"},
+}
+
+
+def get_command_result(authorization: str, args: dict) -> dict:
+    if _mock_enabled():
+        return {"ok": True, "data": {
+            "id": args.get("command_id"), "plotId": "plot_a3",
+            "action": "OPEN", "status": "SUCCEEDED",
+            "ackPayload": {"state": "ON", "remainingSeconds": 600},
+            "createdAt": "2026-08-22T08:21:10+08:00", "ackAt": "2026-08-22T08:21:12+08:00",
+        }}
+    data = get_go_client().get_command_result(authorization, args["command_id"])
+    return {"ok": True, "data": data}
+
+
+# ============================================================
 # 注册表（启动时调用）
 # ============================================================
 
@@ -285,4 +359,8 @@ def register_all() -> None:
     reg.register("get_alert_rules", "1.0", "查询地块阈值规则（含 operator/时长）", GET_ALERT_RULES_SCHEMA, ["plot_id"], get_alert_rules)
     reg.register("get_device_status", "1.0", "查询设备在线状态", GET_DEVICE_STATUS_SCHEMA, [], get_device_status)
     reg.register("search_knowledge", "1.0", "检索农业知识库（RAG）", SEARCH_KNOWLEDGE_SCHEMA, ["query"], search_knowledge)
-    reg.register("get_document_content", "1.0", "获取知识文档原文片段", GET_DOCUMENT_CONTENT_SCHEMA, ["doc_id"], get_document_content)
+    reg.register("get_document_content", "1.0", "获取知识文档原文片段", GET_DOCUMENT_CONTENT_SCHEMA, [], get_document_content)
+    # 控制类（组内已允许 agent 直接发送命令；复用 Go 已有控制接口）
+    reg.register("get_irrigation_status", "1.0", "查询地块灌溉状态（ON/OFF、剩余时长）", GET_IRRIGATION_STATUS_SCHEMA, ["plot_id"], get_irrigation_status)
+    reg.register("send_irrigation_command", "1.0", "下发灌溉命令（OPEN/CLOSE，需用户明确意图）", SEND_IRRIGATION_COMMAND_SCHEMA, ["plot_id", "action"], send_irrigation_command)
+    reg.register("get_command_result", "1.0", "查询命令执行结果（SUCCEEDED/FAILED/TIMEOUT）", GET_COMMAND_RESULT_SCHEMA, ["command_id"], get_command_result)
