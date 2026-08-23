@@ -27,6 +27,15 @@ from shared.redis_client import get_redis  # noqa: E402
 from shared.trace import set_actor_id  # noqa: E402
 
 app = FastAPI(title="agent-service", version="0.1.0")
+
+# 测试期放开跨域（前端直连 agent/chat；生产收紧为白名单）
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 install_observability(app, "agent-service")
 
 # 测试期放开跨域（极简前端直连 agent/chat；生产收紧为白名单）
