@@ -2,6 +2,7 @@ package alert
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -294,6 +295,25 @@ func (r Repositories) SyncDeviceWarnings(ctx context.Context, input DeviceWarnin
 				if err := tx.Create(&notification.Notification{
 					AlertID: alert.ID, UserID: input.OwnerID, Channel: notification.ChannelInApp,
 					Content: content, Status: notification.StatusSent, SentAt: &sentAt,
+					Auditable: persistence.Auditable{CreatedAt: now, UpdatedAt: now},
+				}).Error; err != nil {
+					return err
+				}
+				// 设备告警推送给 agent：写 outbox（ALERT_ 前缀，alert dispatcher 消费转发）
+				devicePayload := map[string]any{
+					"alertId": alert.ID, "ownerId": input.OwnerID, "plotId": input.PlotID,
+					"deviceId": input.DeviceID, "metric": spec.metric, "level": string(alert.Level),
+					"status": string(alert.Status), "triggerValue": spec.value,
+					"warningType": string(kind),
+				}
+				devicePayloadJSON, err := json.Marshal(devicePayload)
+				if err != nil {
+					return err
+				}
+				if err := tx.Create(&outbox.Event{
+					AggregateType: "ALERT", AggregateID: strconv.FormatUint(alert.ID, 10),
+					EventType: "ALERT_DEVICE_TRIGGERED", Payload: datatypes.JSON(devicePayloadJSON),
+					Status: outbox.StatusPending, AvailableAt: now,
 					Auditable: persistence.Auditable{CreatedAt: now, UpdatedAt: now},
 				}).Error; err != nil {
 					return err

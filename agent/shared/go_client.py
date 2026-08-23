@@ -46,8 +46,11 @@ class GoClient:
         self, method: str, path: str, authorization: str = "", internal: bool = False, **kwargs: Any
     ) -> dict[str, Any] | list[Any]:
         url = f"{self.base_url}{path}"
+        # 额外请求头（如 Idempotency-Key）与内部头合并，Authorization 保留
+        extra_headers: dict[str, str] = dict(kwargs.pop("headers", None) or {})
+        merged_headers = {**self._headers(authorization, internal), **extra_headers}
         with httpx.Client(timeout=self._timeout, trust_env=False) as client:
-            resp = client.request(method, url, headers=self._headers(authorization, internal), **kwargs)
+            resp = client.request(method, url, headers=merged_headers, **kwargs)
             resp.raise_for_status()
             body = resp.json()
         # Go 统一响应 {code, message, data}
@@ -120,10 +123,12 @@ class GoClient:
         )
         return data if isinstance(data, dict) else {}
 
-    def post_irrigation_command(self, authorization: str, plot_id: str,
-                                body: dict[str, Any]) -> dict[str, Any]:
+    def post_irrigation_command(self, authorization: str, plot_id: str, body: dict[str, Any],
+                                headers: dict[str, str] | None = None) -> dict[str, Any]:
+        """下发灌溉命令。幂等键经 Idempotency-Key 头传递（Go §6.2 契约）。"""
         data = self._request(
-            "POST", f"/plots/{plot_id}/irrigation/commands", authorization=authorization, json=body
+            "POST", f"/plots/{plot_id}/irrigation/commands", authorization=authorization,
+            json=body, headers=headers or {},
         )
         return data if isinstance(data, dict) else {}
 

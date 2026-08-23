@@ -1,6 +1,6 @@
-import { Bell, Bot, Grid2X2, LogOut, Map, MessageSquare, RefreshCw, Settings, Sprout } from 'lucide-react';
-import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
-import { api, ApiError, streamEvents, tokenStorage } from './api';
+import { Bell, Bot, Grid2X2, LogOut, Map, MessageSquare, Plus, RefreshCw, Send, Settings, Sprout, Square } from 'lucide-react';
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { api, ApiError, streamAgentChat, streamEvents, tokenStorage } from './api';
 import { AlarmCenterPage } from './pages/AlarmCenterPage';
 import { ControlPanelPage } from './pages/ControlPanelPage';
 import { DashboardPage } from './pages/DashboardPage';
@@ -8,8 +8,7 @@ import { DeviceListPage } from './pages/DeviceListPage';
 import { KnowledgePage } from './pages/KnowledgePage';
 import { AuthMode, defaultCredentials, LoginPage } from './pages/LoginPage';
 import type {
-  AgentMessage,
-  AgentSession,
+  AgentChatMessage,
   AlertItem,
   CommandItem,
   DashboardOverview,
@@ -39,6 +38,11 @@ export default function App() {
   const [data, setData] = useState<AppData>(emptyData);
   const [selectedPlotId, setSelectedPlotId] = useState<number | null>(null);
   const [events, setEvents] = useState<EventNotice[]>([]);
+  const agentControllerRef = useRef<AbortController | null>(null);
+  const [agentSessionId, setAgentSessionId] = useState<string | null>(null);
+  const [agentMessages, setAgentMessages] = useState<AgentChatMessage[]>([]);
+  const [agentStreaming, setAgentStreaming] = useState(false);
+  const [agentError, setAgentError] = useState('');
 
   const selectedPlot = useMemo(
     () => data.plots.find((plot) => plot.id === selectedPlotId) ?? data.plots[0],
@@ -92,9 +96,7 @@ export default function App() {
         knowledge,
         telemetry: nextTelemetry,
         irrigation: nextIrrigation,
-        thresholds: nextThresholds,
-        sessions: [],
-        messages: []
+        thresholds: nextThresholds
       });
       setSelectedPlotId((current) => current ?? plots[0]?.id ?? null);
       setNotice('');
@@ -148,11 +150,16 @@ export default function App() {
   }
 
   function logout() {
+    agentControllerRef.current?.abort();
     tokenStorage().clear();
     setUser(null);
     setData(emptyData);
     setSelectedPlotId(null);
     setEvents([]);
+    setAgentSessionId(null);
+    setAgentMessages([]);
+    setAgentStreaming(false);
+    setAgentError('');
   }
 
   async function issueIrrigation(action: 'OPEN' | 'CLOSE', durationSeconds = 600) {
@@ -237,18 +244,129 @@ export default function App() {
     }
   }
 
-  async function createSession() {
-    setBusy(true);
+  async function sendAgentQuestion(question: string) {
+    const content = question.trim();
+    if (!content || agentStreaming) return;
+
+    const userMessage: AgentChatMessage = {
+      id: newChatMessageId('user'),
+      role: 'USER',
+      content,
+      status: 'COMPLETE'
+    };
+    const assistantMessageId = newChatMessageId('assistant');
+    setAgentMessages((current) => [
+      ...current,
+      userMessage,
+      { id: assistantMessageId, role: 'ASSISTANT', content: '', status: 'STREAMING' }
+    ]);
+    setAgentError('');
+    setAgentStreaming(true);
+
+    const controller = new AbortController();
+    agentControllerRef.current = controller;
+    let completed = false;
+    let failed = false;
     try {
-      const session = await api.createSession(selectedPlot?.id);
-      const messages = await api.messages(session.id).catch(() => emptyPage<AgentMessage>());
-      setData((current) => ({ ...current, sessions: [session], messages: messages.items }));
-      setNotice('AI 会话已创建');
+      await streamAgentChat(
+        { sessionId: agentSessionId ?? undefined, plotId: selectedPlot?.id, question: content },
+        (event) => {
+          if (event.type === 'answer' && event.delta) {
+            setAgentMessages((current) =>
+              current.map((message) =>
+                message.id === assistantMessageId
+                  ? { ...message, content: `${message.content}${event.delta}` }
+                  : message
+              )
+            );
+            return;
+          }
+          if (event.type === 'done') {
+            completed = true;
+            if (event.sessionId) setAgentSessionId(event.sessionId);
+            setAgentMessages((current) =>
+              current.map((message) =>
+                message.id === assistantMessageId
+                  ? {
+                      ...message,
+                      content: message.content || event.message || 'AI 未返回内容，请重试。',
+                      status: 'COMPLETE',
+                      sources: event.sources
+                    }
+                  : message
+              )
+            );
+            return;
+          }
+          if (event.type === 'error') {
+            failed = true;
+            const message = event.message || 'AI 响应失败，请稍后重试。';
+            setAgentError(message);
+            setAgentMessages((current) =>
+              current.map((item) =>
+                item.id === assistantMessageId
+                  ? { ...item, content: item.content || message, status: 'ERROR' }
+                  : item
+              )
+            );
+          }
+        },
+        controller.signal
+      );
+      if (!completed && !failed) {
+        setAgentMessages((current) =>
+          current.map((message) =>
+            message.id === assistantMessageId
+              ? { ...message, content: message.content || 'AI 未返回内容，请重试。', status: 'COMPLETE' }
+              : message
+          )
+        );
+      }
     } catch (error) {
-      setNotice(errorMessage(error));
+      if (isAbortError(error)) {
+        setAgentMessages((current) =>
+          current.map((message) =>
+            message.id === assistantMessageId
+              ? { ...message, content: message.content || '已停止生成。', status: 'COMPLETE' }
+              : message
+          )
+        );
+      } else {
+        const message = errorMessage(error);
+        setAgentError(message);
+        setAgentMessages((current) =>
+          current.map((item) =>
+            item.id === assistantMessageId
+              ? { ...item, content: item.content || message, status: 'ERROR' }
+              : item
+          )
+        );
+      }
     } finally {
-      setBusy(false);
+      if (agentControllerRef.current === controller) {
+        agentControllerRef.current = null;
+      }
+      setAgentStreaming(false);
     }
+  }
+
+  async function startNewAgentSession() {
+    agentControllerRef.current?.abort();
+    const previousSessionId = agentSessionId;
+    setAgentSessionId(null);
+    setAgentMessages([]);
+    setAgentError('');
+    setAgentStreaming(false);
+    if (!previousSessionId) return;
+    try {
+      await api.closeAgentChat(previousSessionId);
+    } catch (error) {
+      setAgentError(errorMessage(error));
+    }
+  }
+
+  function stopAgentResponse() {
+    agentControllerRef.current?.abort();
   }
 
   if (!user && !loading) {
@@ -322,10 +440,14 @@ export default function App() {
         {view === 'ask' && (
           <AskView
             selectedPlot={selectedPlot}
-            sessions={data.sessions}
-            messages={data.messages}
             events={events}
-            onCreateSession={createSession}
+            sessionId={agentSessionId}
+            messages={agentMessages}
+            streaming={agentStreaming}
+            error={agentError}
+            onSend={sendAgentQuestion}
+            onNewSession={startNewAgentSession}
+            onStop={stopAgentResponse}
           />
         )}
 
@@ -427,48 +549,126 @@ function PlotsView(props: {
 
 function AskView(props: {
   selectedPlot?: Plot;
-  sessions: AgentSession[];
-  messages: AgentMessage[];
   events: EventNotice[];
-  onCreateSession: () => Promise<void>;
+  sessionId: string | null;
+  messages: AgentChatMessage[];
+  streaming: boolean;
+  error: string;
+  onSend: (question: string) => Promise<void>;
+  onNewSession: () => Promise<void>;
+  onStop: () => void;
 }) {
+  const [draft, setDraft] = useState('');
+
+  function submitQuestion(question = draft) {
+    const content = question.trim();
+    if (!content || props.streaming) return;
+    setDraft('');
+    void props.onSend(content);
+  }
+
   return (
     <div className="screen-content">
-      <section className="section-head">
+      <section className="section-head ai-chat-page-head">
         <div>
-          <h2>问答</h2>
-          <p>{props.selectedPlot?.name ?? '当前地块'} 智能体会话</p>
+          <h2>AI 农事助手</h2>
+          <p>{props.selectedPlot?.name ?? '当前地块'} · 在线问答</p>
         </div>
         <Bot size={25} />
       </section>
-      <section className="ai-card">
-        <MessageSquare size={28} />
-        <h3>创建当前地块会话</h3>
-        <p>Go 侧已提供会话创建和消息历史查询；完整流式问答可继续接入 agent-service。</p>
-        <button className="primary-button" onClick={() => void props.onCreateSession()}>
-          新建会话
-        </button>
+      <section className="ai-chat">
+        <header className="chat-header">
+          <div>
+            <strong>农事对话</strong>
+            <span>{props.sessionId ? '当前会话已连接' : '发起问题即可开始新会话'}</span>
+          </div>
+          {props.messages.length > 0 && (
+            <button
+              type="button"
+              className="chat-header-action"
+              title="新建会话"
+              aria-label="新建会话"
+              onClick={() => void props.onNewSession()}
+              disabled={props.streaming}
+            >
+              <Plus size={19} />
+            </button>
+          )}
+        </header>
+        <div className="chat-transcript" aria-live="polite">
+          {props.messages.length === 0 && (
+            <div className="chat-welcome">
+              <Bot size={28} />
+              <strong>你好，我是农事助手。</strong>
+              <span>想了解当前地块的什么情况？</span>
+              <div className="chat-suggestions">
+                {['现在需要灌溉吗？', '查看当前告警', '给出今日巡检建议'].map((question) => (
+                  <button type="button" key={question} onClick={() => submitQuestion(question)}>
+                    {question}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          {props.messages.map((message) => (
+            <article className={`chat-message ${message.role === 'USER' ? 'user' : 'assistant'}`} key={message.id}>
+              <span className="chat-message-role">{message.role === 'USER' ? '我' : '农事助手'}</span>
+              <div className="chat-bubble">
+                {message.content || <span className="chat-typing">正在思考</span>}
+              </div>
+              {message.sources && message.sources.length > 0 && (
+                <div className="chat-sources">
+                  {message.sources.map((source, index) => (
+                    <span key={`${source.docId ?? source.title ?? 'source'}-${index}`}>
+                      {source.title || '知识库参考'}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </article>
+          ))}
+        </div>
+        <form
+          className="chat-composer"
+          onSubmit={(event) => {
+            event.preventDefault();
+            submitQuestion();
+          }}
+        >
+          <textarea
+            value={draft}
+            maxLength={2000}
+            placeholder="输入农事问题"
+            aria-label="输入农事问题"
+            disabled={props.streaming}
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+                event.preventDefault();
+                submitQuestion();
+              }
+            }}
+          />
+          {props.streaming ? (
+            <button type="button" className="chat-send-button stop" title="停止生成" aria-label="停止生成" onClick={props.onStop}>
+              <Square size={18} fill="currentColor" />
+            </button>
+          ) : (
+            <button
+              type="submit"
+              className="chat-send-button"
+              title="发送"
+              aria-label="发送"
+              disabled={!draft.trim()}
+            >
+              <Send size={19} />
+            </button>
+          )}
+        </form>
+        {props.error && <p className="chat-error">{props.error}</p>}
       </section>
       <section className="list-card">
-        <h3>会话记录</h3>
-        {props.sessions.length === 0 && <EmptyState text="还没有会话。" />}
-        {props.sessions.map((session) => (
-          <div className="plain-row" key={session.id}>
-            <span>
-              <strong>{session.id}</strong>
-              <small>{session.status} · {formatTime(session.lastMessageAt)}</small>
-            </span>
-          </div>
-        ))}
-        {props.messages.map((message) => (
-          <div className="message-row" key={message.id}>
-            <strong>{roleName(message.role)}</strong>
-            <p>{message.content}</p>
-          </div>
-        ))}
-      </section>
-      <section className="list-card">
-        <h3>实时事件</h3>
+        <h3>系统实时事件</h3>
         {props.events.length === 0 && <EmptyState text="事件流连接后，告警与命令结果会出现在这里。" />}
         {props.events.map((event) => (
           <div className="plain-row" key={`${event.id}-${event.receivedAt}`}>
@@ -526,8 +726,6 @@ type AppData = {
   telemetry: Record<number, TelemetryLatest>;
   irrigation: Record<number, IrrigationStatus>;
   thresholds: Record<number, ThresholdRule[]>;
-  sessions: AgentSession[];
-  messages: AgentMessage[];
 };
 
 const emptyData: AppData = {
@@ -539,10 +737,19 @@ const emptyData: AppData = {
   knowledge: [],
   telemetry: {},
   irrigation: {},
-  thresholds: {},
-  sessions: [],
-  messages: []
+  thresholds: {}
 };
+
+function newChatMessageId(prefix: string) {
+  if ('randomUUID' in crypto) {
+    return `${prefix}-${crypto.randomUUID()}`;
+  }
+  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function isAbortError(error: unknown) {
+  return error instanceof DOMException && error.name === 'AbortError';
+}
 
 function applyTelemetryEvent(current: AppData, event: EventNotice): AppData {
   const plotId = eventNumber(event.data.plotId);
@@ -689,9 +896,4 @@ function metricName(metric: string) {
 function levelName(level: string) {
   const names: Record<string, string> = { LOW: '低', MEDIUM: '中', HIGH: '高' };
   return names[level] ?? level;
-}
-
-function roleName(role: string) {
-  const names: Record<string, string> = { USER: '用户', ASSISTANT: '智能体', SYSTEM: '系统', TOOL: '工具' };
-  return names[role] ?? role;
 }

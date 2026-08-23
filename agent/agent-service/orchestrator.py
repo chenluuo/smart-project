@@ -156,11 +156,22 @@ async def handle_question(
         except Exception:
             return []
 
+    def _safe_alerts():
+        """复用 Go GET /alerts?status=ACTIVE：主动拉当前用户活跃告警注入上下文，
+        让 LLM 无需等待工具调用即可感知最新告警（Go 侧零改动）。"""
+        try:
+            data = get_go_client().get_alerts(authorization, status="ACTIVE", page=1, pageSize=20)
+            items = data.get("items", []) if isinstance(data, dict) else []
+            return [a for a in items if isinstance(a, dict)]
+        except Exception:
+            return []
+
     import asyncio
 
-    knowledge, memory = await asyncio.gather(
+    knowledge, memory, active_alerts = await asyncio.gather(
         asyncio.to_thread(_safe_rag),
         asyncio.to_thread(_safe_memory),
+        asyncio.to_thread(_safe_alerts),
     )
 
     # ---------- 组装（context-service，不含 live_data：工具结果走对话上下文） ----------
@@ -173,6 +184,7 @@ async def handle_question(
             "knowledge_chunks": [k.get("content", "") for k in knowledge[:5]],
             "memory_chunks": [m["summary"] for m in memory[:3]],
             "live_data": [],
+            "alerts": active_alerts,
         },
         authorization,
     )

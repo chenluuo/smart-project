@@ -168,6 +168,32 @@ export type AgentMessage = {
   createdAt: string;
 };
 
+export type AgentChatSource = {
+  type?: string;
+  title?: string;
+  docId?: string | number;
+  version?: number;
+  score?: number;
+};
+
+export type AgentChatMessage = {
+  id: string;
+  role: 'USER' | 'ASSISTANT';
+  content: string;
+  status: 'STREAMING' | 'COMPLETE' | 'ERROR';
+  sources?: AgentChatSource[];
+};
+
+export type AgentStreamEvent = {
+  type: string;
+  delta?: string;
+  sessionId?: string;
+  message?: string;
+  sources?: AgentChatSource[];
+  canClose?: boolean;
+  closed?: boolean;
+};
+
 export type EventNotice = {
   id: string;
   type: string;
