@@ -171,7 +171,7 @@ func TestServiceUploadsAndSignsDocument(t *testing.T) {
 		t.Fatalf("Publish() error = %v", err)
 	}
 	views, err := service.ListActive(context.Background(), "")
-	if err != nil || len(views) != 1 || views[0].DownloadURL == "" {
+	if err != nil || len(views) != 1 || views[0].Status != StatusActive || views[0].DownloadURL == "" {
 		t.Fatalf("ListActive() = %+v, %v", views, err)
 	}
 
