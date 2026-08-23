@@ -115,7 +115,6 @@ python worker.py           # ingest（workdir=ingest-service）
 
 测试脚本已移除（测试期产物）；联调验证走 Go 后端 + 前端页面直连。
 
-
 ## 四、核心设计要点
 
 | 项 | 设计 |
@@ -130,6 +129,9 @@ python worker.py           # ingest（workdir=ingest-service）
 | **SSE** | 先发 `started` 占位事件（响应头立即返回），再逐 delta 流式 answer，`done` 带 canClose/sources |
 | **并发控制** | `agent.max_concurrency`（默认 4）限制同时处理的对话数；`concurrency_wait_seconds=0`（当前）并发满立即返回"系统繁忙"不排队；调 >0 可恢复排队；`/healthz` 暴露 in_flight/waiting/available |
 | **失败重投** | ingest 消费"成功才 ACK"；失败重投（retry 计数，超 3 次丢弃） |
+| **可观测性** | 三个 HTTP 服务每次请求输出一条 JSON 完成记录并回传 `X-Request-ID`/`X-Trace-Id`；ingest 每次消费输出一条成功或失败记录；跨服务同时透传两个 ID |
+
+HTTP 完成记录包含服务、路由、状态、耗时、请求/响应字节数和关联 ID；已识别用户时包含 `actor_id`。Stream 记录包含 stream、event_id、处理结果、耗时及重投/丢弃结果。日志不记录查询参数、请求体、JWT、内部密钥或完整业务内容。
 
 ## 五、与 Go 主后端的边界
 

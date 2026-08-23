@@ -27,6 +27,7 @@ type telemetryMetric struct {
 type plotMetrics struct {
 	SoilMoisture *telemetryMetric `json:"soilMoisture,omitempty"`
 	Temperature  *telemetryMetric `json:"temperature,omitempty"`
+	Light        *telemetryMetric `json:"light,omitempty"`
 }
 
 type sourceDevice struct {
@@ -85,6 +86,9 @@ func (h telemetryHandler) latest(c *gin.Context) {
 		if latest.Temperature != nil {
 			result.Metrics.Temperature = &telemetryMetric{Value: latest.Temperature.Value, Unit: latest.Temperature.Unit}
 		}
+		if latest.Light != nil {
+			result.Metrics.Light = &telemetryMetric{Value: latest.Light.Value, Unit: latest.Light.Unit}
+		}
 	case errors.Is(err, telemetry.ErrNotFound):
 		// 遥测尚未接入，指标保持为空
 	default:
@@ -118,6 +122,7 @@ type plotLatestItem struct {
 	PlotCode     string     `json:"plotCode"`
 	SoilMoisture *float64   `json:"soilMoisture"`
 	Temperature  *float64   `json:"temperature"`
+	Light        *float64   `json:"light"`
 	Status       string     `json:"status"`
 	SampleTime   *time.Time `json:"sampleTime"`
 }
@@ -201,6 +206,9 @@ func (h telemetryListHandler) list(c *gin.Context) {
 			if l.Temperature != nil {
 				item.Temperature = &l.Temperature.Value
 			}
+			if l.Light != nil {
+				item.Light = &l.Light.Value
+			}
 		}
 		items = append(items, item)
 	}
@@ -270,7 +278,7 @@ func (h telemetryHistoryHandler) history(c *gin.Context) {
 	metric := c.Query("metric")
 	unit, ok := telemetryMetricUnit(metric)
 	if !ok {
-		respondError(c, http.StatusBadRequest, 40001, "参数错误：metric 必须是 soilMoisture 或 temperature")
+		respondError(c, http.StatusBadRequest, 40001, "参数错误：metric 必须是 soilMoisture、temperature 或 light")
 		return
 	}
 
@@ -344,6 +352,8 @@ func telemetryMetricUnit(metric string) (string, bool) {
 		return "%", true
 	case "temperature":
 		return "°C", true
+	case "light":
+		return "lx", true
 	default:
 		return "", false
 	}

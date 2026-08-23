@@ -9,15 +9,17 @@ import (
 )
 
 type plotStoreStub struct {
-	plots   []Plot
-	plot    *Plot
-	listErr error
-	getErr  error
-	ownerID uint64
-	plotID  uint64
+	plots     []Plot
+	plot      *Plot
+	listErr   error
+	getErr    error
+	ownerID   uint64
+	plotID    uint64
+	listCalls int
 }
 
 func (s *plotStoreStub) FindByOwner(_ context.Context, ownerID uint64) ([]Plot, error) {
+	s.listCalls++
 	s.ownerID = ownerID
 	return s.plots, s.listErr
 }

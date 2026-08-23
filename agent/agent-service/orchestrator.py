@@ -14,7 +14,7 @@ import httpx
 from shared.config import get_config
 from shared.go_client import get_go_client
 from shared.redis_client import get_redis
-from shared.trace import ensure_trace_id
+from shared.trace import REQUEST_HEADER, ensure_request_id, ensure_trace_id
 from llm import get_llm
 from rag import memory_recall, rag_search
 from session import (
@@ -45,7 +45,11 @@ async def _call_context(payload: dict, authorization: str) -> dict:
         resp = await client.post(
             f"{_context_url}/context/build",
             json=payload,
-            headers={"Authorization": authorization, "X-Trace-Id": ensure_trace_id()},
+            headers={
+                "Authorization": authorization,
+                "X-Trace-Id": ensure_trace_id(),
+                REQUEST_HEADER: ensure_request_id(),
+            },
         )
         resp.raise_for_status()
         return resp.json()
@@ -56,7 +60,11 @@ async def _call_tool(name: str, args: dict, authorization: str) -> dict:
         resp = await client.post(
             f"{_tool_url}/tools/{name}/execute",
             json={"args": args},
-            headers={"Authorization": authorization, "X-Trace-Id": ensure_trace_id()},
+            headers={
+                "Authorization": authorization,
+                "X-Trace-Id": ensure_trace_id(),
+                REQUEST_HEADER: ensure_request_id(),
+            },
         )
         resp.raise_for_status()
         return resp.json()
@@ -65,7 +73,10 @@ async def _call_tool(name: str, args: dict, authorization: str) -> dict:
 async def _tool_schemas() -> list[dict]:
     """拉取工具清单（启动缓存，失败返回空）。"""
     async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
-        resp = await client.get(f"{_tool_url}/tools", headers={"X-Trace-Id": ensure_trace_id()})
+        resp = await client.get(
+            f"{_tool_url}/tools",
+            headers={"X-Trace-Id": ensure_trace_id(), REQUEST_HEADER: ensure_request_id()},
+        )
         resp.raise_for_status()
         defs = resp.json()
     return [

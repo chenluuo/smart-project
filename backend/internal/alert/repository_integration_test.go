@@ -135,3 +135,73 @@ func equalJSON(left, right any) bool {
 	rightJSON, _ := json.Marshal(right)
 	return string(leftJSON) == string(rightJSON)
 }
+
+func TestSyncDeviceWarningsCreatesRecoversAndRetriggers(t *testing.T) {
+	dsn := os.Getenv("TEST_MYSQL_DSN")
+	if dsn == "" {
+		t.Skip("set TEST_MYSQL_DSN to run MySQL warning integration test")
+	}
+	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open MySQL: %v", err)
+	}
+	sqlDB, _ := db.DB()
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	if err := database.Migrate(context.Background(), sqlDB); err != nil {
+		t.Fatalf("migrate MySQL: %v", err)
+	}
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	suffix := strconv.FormatInt(time.Now().UnixNano(), 10)
+	mobile := "138" + suffix[len(suffix)-8:]
+	if err := db.Exec("INSERT INTO users(name, mobile, password_hash, status, created_at, updated_at) VALUES (?, ?, ?, 'ACTIVE', ?, ?)", "warning-owner-"+suffix, mobile, "unused", now, now).Error; err != nil {
+		t.Fatalf("insert owner: %v", err)
+	}
+	var owner struct{ ID uint64 }
+	db.Table("users").Select("id").Where("mobile = ?", mobile).Take(&owner)
+	plotCode := "W-" + suffix
+	if err := db.Exec("INSERT INTO plots(owner_id, code, name, status, created_at, updated_at) VALUES (?, ?, 'warning plot', 'ACTIVE', ?, ?)", owner.ID, plotCode, now, now).Error; err != nil {
+		t.Fatalf("insert plot: %v", err)
+	}
+	var plot struct{ ID uint64 }
+	db.Table("plots").Select("id").Where("owner_id = ? AND code = ?", owner.ID, plotCode).Take(&plot)
+	deviceCode, serial := "wd-"+suffix, "ws-"+suffix
+	if err := db.Exec("INSERT INTO devices(device_code, serial_no, name, device_type, status, credential_status, created_at, updated_at) VALUES (?, ?, 'sensor', 'SOIL', 'OFFLINE', 'ACTIVE', ?, ?)", deviceCode, serial, now, now).Error; err != nil {
+		t.Fatalf("insert device: %v", err)
+	}
+	var device struct{ ID uint64 }
+	db.Table("devices").Select("id").Where("device_code = ?", deviceCode).Take(&device)
+	if err := db.Exec("INSERT INTO device_bindings(device_id, plot_id, bound_by, bound_at) VALUES (?, ?, ?, ?)", device.ID, plot.ID, owner.ID, now).Error; err != nil {
+		t.Fatalf("insert binding: %v", err)
+	}
+	t.Cleanup(func() {
+		db.Exec("DELETE FROM notifications WHERE alert_id IN (SELECT id FROM alerts WHERE device_id = ?)", device.ID)
+		db.Exec("DELETE FROM alerts WHERE device_id = ?", device.ID)
+		db.Exec("DELETE FROM device_bindings WHERE device_id = ?", device.ID)
+		db.Exec("DELETE FROM devices WHERE id = ?", device.ID)
+		db.Exec("DELETE FROM plots WHERE id = ?", plot.ID)
+		db.Exec("DELETE FROM users WHERE id = ?", owner.ID)
+	})
+	repository := NewRepositories(db)
+	input := DeviceWarningInput{
+		OwnerID: owner.ID, PlotID: plot.ID, DeviceID: device.ID,
+		Temperature: 36.5, SoilMoisture: 25, Light: 1000, TemperatureWarning: true, OccurredAt: now,
+	}
+	first, err := repository.SyncDeviceWarnings(context.Background(), input, now)
+	if err != nil || len(first) != 1 || !first[0].Created || first[0].Alert.RuleID != nil {
+		t.Fatalf("first SyncDeviceWarnings() = (%+v, %v)", first, err)
+	}
+	duplicate, err := repository.SyncDeviceWarnings(context.Background(), input, now.Add(time.Second))
+	if err != nil || len(duplicate) != 0 {
+		t.Fatalf("duplicate SyncDeviceWarnings() = (%+v, %v)", duplicate, err)
+	}
+	input.TemperatureWarning = false
+	resolved, err := repository.SyncDeviceWarnings(context.Background(), input, now.Add(2*time.Second))
+	if err != nil || len(resolved) != 1 || !resolved[0].Recovered {
+		t.Fatalf("resolved SyncDeviceWarnings() = (%+v, %v)", resolved, err)
+	}
+	input.TemperatureWarning = true
+	retriggered, err := repository.SyncDeviceWarnings(context.Background(), input, now.Add(3*time.Second))
+	if err != nil || len(retriggered) != 1 || !retriggered[0].Created || retriggered[0].Alert.ID == first[0].Alert.ID {
+		t.Fatalf("retriggered SyncDeviceWarnings() = (%+v, %v)", retriggered, err)
+	}
+}

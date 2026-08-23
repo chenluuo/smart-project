@@ -23,7 +23,7 @@ type databasePinger interface {
 func NewRouter(mode string, db databasePinger, authServices ...authService) *gin.Engine {
 	gin.SetMode(mode)
 	router := gin.New()
-	router.Use(gin.Logger(), gin.Recovery())
+	router.Use(observabilityMiddleware(), gin.Recovery())
 
 	health := healthHandler{db: db}
 	actuator := router.Group("/actuator/health")
@@ -138,6 +138,7 @@ type alertService interface {
 type agentService interface {
 	CreateSession(context.Context, uint64, *uint64) (*agent.Session, error)
 	AppendMessage(context.Context, string, agent.MessageInput) (*agent.Message, error)
+	AppendMessageByOwner(context.Context, uint64, string, agent.MessageInput) (*agent.Message, error)
 	ListMessages(context.Context, uint64, string, int, int) (agent.MessageList, error)
 	CloseSession(context.Context, uint64, string) (*agent.Session, error)
 }

@@ -20,9 +20,11 @@ type deviceStoreStub struct {
 	deviceID   uint64
 	listFilter ListFilter
 	bindInput  BindInput
+	listCalls  int
 }
 
 func (s *deviceStoreStub) ListByOwner(_ context.Context, ownerID uint64, filter ListFilter) ([]ListItem, int64, error) {
+	s.listCalls++
 	s.ownerID, s.listFilter = ownerID, filter
 	return s.items, s.total, s.listErr
 }

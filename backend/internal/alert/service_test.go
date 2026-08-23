@@ -29,6 +29,9 @@ type alertStoreStub struct {
 	triggerInput  TriggerInput
 	triggeredAt   time.Time
 	triggerRecord *TriggerRecord
+	warningInput  DeviceWarningInput
+	transitions   []WarningTransition
+	listCalls     int
 }
 
 func (s *alertStoreStub) ListRulesByOwner(_ context.Context, ownerID, plotID uint64) ([]Rule, error) {
@@ -42,6 +45,7 @@ func (s *alertStoreStub) UpsertRuleByOwner(_ context.Context, ownerID uint64, ru
 }
 
 func (s *alertStoreStub) ListAlertsByOwner(_ context.Context, ownerID uint64, filter ListFilter) ([]AlertListRow, int64, error) {
+	s.listCalls++
 	s.ownerID, s.filter = ownerID, filter
 	return s.rows, s.total, s.err
 }
@@ -54,6 +58,11 @@ func (s *alertStoreStub) ConfirmAlertByOwner(_ context.Context, ownerID, alertID
 func (s *alertStoreStub) CreateTriggeredAlert(_ context.Context, input TriggerInput, now time.Time) (*TriggerRecord, error) {
 	s.triggerInput, s.triggeredAt = input, now
 	return s.triggerRecord, s.err
+}
+
+func (s *alertStoreStub) SyncDeviceWarnings(_ context.Context, input DeviceWarningInput, _ time.Time) ([]WarningTransition, error) {
+	s.warningInput = input
+	return s.transitions, s.err
 }
 
 func TestListRulesMapsContractFields(t *testing.T) {
@@ -103,9 +112,10 @@ func TestUpsertRuleNormalizesAndValidatesInput(t *testing.T) {
 
 func TestListDefaultsAndMapsLegacyConfirmedState(t *testing.T) {
 	started := time.Date(2026, 8, 22, 8, 20, 0, 0, time.UTC)
+	threshold := decimal.NewFromInt(30)
 	store := &alertStoreStub{rows: []AlertListRow{{
 		ID: 3, PlotID: 11, PlotCode: "A3", Metric: "soilMoisture", Operator: OperatorLT,
-		Threshold: decimal.NewFromInt(30), DurationSeconds: 300, Level: LevelMedium,
+		Threshold: &threshold, DurationSeconds: 300, Level: LevelMedium,
 		Status: StatusAcknowledged, TriggerValue: decimal.RequireFromString("28.6"), TriggeredAt: started,
 	}}, total: 1}
 	result, err := NewService(store).List(context.Background(), 7, ListFilter{})
@@ -113,7 +123,7 @@ func TestListDefaultsAndMapsLegacyConfirmedState(t *testing.T) {
 		t.Fatalf("List() = (%+v, %v), filter=%+v", result, err, store.filter)
 	}
 	item := result.Items[0]
-	if item.Status != StatusConfirmed || item.Title != "A3 地块湿度偏低" || item.CurrentValue != 28.6 || item.ThresholdValue != 30 {
+	if item.Status != StatusConfirmed || item.Title != "A3 地块湿度偏低" || item.CurrentValue != 28.6 || item.ThresholdValue == nil || *item.ThresholdValue != 30 {
 		t.Fatalf("item = %+v", item)
 	}
 }
@@ -183,5 +193,53 @@ func TestTriggerValidatesAndMapsStoreErrors(t *testing.T) {
 	store.err = ErrConflict
 	if _, err := service.Trigger(context.Background(), input); !errors.Is(err, ErrConflict) {
 		t.Fatalf("disabled Trigger() error = %v", err)
+	}
+}
+
+func TestSyncDeviceWarningsPublishesCreateAndRecoveryWithoutRule(t *testing.T) {
+	now := time.Date(2026, 8, 23, 3, 0, 0, 0, time.UTC)
+	warningType := WarningLight
+	resolvedAt := now.Add(time.Minute)
+	store := &alertStoreStub{transitions: []WarningTransition{
+		{Alert: Alert{ID: 10, Level: LevelMedium, TriggeredAt: now, WarningType: &warningType}, Created: true, OwnerID: 7, PlotID: 11, PlotCode: "A3", Metric: "light"},
+		{Alert: Alert{ID: 9, ResolvedAt: &resolvedAt, WarningType: &warningType}, Recovered: true, OwnerID: 7, PlotID: 11, PlotCode: "A3", Metric: "light"},
+	}}
+	broker := events.NewBroker(10)
+	subscription := broker.Subscribe(7, "")
+	defer subscription.Close()
+	service := NewService(store, broker)
+	service.now = func() time.Time { return now }
+	input := DeviceWarningInput{OwnerID: 7, PlotID: 11, DeviceID: 31, Temperature: 26, SoilMoisture: 30, Light: 1000, LightWarning: true, OccurredAt: now}
+	result, err := service.SyncDeviceWarnings(context.Background(), input)
+	if err != nil || len(result) != 2 || store.warningInput.DeviceID != 31 {
+		t.Fatalf("SyncDeviceWarnings() = (%+v, %v), stored=%+v", result, err, store.warningInput)
+	}
+	eventsSeen := map[string]bool{}
+	for range 2 {
+		select {
+		case event := <-subscription.Events:
+			eventsSeen[event.Type] = true
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for warning event")
+		}
+	}
+	if !eventsSeen[events.TypeAlertCreated] || !eventsSeen[events.TypeAlertRecovered] {
+		t.Fatalf("events = %v", eventsSeen)
+	}
+}
+
+func TestListMapsDeviceWarningWithoutThreshold(t *testing.T) {
+	kind := WarningTemperature
+	store := &alertStoreStub{rows: []AlertListRow{{
+		ID: 3, PlotID: 11, PlotCode: "A3", WarningType: &kind, Level: LevelMedium,
+		Status: StatusActive, TriggerValue: decimal.RequireFromString("35.5"), TriggeredAt: time.Now(),
+	}}, total: 1}
+	result, err := NewService(store).List(context.Background(), 7, ListFilter{})
+	if err != nil || len(result.Items) != 1 {
+		t.Fatalf("List() = (%+v, %v)", result, err)
+	}
+	item := result.Items[0]
+	if item.Metric != "temperature" || item.Title != "A3 地块温度警告" || item.ThresholdValue != nil {
+		t.Fatalf("device warning item = %+v", item)
 	}
 }

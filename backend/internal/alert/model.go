@@ -10,6 +10,8 @@ import (
 type ComparisonOperator string
 type Level string
 type Status string
+type Source string
+type WarningType string
 
 const (
 	OperatorLT      ComparisonOperator = "LT"
@@ -23,9 +25,14 @@ const (
 	StatusConfirmed Status             = "CONFIRMED"
 	// StatusAcknowledged is retained for rows written before the API contract
 	// standardized the user-facing state name as CONFIRMED.
-	StatusAcknowledged Status = "ACKNOWLEDGED"
-	StatusResolved     Status = "RESOLVED"
-	StatusClosed       Status = "CLOSED"
+	StatusAcknowledged  Status      = "ACKNOWLEDGED"
+	StatusResolved      Status      = "RESOLVED"
+	StatusClosed        Status      = "CLOSED"
+	SourceRule          Source      = "RULE"
+	SourceDevice        Source      = "DEVICE"
+	WarningTemperature  WarningType = "TEMPERATURE"
+	WarningSoilMoisture WarningType = "SOIL_MOISTURE"
+	WarningLight        WarningType = "LIGHT"
 )
 
 type Rule struct {
@@ -46,8 +53,12 @@ func (Rule) TableName() string { return "alert_rules" }
 
 type Alert struct {
 	ID                 uint64          `json:"id" gorm:"primaryKey;autoIncrement"`
-	RuleID             uint64          `json:"ruleId" gorm:"column:rule_id;not null;index:idx_alerts_rule_status,priority:1"`
+	RuleID             *uint64         `json:"ruleId,omitempty" gorm:"column:rule_id;index:idx_alerts_rule_status,priority:1"`
+	PlotID             uint64          `json:"plotId" gorm:"column:plot_id;not null;index:idx_alerts_plot_status,priority:1"`
 	DeviceID           *uint64         `json:"deviceId,omitempty" gorm:"column:device_id;index:idx_alerts_device_triggered,priority:1"`
+	Source             Source          `json:"source" gorm:"size:16;not null"`
+	WarningType        *WarningType    `json:"warningType,omitempty" gorm:"column:warning_type;size:32"`
+	ActiveDedupKey     *string         `json:"-" gorm:"column:active_dedup_key;size:128;uniqueIndex:uk_alerts_active_dedup"`
 	AcknowledgedBy     *uint64         `json:"acknowledgedBy,omitempty" gorm:"column:acknowledged_by;index:idx_alerts_ack_user"`
 	Level              Level           `json:"level" gorm:"size:16;not null"`
 	Status             Status          `json:"status" gorm:"size:32;not null;index:idx_alerts_rule_status,priority:2"`

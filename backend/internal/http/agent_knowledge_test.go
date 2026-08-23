@@ -25,6 +25,12 @@ func (agentServiceStub) AppendMessage(_ context.Context, sessionID string, input
 	return &agent.Message{ID: 9, SessionID: sessionID, Role: agent.MessageRole(input.Role), Content: input.Content, CreatedAt: time.Date(2026, 8, 22, 0, 0, 0, 0, time.UTC)}, nil
 }
 
+func (agentServiceStub) AppendMessageByOwner(_ context.Context, _ uint64, sessionID string, input agent.MessageInput) (*agent.Message, error) {
+	return &agent.Message{ID: 10, SessionID: sessionID, Role: agent.MessageRole(input.Role), Content: input.Content, PlotID: input.PlotID, ModelVersion: stringPointer(input.ModelVersion), TraceID: stringPointer(input.TraceID), CreatedAt: time.Date(2026, 8, 22, 0, 0, 0, 0, time.UTC)}, nil
+}
+
+func stringPointer(value string) *string { return &value }
+
 func (agentServiceStub) ListMessages(_ context.Context, _ uint64, _ string, page, pageSize int) (agent.MessageList, error) {
 	return agent.MessageList{Items: []agent.Message{{ID: 9, Content: "answer"}}, Page: page, PageSize: pageSize, Total: 1}, nil
 }
@@ -81,6 +87,9 @@ func TestAgentRoutesAndInternalAuthentication(t *testing.T) {
 	}{
 		{name: "create session", method: http.MethodPost, path: "/api/v1/ai/sessions", body: `{}`, token: "signed-token", wantStatus: http.StatusCreated, wantBody: `"id":"chat_1"`},
 		{name: "list messages", method: http.MethodGet, path: "/api/v1/ai/sessions/chat_1/messages", token: "signed-token", wantStatus: http.StatusOK, wantBody: `"total":1`},
+		{name: "python appends", method: http.MethodPost, path: "/api/v1/agent/sessions/chat_1/messages", body: `{"role":"assistant","content":"answer","plot_id":"11","model_version":"model-v1"}`, token: "signed-token", wantStatus: http.StatusCreated, wantBody: `"messageId":10`},
+		{name: "python append rejects missing JWT", method: http.MethodPost, path: "/api/v1/agent/sessions/chat_1/messages", body: `{"role":"assistant","content":"answer"}`, wantStatus: http.StatusUnauthorized, wantBody: `"code":40101`},
+		{name: "python append rejects invalid plot ID", method: http.MethodPost, path: "/api/v1/agent/sessions/chat_1/messages", body: `{"role":"assistant","content":"answer","plot_id":"plot_a3"}`, token: "signed-token", wantStatus: http.StatusBadRequest, wantBody: `"code":40001`},
 		{name: "internal rejects missing key", method: http.MethodPost, path: "/internal/agent/sessions/chat_1/messages", body: `{"role":"ASSISTANT","content":"answer"}`, wantStatus: http.StatusUnauthorized, wantBody: `"code":40102`},
 		{name: "internal appends", method: http.MethodPost, path: "/internal/agent/sessions/chat_1/messages", body: `{"role":"ASSISTANT","content":"answer"}`, serviceKey: key, wantStatus: http.StatusCreated, wantBody: `"messageId":9`},
 	}
