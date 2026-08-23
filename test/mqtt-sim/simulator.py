@@ -61,6 +61,7 @@ CFG = {
     "prefix": "agri",
     "owner_id": "2",
     "device_sn": "SN-BEARPI-001",
+    "heartbeat_sns": "SN-VALVE-CODE-001",  # 心跳设备（灌溉阀门），逗号分隔多个
     "interval_ms": 1000,
     "connected": False,
     "running": False,
@@ -209,19 +210,30 @@ def _publish(payload: dict):
     global _client
     with LOCK:
         broker = CFG["broker"]
-        topic = f"{CFG['prefix']}/{CFG['owner_id']}/{CFG['device_sn']}/telemetry"
+        prefix = CFG["prefix"]
+        owner = CFG["owner_id"]
+        sn = CFG["device_sn"]
+        # 心跳设备（如灌溉阀门）：同期发布遥测使其有活动 → 设备列表显示在线
+        heartbeat_sns = [s.strip() for s in str(CFG.get("heartbeat_sns", "")).split(",") if s.strip()]
     if _client is None or not _client.is_connected():
         with LOCK:
             STATE["last_error"] = "MQTT 未连接"
         return
+    topics = [f"{prefix}/{owner}/{sn}/telemetry"] + [
+        f"{prefix}/{owner}/{h}/telemetry" for h in heartbeat_sns
+    ]
     try:
-        info = _client.publish(topic, json.dumps(payload, ensure_ascii=False), qos=1)
-        if info.rc != 0:
+        ok_count = 0
+        for topic in topics:
+            info = _client.publish(topic, json.dumps(payload, ensure_ascii=False), qos=1)
+            if info.rc == 0:
+                ok_count += 1
+        if ok_count == 0:
             with LOCK:
                 STATE["last_error"] = f"publish rc={info.rc}"
             return
         with LOCK:
-            STATE["publish_count"] += 1
+            STATE["publish_count"] += ok_count
             STATE["last_payload"] = payload
             STATE["last_error"] = None
             STATE["last_ts"] = time.time()
@@ -283,7 +295,7 @@ def _stop():
 def _state_snapshot():
     with LOCK:
         return {
-            "config": {k: CFG[k] for k in ("broker", "prefix", "owner_id", "device_sn", "interval_ms", "connected", "running")},
+            "config": {k: CFG[k] for k in ("broker", "prefix", "owner_id", "device_sn", "heartbeat_sns", "interval_ms", "connected", "running")},
             "sensors": list(SENSORS),
             "pump": dict(PUMP),
             "commands": list(COMMANDS),
@@ -352,7 +364,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, {"ok": True})
         elif path == "/api/config":
             with LOCK:
-                for k in ("broker", "prefix", "owner_id", "device_sn"):
+                for k in ("broker", "prefix", "owner_id", "device_sn", "heartbeat_sns"):
                     if k in body and body[k]:
                         CFG[k] = str(body[k]).strip()
                 if "interval_ms" in body and body["interval_ms"]:
@@ -423,6 +435,7 @@ _HTML = """<!DOCTYPE html>
   <label>prefix <input id="cfg-prefix" value="agri" style="width:70px"></label>
   <label>ownerId <input id="cfg-owner" value="2" style="width:60px"></label>
   <label>deviceSn <input id="cfg-sn" value="SN-BEARPI-001" style="width:140px"></label>
+  <label>心跳SN(逗号) <input id="cfg-heartbeat" value="SN-VALVE-CODE-001" style="width:150px"></label>
   <label>间隔ms <input id="cfg-interval" type="number" min="50" value="1000"></label>
   <span id="conn"><span class="dot off"></span>未连接</span>
   <button id="btn-start" class="btn start">▶ 启动</button>
@@ -532,9 +545,9 @@ function bindSensor(id) {
 })();
 
 function bindConfig() {
-  ['cfg-broker', 'cfg-prefix', 'cfg-owner', 'cfg-sn'].forEach(id => {
+  ['cfg-broker', 'cfg-prefix', 'cfg-owner', 'cfg-sn', 'cfg-heartbeat'].forEach(id => {
     $(id).addEventListener('change', () => {
-      const key = { 'cfg-broker': 'broker', 'cfg-prefix': 'prefix', 'cfg-owner': 'owner_id', 'cfg-sn': 'device_sn' }[id];
+      const key = { 'cfg-broker': 'broker', 'cfg-prefix': 'prefix', 'cfg-owner': 'owner_id', 'cfg-sn': 'device_sn', 'cfg-heartbeat': 'heartbeat_sns' }[id];
       schedulePost('/api/config', { [key]: $(id).value.trim() });
     });
   });
@@ -577,6 +590,7 @@ function render(s) {
   $('cfg-prefix').value = cfg.prefix;
   $('cfg-owner').value = cfg.owner_id;
   $('cfg-sn').value = cfg.device_sn;
+  $('cfg-heartbeat').value = cfg.heartbeat_sns;
   $('cfg-interval').value = cfg.interval_ms;
   const conn = $('conn');
   conn.innerHTML = cfg.connected
