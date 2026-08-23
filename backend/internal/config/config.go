@@ -51,6 +51,7 @@ type InternalConfig struct {
 type ObjectStorageConfig struct {
 	Enabled          bool
 	Endpoint         string
+	PublicEndpoint   string
 	AccessKey        string
 	SecretKey        string
 	Bucket           string
@@ -144,7 +145,8 @@ func Load() (Config, error) {
 		},
 		ObjectStorage: ObjectStorageConfig{
 			Enabled: objectStorageEnabled, Endpoint: value("MINIO_ENDPOINT", "localhost:9000"),
-			AccessKey: value("MINIO_ACCESS_KEY", "minioadmin"), SecretKey: value("MINIO_SECRET_KEY", "minioadmin"),
+			PublicEndpoint: strings.TrimSpace(os.Getenv("MINIO_PUBLIC_ENDPOINT")),
+			AccessKey:      value("MINIO_ACCESS_KEY", "minioadmin"), SecretKey: value("MINIO_SECRET_KEY", "minioadmin"),
 			Bucket: value("MINIO_BUCKET", "knowledge"), Region: value("MINIO_REGION", "us-east-1"),
 			Secure: objectStorageSecure, MaxUploadBytes: maxUploadBytes, SignedURLTimeout: signedURLTimeout,
 		},

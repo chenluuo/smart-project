@@ -50,7 +50,7 @@ func (r *Repository) FindIrrigationDevice(ctx context.Context, ownerID, plotID u
 		Joins("JOIN device_bindings AS b ON b.plot_id = p.id AND b.unbound_at IS NULL").
 		Joins("JOIN devices AS d ON d.id = b.device_id").
 		Where("p.id = ? AND p.owner_id = ? AND d.device_type = ?", plotID, ownerID, "IRRIGATION_VALVE").
-		Order("d.id ASC").First(&result).Error
+		Order("d.id ASC").Take(&result).Error
 	if err != nil {
 		return nil, err
 	}

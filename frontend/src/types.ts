@@ -1,0 +1,176 @@
+export type ApiResponse<T> = {
+  code: number;
+  message: string;
+  data: T;
+};
+
+export type User = {
+  id: number;
+  name: string;
+  role: string;
+  interactionStyle?: string | null;
+  knowledgeReliance?: string | null;
+};
+
+export type Plot = {
+  id: number;
+  code: string;
+  name: string;
+  cropName?: string | null;
+  area?: number | null;
+  status: 'ACTIVE' | 'DISABLED' | string;
+  soilMoisture?: number | null;
+  temperature?: number | null;
+  deviceStatus?: string | null;
+  alertCount?: number;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type DashboardOverview = {
+  sampleTime?: string | null;
+  avgSoilMoisture?: { value: number; unit: string } | null;
+  avgTemperature?: { value: number; unit: string } | null;
+  deviceOnline: { online: number; total: number; offline: number };
+  alerts: { active: number; pendingConfirm: number };
+  plots: Array<{
+    id: number;
+    code: string;
+    soilMoisture?: number | null;
+    temperature?: number | null;
+    status: string;
+  }>;
+};
+
+export type TelemetryLatest = {
+  plotId: number;
+  sampleTime?: string | null;
+  metrics: {
+    soilMoisture?: { value: number; unit: string };
+    temperature?: { value: number; unit: string };
+  };
+  sourceDevices: Array<{
+    id: number;
+    name: string;
+    status: string;
+    battery?: number | null;
+  }>;
+};
+
+export type Device = {
+  id: number;
+  deviceSn: string;
+  name: string;
+  type: string;
+  plotId: number;
+  status: string;
+  battery?: number | null;
+  lastSeenAt?: string | null;
+  firmwareVersion?: string | null;
+};
+
+export type DeviceStatusDetail = {
+  deviceId: number;
+  status: string;
+  battery?: number | null;
+  signal?: number | null;
+  lastSeenAt?: string | null;
+  message?: string | null;
+};
+
+export type PageResult<T> = {
+  items: T[];
+  page: number;
+  pageSize: number;
+  total: number;
+};
+
+export type IrrigationStatus = {
+  plotId: number;
+  valveDeviceId: number;
+  state: 'ON' | 'OFF' | string;
+  mode: string;
+  remainingSeconds: number;
+  maxSeconds: number;
+  lastCommandId?: string | null;
+};
+
+export type CommandItem = {
+  id: string;
+  plotCode: string;
+  action: string;
+  durationSeconds: number;
+  status: string;
+  operatorName: string;
+  createdAt: string;
+};
+
+export type ThresholdRule = {
+  id: number;
+  plotId: number;
+  metric: string;
+  operator: string;
+  value: number;
+  unit: string;
+  durationSeconds: number;
+  enabled: boolean;
+  level: string;
+};
+
+export type AlertItem = {
+  id: number;
+  plotId: number;
+  plotCode: string;
+  metric: string;
+  level: string;
+  status: string;
+  title: string;
+  content: string;
+  currentValue: number;
+  thresholdValue: number;
+  startedAt: string;
+  confirmedAt?: string | null;
+  confirmRemark?: string | null;
+  recoveredAt?: string | null;
+};
+
+export type KnowledgeDocument = {
+  id: number;
+  title: string;
+  category: string;
+  source?: string | null;
+  status: string;
+  version: number;
+  publishedAt?: string | null;
+  downloadUrl?: string | null;
+  objectKey?: string;
+  fileHash?: string;
+};
+
+export type AgentSession = {
+  id: string;
+  userId: number;
+  plotId?: number | null;
+  status: string;
+  summary?: string | null;
+  lastMessageAt?: string | null;
+};
+
+export type AgentMessage = {
+  id: number;
+  sessionId: string;
+  role: string;
+  content: string;
+  citations?: unknown;
+  plotId?: number | null;
+  modelVersion?: string | null;
+  traceId?: string | null;
+  createdAt: string;
+};
+
+export type EventNotice = {
+  id: string;
+  type: string;
+  data: Record<string, unknown>;
+  receivedAt: string;
+};
