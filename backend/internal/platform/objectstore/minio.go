@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/minio/minio-go/v7"
@@ -11,18 +12,20 @@ import (
 )
 
 type Config struct {
-	Endpoint  string
-	AccessKey string
-	SecretKey string
-	Bucket    string
-	Region    string
-	Secure    bool
+	Endpoint       string
+	PublicEndpoint string
+	AccessKey      string
+	SecretKey      string
+	Bucket         string
+	Region         string
+	Secure         bool
 }
 
 type MinIO struct {
-	client *minio.Client
-	bucket string
-	region string
+	client        *minio.Client
+	presignClient *minio.Client
+	bucket        string
+	region        string
 }
 
 func NewMinIO(config Config) (*MinIO, error) {
@@ -34,7 +37,18 @@ func NewMinIO(config Config) (*MinIO, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create MinIO client: %w", err)
 	}
-	return &MinIO{client: client, bucket: config.Bucket, region: config.Region}, nil
+	presignClient := client
+	if publicEndpoint := strings.TrimSpace(config.PublicEndpoint); publicEndpoint != "" && publicEndpoint != config.Endpoint {
+		presignClient, err = minio.New(publicEndpoint, &minio.Options{
+			Creds:  credentials.NewStaticV4(config.AccessKey, config.SecretKey, ""),
+			Secure: config.Secure,
+			Region: config.Region,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("create public MinIO client: %w", err)
+		}
+	}
+	return &MinIO{client: client, presignClient: presignClient, bucket: config.Bucket, region: config.Region}, nil
 }
 
 func (m *MinIO) EnsureBucket(ctx context.Context) error {
@@ -73,7 +87,7 @@ func (m *MinIO) Remove(ctx context.Context, objectKey string) error {
 }
 
 func (m *MinIO) PresignedGet(ctx context.Context, objectKey string, expiry time.Duration) (string, error) {
-	result, err := m.client.PresignedGetObject(ctx, m.bucket, objectKey, expiry, nil)
+	result, err := m.presignClient.PresignedGetObject(ctx, m.bucket, objectKey, expiry, nil)
 	if err != nil {
 		return "", fmt.Errorf("presign MinIO object %s: %w", objectKey, err)
 	}

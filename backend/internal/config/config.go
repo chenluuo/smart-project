@@ -16,9 +16,20 @@ type Config struct {
 	Database      DatabaseConfig
 	Redis         RedisConfig
 	MQTT          MQTTConfig
+	TDengine      TDengineConfig
 	Auth          AuthConfig
 	Internal      InternalConfig
 	ObjectStorage ObjectStorageConfig
+}
+
+type TDengineConfig struct {
+	Enabled     bool
+	RESTURL     string // taosAdapter REST 地址，如 http://localhost:6041
+	Username    string
+	Password    string
+	Database    string
+	BatchSize   int
+	FlushPeriod time.Duration
 }
 
 type MQTTConfig struct {
@@ -80,6 +91,7 @@ type InternalConfig struct {
 type ObjectStorageConfig struct {
 	Enabled          bool
 	Endpoint         string
+	PublicEndpoint   string
 	AccessKey        string
 	SecretKey        string
 	Bucket           string
@@ -174,6 +186,19 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	tdengineEnabled, err := boolValue("TDENGINE_ENABLED", false)
+	if err != nil {
+		return Config{}, err
+	}
+	tdengineBatchSize, err := intValue("TDENGINE_BATCH_SIZE", 100)
+	if err != nil || tdengineBatchSize < 1 {
+		return Config{}, fmt.Errorf("TDENGINE_BATCH_SIZE must be a positive integer")
+	}
+	tdengineFlushPeriod, err := durationValue("TDENGINE_FLUSH_PERIOD", 2*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+
 	dsn, err := databaseDSN()
 	if err != nil {
 		return Config{}, err
@@ -245,6 +270,12 @@ func Load() (Config, error) {
 			TopicPrefix: mqttTopicPrefix, ConnectTimeout: mqttConnectTimeout,
 			ReconnectBackoff: mqttReconnectBackoff, MessageTimeout: mqttMessageTimeout,
 		},
+		TDengine: TDengineConfig{
+			Enabled: tdengineEnabled, RESTURL: strings.TrimRight(value("TDENGINE_REST_URL", "http://localhost:6041"), "/"),
+			Username: value("TDENGINE_USERNAME", "root"), Password: value("TDENGINE_PASSWORD", "taosdata"),
+			Database: value("TDENGINE_DATABASE", "agri_telemetry"),
+			BatchSize: tdengineBatchSize, FlushPeriod: tdengineFlushPeriod,
+		},
 		Auth: AuthConfig{
 			JWTSecret: jwtSecret,
 			Issuer:    value("JWT_ISSUER", "smart-agriculture-api"),
@@ -257,7 +288,8 @@ func Load() (Config, error) {
 		},
 		ObjectStorage: ObjectStorageConfig{
 			Enabled: objectStorageEnabled, Endpoint: value("MINIO_ENDPOINT", "localhost:9000"),
-			AccessKey: value("MINIO_ACCESS_KEY", "minioadmin"), SecretKey: value("MINIO_SECRET_KEY", "minioadmin"),
+			PublicEndpoint: strings.TrimSpace(os.Getenv("MINIO_PUBLIC_ENDPOINT")),
+			AccessKey:      value("MINIO_ACCESS_KEY", "minioadmin"), SecretKey: value("MINIO_SECRET_KEY", "minioadmin"),
 			Bucket: value("MINIO_BUCKET", "knowledge"), Region: value("MINIO_REGION", "us-east-1"),
 			Secure: objectStorageSecure, MaxUploadBytes: maxUploadBytes, SignedURLTimeout: signedURLTimeout,
 		},
