@@ -108,6 +108,13 @@ async def handle_question(
     state = get_session(session_id) if session_id else None
     if state is None:
         session_id = session_id or "sess_" + ensure_trace_id()[:12]
+        # 在 Go 侧同步建会话（落库需要 Go 的 session_id；失败则降级用本地 id）
+        try:
+            go_sess = get_go_client().create_session(authorization, plot_id)
+            if go_sess.get("id"):
+                session_id = go_sess["id"]
+        except Exception:
+            pass  # Go 建会话失败降级本地 id（落库会继续失败，但不阻塞回答）
         state = create_session(user_id, session_id, plot_id)
     if state["status"] == STATUS_CLOSED:
         yield {"type": "error", "message": "会话已结束，请发起新会话"}
@@ -265,17 +272,18 @@ async def handle_question(
     can_close = _judge_can_close(question, answer)
 
     # ---------- 落库 + 窗口 + activity ----------
+    # 会话创建未带 plot（Go 按 JWT 归属校验），落库也不传 plot_id，避免与会话 plot 不一致被拒
     try:
         get_go_client().post_message(authorization, session_id, {
-            "role": "user", "content": question, "plot_id": plot_id, "model_version": get_config("llm").get("model"),
+            "role": "user", "content": question, "model_version": get_config("llm").get("model"),
         })
         get_go_client().post_message(authorization, session_id, {
             "role": "assistant", "content": answer,
             "citations": [{"docId": k.get("docId"), "title": k.get("title"), "version": k.get("version")} for k in knowledge[:5]] or None,
-            "plot_id": plot_id, "model_version": get_config("llm").get("model"),
+            "model_version": get_config("llm").get("model"),
         })
-    except Exception:
-        pass  # 落库失败不阻塞回答（告警日志记录）
+    except Exception as e:
+        print(f"[落库失败] session={session_id}: {e}", flush=True)  # 不阻塞回答，但记录便于排查
 
     # 更新短期窗口（只存文字对话，现场数据不进窗口）
     window = get_redis().window_get(user_id)

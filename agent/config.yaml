@@ -1,7 +1,7 @@
 # agent 服务共享配置（非敏感）
 # 敏感项必须走环境变量（config.py 解析 ${VAR} 占位，缺则报错退出）：
-#   LLM_API_KEY / REDIS_PASSWORD / MILVUS_TOKEN / MINIO_SECRET_KEY /
-#   JWT_SECRET / GO_INTERNAL_KEY
+#   LLM_API_KEY / EMBEDDING_API_KEY / REDIS_PASSWORD / MILVUS_TOKEN /
+#   MINIO_SECRET_KEY / JWT_SECRET / GO_INTERNAL_KEY
 services:
   redis:
     host: localhost
@@ -22,7 +22,7 @@ services:
 
   llm:
     base_url: "https://api.deepseek.com/v1"
-    api_key: "sk-9a563ed2c213414ab730b99cc8daee2a"
+    api_key: ${LLM_API_KEY}
     model: "deepseek-v4-flash"
     temperature: 0.3
     max_tokens: 1024
@@ -30,7 +30,7 @@ services:
   embedding:
     mode: "multimodal"      # multimodal=火山vision（默认）/ standard=OpenAI兼容纯文本（doubao-embedding-text、本地bge-m3等）
     base_url: "https://ark.cn-beijing.volces.com/api/v3"
-    api_key: "ark-c4453c5a-3ec6-4b67-8b75-d62b9305fc21-fbbba"
+    api_key: ${EMBEDDING_API_KEY}
     model: "ep-20260621064553-q2m69"
     dimensions: 1024        # 自定义输出维度（multimodal 支持 1024，实测 512 不支持）
 
@@ -56,6 +56,8 @@ services:
     close_timeout_minutes: 5
     min_messages_for_summary: 2
     memory_top_k: 3
+    max_concurrency: 20         # 最大并发对话数（并发满立即拒绝，不排队）
+    concurrency_wait_seconds: 0 # 并发等待上限=0：并发满立即拒绝（组内暂不排队）
 
   context:
     port: 8001
@@ -64,7 +66,7 @@ services:
   tool:
     port: 8002
     base_url: "http://localhost:8002"
-    mock_go: true           # 测试期：工具返回契约示例数据（Go 就绪后改回 false）
+    mock_go: false          # Go 已部署联调：工具走真实 Go 接口
     top_k: 5                # search_knowledge 默认 top_k
     plots_full_threshold: 5 # get_user_plots 全量返回阈值
 

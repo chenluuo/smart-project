@@ -113,15 +113,7 @@ python worker.py           # ingest（workdir=ingest-service）
 
 ### 4. 测试
 
-```powershell
-python -m unittest discover -s tests        # 单元测试（15）
-python scripts/smoke_tool.py                # tool 冒烟
-python scripts/smoke_context.py             # context 冒烟
-python scripts/test_full.py                 # 完整测试（21 项）
-python scripts/test_rag.py                  # RAG 链路（需 Milvus）
-python scripts/test_memory.py               # 记忆召回（需 Milvus + Redis）
-python scripts/test_latency.py              # 耗时/TTFT
-```
+测试脚本已移除（测试期产物）；联调验证走 Go 后端 + 前端页面直连。
 
 ## 四、核心设计要点
 
@@ -135,6 +127,7 @@ python scripts/test_latency.py              # 耗时/TTFT
 | **知识库** | 元数据状态机归 Go（可用性 Go 保证）；向量化归智能体（Go 通知 → ingest → 火山 embedding → Milvus knowledge collection，无状态过滤） |
 | **长期记忆** | 会话 closed → ingest 摘要（LLM）→ Milvus memory collection（`user_id` 强隔离，`source_type=memory`）→ 每轮自动召回 |
 | **SSE** | 先发 `started` 占位事件（响应头立即返回），再逐 delta 流式 answer，`done` 带 canClose/sources |
+| **并发控制** | `agent.max_concurrency`（默认 4）限制同时处理的对话数；`concurrency_wait_seconds=0`（当前）并发满立即返回"系统繁忙"不排队；调 >0 可恢复排队；`/healthz` 暴露 in_flight/waiting/available |
 | **失败重投** | ingest 消费"成功才 ACK"；失败重投（retry 计数，超 3 次丢弃） |
 | **可观测性** | 三个 HTTP 服务每次请求输出一条 JSON 完成记录并回传 `X-Request-ID`/`X-Trace-Id`；ingest 每次消费输出一条成功或失败记录；跨服务同时透传两个 ID |
 
