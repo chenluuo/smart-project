@@ -77,11 +77,17 @@ type IngestService struct {
 	activity  activityWriter
 	warnings  warningSynchronizer
 	publisher events.Publisher
+	history   HistoryWriter // 可选：TDengine 历史写入
 	now       func() time.Time
 }
 
 func NewIngestService(latest LatestStore, activity activityWriter, warnings warningSynchronizer, publisher events.Publisher) *IngestService {
 	return &IngestService{latest: latest, activity: activity, warnings: warnings, publisher: publisher, now: time.Now}
+}
+
+// ConfigureHistory 注入历史写入器（TDengine），遥测上报时同步记录原始值。
+func (s *IngestService) ConfigureHistory(h HistoryWriter) {
+	s.history = h
 }
 
 func (s *IngestService) Ingest(ctx context.Context, source TrustedSource, payload Payload) (*Latest, error) {
@@ -115,6 +121,12 @@ func (s *IngestService) Ingest(ctx context.Context, source TrustedSource, payloa
 	if s.activity != nil {
 		if err := s.activity.MarkActive(ctx, source.OwnerID, source.DeviceID, at); err != nil {
 			return nil, fmt.Errorf("mark device active: %w", err)
+		}
+	}
+	if s.history != nil {
+		// 原始遥测写入 TDengine（批量异步，失败不阻塞 ingest 主链路）
+		if err := s.history.Record(ctx, source, at, payload); err != nil {
+			return nil, fmt.Errorf("record telemetry history: %w", err)
 		}
 	}
 	if s.publisher != nil {

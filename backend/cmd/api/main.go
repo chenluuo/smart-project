@@ -26,6 +26,7 @@ import (
 	"github.com/chenluuo/smart-project/backend/internal/platform/objectstore"
 	"github.com/chenluuo/smart-project/backend/internal/platform/redisstore"
 	"github.com/chenluuo/smart-project/backend/internal/plot"
+	"github.com/chenluuo/smart-project/backend/internal/platform/tdengine"
 	"github.com/chenluuo/smart-project/backend/internal/telemetry"
 )
 
@@ -101,6 +102,16 @@ func main() {
 	}
 	telemetryService := telemetry.NewService(latestStore, telemetry.NullStore{})
 	telemetryIngestService := telemetry.NewIngestService(latestStore, activityStore, alertService, eventBroker)
+	// TDengine：高频遥测历史（写入 + 聚合查询）
+	var tdClient *tdengine.Client
+	var tdWriter *telemetry.TDengineWriter
+	if cfg.TDengine.Enabled {
+		tdClient = tdengine.NewClient(cfg.TDengine.RESTURL, cfg.TDengine.Username, cfg.TDengine.Password, cfg.TDengine.Database)
+		tdWriter = telemetry.NewTDengineWriter(tdClient, cfg.TDengine.Database, cfg.TDengine.BatchSize, cfg.TDengine.FlushPeriod)
+		defer tdWriter.Close()
+		telemetryService = telemetry.NewService(latestStore, telemetry.NewTDengineStore(tdClient, cfg.TDengine.Database))
+		telemetryIngestService.ConfigureHistory(tdWriter)
+	}
 	var mqttClient *mqttclient.Client
 	if cfg.MQTT.Enabled {
 		mqttHandler := mqttclient.NewHandler(
