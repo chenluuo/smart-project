@@ -124,11 +124,12 @@ func (s *AuthService) Login(ctx context.Context, accountName, password string) (
 		return nil, errors.New("user has no assigned role")
 	}
 
-	token, expiresIn, err := s.tokens.Issue(user.ID, user.AccountName, roles[0])
+	role := primaryRole(roles)
+	token, expiresIn, err := s.tokens.Issue(user.ID, user.AccountName, role)
 	if err != nil {
 		return nil, fmt.Errorf("issue token: %w", err)
 	}
-	return &LoginResult{AccessToken: token, ExpiresIn: expiresIn, User: user, Role: roles[0]}, nil
+	return &LoginResult{AccessToken: token, ExpiresIn: expiresIn, User: user, Role: role}, nil
 }
 
 func (s *AuthService) Authenticate(token string) (Claims, error) {
@@ -150,7 +151,16 @@ func (s *AuthService) CurrentUser(ctx context.Context, userID uint64) (*CurrentU
 	if len(roles) == 0 {
 		return nil, errors.New("user has no assigned role")
 	}
-	return &CurrentUserResult{User: user, Role: roles[0]}, nil
+	return &CurrentUserResult{User: user, Role: primaryRole(roles)}, nil
+}
+
+func primaryRole(roles []string) string {
+	for _, role := range roles {
+		if role == "SYSTEM_ADMIN" {
+			return role
+		}
+	}
+	return roles[0]
 }
 
 func validAccountName(value string) bool {

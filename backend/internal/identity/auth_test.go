@@ -12,6 +12,7 @@ import (
 
 type memoryUserStore struct {
 	users []*User
+	roles []string
 }
 
 func (s *memoryUserStore) FindUserByAccountName(_ context.Context, accountName string) (*User, error) {
@@ -50,10 +51,43 @@ func (s *memoryUserStore) CreateUser(_ context.Context, user *User) error {
 func (s *memoryUserStore) FindRoleCodesByUserID(_ context.Context, userID uint64) ([]string, error) {
 	for _, user := range s.users {
 		if user.ID == userID {
+			if len(s.roles) > 0 {
+				return s.roles, nil
+			}
 			return []string{"FARMER"}, nil
 		}
 	}
 	return nil, ErrUserNotFound
+}
+
+func TestAuthServicePrefersSystemAdminRole(t *testing.T) {
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte("strong-password"), bcrypt.DefaultCost)
+	if err != nil {
+		t.Fatalf("GenerateFromPassword() error = %v", err)
+	}
+	store := &memoryUserStore{
+		users: []*User{{ID: 7, AccountName: "admin", PasswordHash: string(passwordHash), Status: UserStatusActive}},
+		roles: []string{"FARMER", "SYSTEM_ADMIN"},
+	}
+	tokens, err := NewTokenManager(strings.Repeat("s", 32), "test-api", time.Hour)
+	if err != nil {
+		t.Fatalf("NewTokenManager() error = %v", err)
+	}
+	service := NewAuthService(store, tokens)
+	result, err := service.Login(context.Background(), "admin", "strong-password")
+	if err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+	if result.Role != "SYSTEM_ADMIN" {
+		t.Fatalf("Login() role = %q, want SYSTEM_ADMIN", result.Role)
+	}
+	claims, err := service.Authenticate(result.AccessToken)
+	if err != nil {
+		t.Fatalf("Authenticate() error = %v", err)
+	}
+	if claims.Role != "SYSTEM_ADMIN" {
+		t.Fatalf("token role = %q, want SYSTEM_ADMIN", claims.Role)
+	}
 }
 
 func TestAuthServiceRegisterAndLogin(t *testing.T) {

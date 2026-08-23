@@ -215,9 +215,12 @@ export default function App() {
     const form = new FormData(event.currentTarget);
     setBusy(true);
     try {
-      await api.uploadKnowledge(form);
+      const uploaded = await api.uploadKnowledge(form);
       const knowledge = await api.knowledge();
-      setData((current) => ({ ...current, knowledge }));
+      setData((current) => ({
+        ...current,
+        knowledge: [uploaded, ...knowledge.filter((document) => document.id !== uploaded.id)]
+      }));
       event.currentTarget.reset();
       setNotice('知识文档已上传');
     } catch (error) {
