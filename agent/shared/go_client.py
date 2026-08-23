@@ -106,6 +106,13 @@ class GoClient:
         )
         return data if isinstance(data, dict) else {}
 
+    def close_session(self, authorization: str, session_id: str) -> dict[str, Any]:
+        """关闭 Go 侧会话（幂等；本地会话不存在时 Go 返回 404，调用方容忍）。"""
+        data = self._request(
+            "POST", f"/ai/sessions/{session_id}/close", authorization=authorization
+        )
+        return data if isinstance(data, dict) else {}
+
     # ---------- 控制（JWT，复用 Go 已有接口） ----------
     def get_irrigation_status(self, authorization: str, plot_id: str) -> dict[str, Any]:
         data = self._request(

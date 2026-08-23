@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field  # noqa: E402
 from orchestrator import handle_question  # noqa: E402
 from session import STATUS_CLOSED, close, get_session  # noqa: E402
 from shared.config import get_config  # noqa: E402
+from shared.go_client import get_go_client  # noqa: E402
 from shared.jwt import JWTError, user_id_from_token  # noqa: E402
 from shared.observability import install_observability  # noqa: E402
 from shared.redis_client import get_redis  # noqa: E402
@@ -153,6 +154,11 @@ def close_session(session_id: str, request: Request, authorization: str = Header
     if state is None:
         raise HTTPException(status_code=404, detail="会话不存在")
     close(session_id, state)
+    # 同步关闭 Go 侧会话（chat_xxx id；幂等，失败不阻塞本地状态机）
+    try:
+        get_go_client().close_session(authorization, session_id)
+    except Exception:
+        pass
     get_redis().xadd("session.summary", {"session_id": session_id, "user_id": state.get("user_id")})
     return {"session_id": session_id, "status": STATUS_CLOSED}
 
