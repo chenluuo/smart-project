@@ -102,10 +102,16 @@ type Store interface {
 }
 
 type Service struct {
-	commands  Store
-	publisher events.Publisher
-	snapshots IrrigationSnapshotStore
-	now       func() time.Time
+	commands   Store
+	publisher  events.Publisher
+	snapshots  IrrigationSnapshotStore
+	commandPub CommandPublisher
+	now        func() time.Time
+}
+
+// CommandPublisher 向设备下发命令(当前由 MQTT 客户端实现)。
+type CommandPublisher interface {
+	PublishCommand(ownerID uint64, deviceSN string, payload []byte) error
 }
 
 type IrrigationSnapshotStore interface {
@@ -123,6 +129,10 @@ func NewService(commands Store, publishers ...events.Publisher) *Service {
 
 func (s *Service) ConfigureSnapshotStore(store IrrigationSnapshotStore) {
 	s.snapshots = store
+}
+
+func (s *Service) ConfigureCommandPublisher(pub CommandPublisher) {
+	s.commandPub = pub
 }
 
 func (s *Service) Issue(ctx context.Context, ownerID, plotID uint64, input IssueInput) (*IssueResult, error) {
@@ -199,6 +209,25 @@ func (s *Service) Issue(ctx context.Context, ownerID, plotID uint64, input Issue
 		}
 		if err := s.snapshots.Put(ctx, snapshot, now.UTC()); err != nil {
 			slog.Warn("write irrigation Redis snapshot", "plotId", plotID, "commandId", command.CommandID, "error", err)
+		}
+	}
+	if s.commandPub != nil && irrigationDevice.DeviceSN != "" {
+		cmdPayload := map[string]any{
+			"commandId": command.CommandID,
+			"action":    input.Action,
+			"mode":      input.Mode,
+			"reason":    input.Reason,
+		}
+		if input.Action == "OPEN" {
+			cmdPayload["durationSeconds"] = input.DurationSeconds
+		}
+		cmdJSON, err := json.Marshal(cmdPayload)
+		if err != nil {
+			slog.Warn("encode MQTT command payload", "commandId", command.CommandID, "error", err)
+		} else if err := s.commandPub.PublishCommand(ownerID, irrigationDevice.DeviceSN, cmdJSON); err != nil {
+			slog.Warn("publish MQTT command", "commandId", command.CommandID, "deviceSn", irrigationDevice.DeviceSN, "error", err)
+		} else {
+			slog.Info("MQTT command published", "commandId", command.CommandID, "deviceSn", irrigationDevice.DeviceSN)
 		}
 	}
 	if s.publisher != nil {
