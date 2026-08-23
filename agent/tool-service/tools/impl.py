@@ -359,7 +359,9 @@ IRRIGATE_TO_TARGET_SCHEMA = {
 }
 
 _POLL_SECONDS = 10          # 湿度轮询间隔
-_MAX_WAIT_SECONDS = 600     # 兜底超时（10 分钟），超过自动关闭
+# 兜底超时：必须严格小于 agent 侧 tool_call_timeout_seconds（默认 720s），
+# 保证"工具调用超时前"水泵已被工具自身关闭（工具先超时→关泵→返回，agent 侧超时时泵已关）。
+_MAX_WAIT_SECONDS = 600
 
 
 def _current_humidity(authorization: str, plot_id: str) -> float | None:
@@ -370,6 +372,23 @@ def _current_humidity(authorization: str, plot_id: str) -> float | None:
         return float(value) if value is not None else None
     except Exception:
         return None
+
+
+def _close_pump_with_retry(authorization: str, plot_id: str, reason: str, retries: int = 3) -> bool:
+    """关泵并重试（CLOSE 失败会补发），返回是否已确认关闭。"""
+    import time as _t
+
+    for _ in range(retries):
+        try:
+            result = send_irrigation_command(authorization, {
+                "plot_id": plot_id, "action": "CLOSE", "reason": reason,
+            })
+            if result.get("ok"):
+                return True
+        except Exception:
+            pass
+        _t.sleep(1)
+    return False
 
 
 def irrigate_to_target_humidity(authorization: str, args: dict) -> dict:
@@ -395,33 +414,42 @@ def irrigate_to_target_humidity(authorization: str, args: dict) -> dict:
     if not opened.get("ok"):
         return {"ok": False, "error": f"开启水泵失败: {opened}"}
 
-    started = time.time()
-    last = current
-    while time.time() - started < _MAX_WAIT_SECONDS:
-        time.sleep(_POLL_SECONDS)
-        current = _current_humidity(authorization, plot_id)
-        if current is None:
-            continue
+    # 保证关泵铁律：OPEN 之后的所有退出路径（达标/超时/异常）都会关闭水泵
+    pump_open = True
+    close_reason: str | None = None
+    try:
+        started = time.time()
         last = current
-        if current >= target:
-            send_irrigation_command(authorization, {
-                "plot_id": plot_id, "action": "CLOSE",
-                "reason": f"达到目标湿度 {target:.1f}%（当前 {current:.1f}%）",
-            })
-            return {"ok": True, "data": {
-                "status": "DONE", "plotId": plot_id, "current": current, "target": target,
-                "durationSeconds": int(time.time() - started),
-                "message": f"已灌溉至目标湿度 {target:.1f}%（当前 {current:.1f}%），水泵已自动关闭",
-            }}
+        while time.time() - started < _MAX_WAIT_SECONDS:
+            time.sleep(_POLL_SECONDS)
+            current = _current_humidity(authorization, plot_id)
+            if current is None:
+                continue
+            last = current
+            if current >= target:
+                close_reason = f"达到目标湿度 {target:.1f}%（当前 {current:.1f}%）"
+                pump_open = not _close_pump_with_retry(authorization, plot_id, close_reason)
+                return {"ok": True, "data": {
+                    "status": "DONE", "plotId": plot_id, "current": current, "target": target,
+                    "durationSeconds": int(time.time() - started),
+                    "message": f"已灌溉至目标湿度 {target:.1f}%（当前 {current:.1f}%），水泵已自动关闭",
+                }}
 
-    send_irrigation_command(authorization, {
-        "plot_id": plot_id, "action": "CLOSE",
-        "reason": f"目标湿度灌溉超时（{_MAX_WAIT_SECONDS}s），当前 {last:.1f}%",
-    })
-    return {"ok": True, "data": {
-        "status": "TIMEOUT", "plotId": plot_id, "current": last, "target": target,
-        "message": f"轮询 {_MAX_WAIT_SECONDS}s 未达到目标湿度 {target:.1f}%（当前 {last:.1f}%），已自动关闭水泵",
-    }}
+        # 超时：关泵（必然在 agent 调用超时之前完成，见 _MAX_WAIT_SECONDS 说明）
+        close_reason = f"目标湿度灌溉超时（{_MAX_WAIT_SECONDS}s），当前 {last:.1f}%"
+        pump_open = not _close_pump_with_retry(authorization, plot_id, close_reason)
+        return {"ok": True, "data": {
+            "status": "TIMEOUT", "plotId": plot_id, "current": last, "target": target,
+            "message": f"轮询 {_MAX_WAIT_SECONDS}s 未达到目标湿度 {target:.1f}%（当前 {last:.1f}%），已自动关闭水泵",
+        }}
+    finally:
+        # 兜底：任何未捕获异常导致提前退出，也保证水泵被关闭（含补发重试）
+        if pump_open:
+            try:
+                _close_pump_with_retry(authorization, plot_id, close_reason or "目标湿度灌溉异常退出，兜底关闭水泵")
+            except Exception:
+                pass
+            pump_open = False
 
 
 # ============================================================
