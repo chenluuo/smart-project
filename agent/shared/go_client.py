@@ -14,7 +14,7 @@ from typing import Any
 import httpx
 
 from shared.config import get_config
-from shared.trace import HEADER, ensure_trace_id
+from shared.trace import HEADER, REQUEST_HEADER, ensure_request_id, ensure_trace_id
 
 
 class GoClient:
@@ -29,7 +29,11 @@ class GoClient:
         )
 
     def _headers(self, authorization: str = "", internal: bool = False) -> dict[str, str]:
-        h = {HEADER: ensure_trace_id(), "Content-Type": "application/json"}
+        h = {
+            HEADER: ensure_trace_id(),
+            REQUEST_HEADER: ensure_request_id(),
+            "Content-Type": "application/json",
+        }
         if internal:
             if not self.internal_key:
                 raise RuntimeError("未配置 GO_INTERNAL_KEY")

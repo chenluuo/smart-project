@@ -190,6 +190,12 @@ password: smart_agriculture
 
 生产环境不得使用示例密码，也不得将密钥提交到仓库。
 
+## 可观测性日志
+
+API 日志输出到标准输出，格式为单行 JSON。每个 HTTP 请求都会生成一条 `http_request_completed` 记录，并在响应中返回 `X-Request-ID` 和 `X-Trace-ID`；合法的上游 ID 会原样透传，缺失或非法时自动生成。记录包含 `method/route/path/status/result/duration_ms/request_bytes/response_bytes/client_ip`，认证成功后还包含 `actor_id`。
+
+日志只记录 URL path，不记录查询参数、请求体、JWT、密码、设备密钥、内部服务密钥或文档内容。可用 `request_id` 定位单次请求，用 `trace_id` 串联 Agent、Context、Tool 和 Go 后端调用。
+
 ## 下一步
 
 1. 接入 EMQX 和 TDengine，并把 MQTT 消息交给现有遥测写入服务。

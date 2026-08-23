@@ -29,6 +29,7 @@ import (
 )
 
 func main() {
+	configureLogging()
 	cfg, err := config.Load()
 	if err != nil {
 		slog.Error("load configuration", "error", err)
@@ -196,6 +197,13 @@ func main() {
 		slog.Error("graceful shutdown", "error", err)
 		os.Exit(1)
 	}
+}
+
+func configureLogging() {
+	handler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})
+	slog.SetDefault(slog.New(handler.WithAttrs([]slog.Attr{
+		slog.String("service", "smart-agriculture-api"),
+	})))
 }
 
 type combinedPinger struct {

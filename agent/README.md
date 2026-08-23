@@ -114,7 +114,7 @@ python worker.py           # ingest（workdir=ingest-service）
 ### 4. 测试
 
 ```powershell
-python -m unittest discover -s tests        # 单元测试（13）
+python -m unittest discover -s tests        # 单元测试（15）
 python scripts/smoke_tool.py                # tool 冒烟
 python scripts/smoke_context.py             # context 冒烟
 python scripts/test_full.py                 # 完整测试（21 项）
@@ -136,6 +136,9 @@ python scripts/test_latency.py              # 耗时/TTFT
 | **长期记忆** | 会话 closed → ingest 摘要（LLM）→ Milvus memory collection（`user_id` 强隔离，`source_type=memory`）→ 每轮自动召回 |
 | **SSE** | 先发 `started` 占位事件（响应头立即返回），再逐 delta 流式 answer，`done` 带 canClose/sources |
 | **失败重投** | ingest 消费"成功才 ACK"；失败重投（retry 计数，超 3 次丢弃） |
+| **可观测性** | 三个 HTTP 服务每次请求输出一条 JSON 完成记录并回传 `X-Request-ID`/`X-Trace-Id`；ingest 每次消费输出一条成功或失败记录；跨服务同时透传两个 ID |
+
+HTTP 完成记录包含服务、路由、状态、耗时、请求/响应字节数和关联 ID；已识别用户时包含 `actor_id`。Stream 记录包含 stream、event_id、处理结果、耗时及重投/丢弃结果。日志不记录查询参数、请求体、JWT、内部密钥或完整业务内容。
 
 ## 五、与 Go 主后端的边界
 

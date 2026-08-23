@@ -23,7 +23,7 @@ type databasePinger interface {
 func NewRouter(mode string, db databasePinger, authServices ...authService) *gin.Engine {
 	gin.SetMode(mode)
 	router := gin.New()
-	router.Use(gin.Logger(), gin.Recovery())
+	router.Use(observabilityMiddleware(), gin.Recovery())
 
 	health := healthHandler{db: db}
 	actuator := router.Group("/actuator/health")

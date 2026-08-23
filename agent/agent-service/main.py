@@ -20,10 +20,12 @@ from orchestrator import handle_question  # noqa: E402
 from session import STATUS_CLOSED, close, get_session  # noqa: E402
 from shared.config import get_config  # noqa: E402
 from shared.jwt import JWTError, user_id_from_token  # noqa: E402
+from shared.observability import install_observability  # noqa: E402
 from shared.redis_client import get_redis  # noqa: E402
-from shared.trace import ensure_trace_id  # noqa: E402
+from shared.trace import set_actor_id  # noqa: E402
 
 app = FastAPI(title="agent-service", version="0.1.0")
+install_observability(app, "agent-service")
 
 
 class ChatRequest(BaseModel):
@@ -51,7 +53,8 @@ async def chat(req: ChatRequest, request: Request,
                authorization: str = Header(default=""),
                x_trace_id: str = Header(default="", alias="X-Trace-Id")) -> StreamingResponse:
     user_id = _require_user(authorization)
-    ensure_trace_id() if not x_trace_id else None
+    set_actor_id(user_id)
+    request.state.actor_id = user_id
 
     async def event_stream():
         # 先发占位事件：立即发出响应头，避免客户端长时间等待首 token（TTFT）
@@ -80,8 +83,10 @@ class CloseRequest(BaseModel):
 
 
 @app.post("/agent/chat/sessions/{session_id}/close")
-def close_session(session_id: str, authorization: str = Header(default="")) -> dict:
-    _require_user(authorization)
+def close_session(session_id: str, request: Request, authorization: str = Header(default="")) -> dict:
+    user_id = _require_user(authorization)
+    set_actor_id(user_id)
+    request.state.actor_id = user_id
     state = get_session(session_id)
     if state is None:
         raise HTTPException(status_code=404, detail="会话不存在")
