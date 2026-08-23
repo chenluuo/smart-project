@@ -111,6 +111,7 @@ func main() {
 		mqttClient = mqttclient.New(cfg.MQTT, mqttHandler)
 		mqttClient.Start()
 		defer mqttClient.Close()
+		controlService.ConfigureCommandPublisher(mqttClient)
 	}
 	agentService := agent.NewService(agent.NewRepository(db))
 	var knowledgeObjectStore knowledge.ObjectStore
