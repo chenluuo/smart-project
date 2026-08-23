@@ -56,7 +56,10 @@ async def _call_context(payload: dict, authorization: str) -> dict:
 
 
 async def _call_tool(name: str, args: dict, authorization: str) -> dict:
-    async with httpx.AsyncClient(timeout=15, trust_env=False) as client:
+    # 超时放宽：目标湿度灌溉等工具在"执行内闭环"（OPEN→轮询湿度→达标/超时→CLOSE）
+    # 可能运行数分钟，普通工具不受影响（其自身执行很快）
+    timeout = float(get_config("agent").get("tool_call_timeout_seconds", 720))
+    async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
         resp = await client.post(
             f"{_tool_url}/tools/{name}/execute",
             json={"args": args},
