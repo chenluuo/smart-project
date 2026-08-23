@@ -51,6 +51,14 @@ func (r Repositories) ListByOwner(ctx context.Context, ownerID uint64, filter Li
 	if filter.Status != nil {
 		query = query.Where("d.status = ?", *filter.Status)
 	}
+	if filter.DerivedStatus != nil {
+		query = query.Where("d.status IN ?", []Status{StatusOnline, StatusOffline})
+		if *filter.DerivedStatus == StatusOnline {
+			query = query.Where("d.id IN ?", filter.ActiveDeviceIDs)
+		} else if len(filter.ActiveDeviceIDs) > 0 {
+			query = query.Where("d.id NOT IN ?", filter.ActiveDeviceIDs)
+		}
+	}
 	if filter.DeviceType != "" {
 		query = query.Where("d.device_type = ?", filter.DeviceType)
 	}

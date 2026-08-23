@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -100,7 +101,13 @@ type Store interface {
 type Service struct {
 	commands  Store
 	publisher events.Publisher
+	snapshots IrrigationSnapshotStore
 	now       func() time.Time
+}
+
+type IrrigationSnapshotStore interface {
+	Get(context.Context, uint64, time.Time) (*IrrigationStatus, bool, error)
+	Put(context.Context, IrrigationStatus, time.Time) error
 }
 
 func NewService(commands Store, publishers ...events.Publisher) *Service {
@@ -109,6 +116,10 @@ func NewService(commands Store, publishers ...events.Publisher) *Service {
 		service.publisher = publishers[0]
 	}
 	return service
+}
+
+func (s *Service) ConfigureSnapshotStore(store IrrigationSnapshotStore) {
+	s.snapshots = store
 }
 
 func (s *Service) Issue(ctx context.Context, ownerID, plotID uint64, input IssueInput) (*IssueResult, error) {
@@ -169,6 +180,19 @@ func (s *Service) Issue(ctx context.Context, ownerID, plotID uint64, input Issue
 	if err := s.commands.Save(ctx, command); err != nil {
 		return nil, fmt.Errorf("complete irrigation command: %w", err)
 	}
+	if s.snapshots != nil {
+		snapshot := IrrigationStatus{
+			PlotID: plotID, ValveDeviceID: irrigationDevice.DeviceID, State: "OFF", Mode: input.Mode,
+			MaxSeconds: MaxIrrigationSeconds, LastCommandID: &command.CommandID,
+		}
+		if input.Action == "OPEN" {
+			snapshot.State = "ON"
+			snapshot.RemainingSeconds = input.DurationSeconds
+		}
+		if err := s.snapshots.Put(ctx, snapshot, now.UTC()); err != nil {
+			slog.Warn("write irrigation Redis snapshot", "plotId", plotID, "commandId", command.CommandID, "error", err)
+		}
+	}
 	if s.publisher != nil {
 		_, _ = events.PublishCommandResult(s.publisher, events.CommandResult{
 			OwnerID: ownerID, CommandID: command.CommandID, Status: string(command.Status),
@@ -193,6 +217,16 @@ func (s *Service) IrrigationStatus(ctx context.Context, ownerID, plotID uint64) 
 	result := &IrrigationStatus{
 		PlotID: irrigationDevice.PlotID, ValveDeviceID: irrigationDevice.DeviceID,
 		State: "OFF", Mode: "MANUAL", MaxSeconds: MaxIrrigationSeconds,
+	}
+	if s.snapshots != nil {
+		cached, hit, err := s.snapshots.Get(ctx, plotID, s.now().UTC())
+		if err != nil {
+			return nil, fmt.Errorf("read irrigation snapshot: %w", err)
+		}
+		if hit {
+			cached.ValveDeviceID = irrigationDevice.DeviceID
+			return cached, nil
+		}
 	}
 	command, err := s.commands.FindLatestSuccessfulByDeviceAndPlot(ctx, irrigationDevice.DeviceID, irrigationDevice.PlotID)
 	if errors.Is(err, gorm.ErrRecordNotFound) || command == nil {

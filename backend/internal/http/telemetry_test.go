@@ -81,9 +81,10 @@ func TestPlotTelemetryValidatesIDAndOwnership(t *testing.T) {
 func TestPlotTelemetryReturnsLatestAndSourceDevices(t *testing.T) {
 	soil := telemetry.MetricValue{Value: 27.8, Unit: "%"}
 	temp := telemetry.MetricValue{Value: 26.8, Unit: "°C"}
+	light := telemetry.MetricValue{Value: 920, Unit: "lx"}
 	sampleTime := time.Date(2026, 8, 22, 8, 21, 0, 0, time.FixedZone("CST", 8*60*60))
 	telemetryStub := &telemetryServiceStub{latest: &telemetry.Latest{
-		PlotID: 11, SampleTime: sampleTime, SoilMoisture: &soil, Temperature: &temp,
+		PlotID: 11, SampleTime: sampleTime, SoilMoisture: &soil, Temperature: &temp, Light: &light,
 	}}
 	plotStub := &plotServiceStub{plot: &plot.Plot{ID: 11, OwnerID: 7, Code: "A3", Name: "东侧棚", Status: plot.StatusActive}}
 	battery := 87
@@ -108,6 +109,7 @@ func TestPlotTelemetryReturnsLatestAndSourceDevices(t *testing.T) {
 		`"plotId":11`,
 		`"soilMoisture":{"value":27.8,"unit":"%"}`,
 		`"temperature":{"value":26.8,"unit":"°C"}`,
+		`"light":{"value":920,"unit":"lx"}`,
 		`"name":"土壤传感器 03"`,
 		`"status":"ONLINE"`,
 		`"battery":87`,
@@ -138,7 +140,7 @@ func TestTelemetryListReturnsAllPlotsWithStatus(t *testing.T) {
 		{ID: 12, OwnerID: 7, Code: "A3", Name: "东侧棚", Status: plot.StatusActive},
 	}}
 	telemetryStub := &telemetryServiceStub{latestList: []telemetry.Latest{
-		{PlotID: 12, SoilMoisture: &telemetry.MetricValue{Value: 27.8, Unit: "%"}},
+		{PlotID: 12, SoilMoisture: &telemetry.MetricValue{Value: 27.8, Unit: "%"}, Light: &telemetry.MetricValue{Value: 800, Unit: "lx"}},
 	}}
 	alertStub := &alertServiceStub{listResult: alert.ListResult{Items: []alert.ListItem{{PlotID: 12}}}}
 
@@ -156,7 +158,7 @@ func TestTelemetryListReturnsAllPlotsWithStatus(t *testing.T) {
 	}
 	for _, want := range []string{
 		`"plotId":11`, `"plotCode":"A1"`, `"status":"NORMAL"`, `"soilMoisture":null`,
-		`"plotId":12`, `"plotCode":"A3"`, `"status":"ALERT"`, `"soilMoisture":27.8`,
+		`"plotId":12`, `"plotCode":"A3"`, `"status":"ALERT"`, `"soilMoisture":27.8`, `"light":800`,
 	} {
 		if !strings.Contains(response.Body.String(), want) {
 			t.Fatalf("body = %s, want it to contain %s", response.Body.String(), want)
@@ -230,5 +232,18 @@ func TestTelemetryHistoryReturnsPoints(t *testing.T) {
 		if !strings.Contains(response.Body.String(), want) {
 			t.Fatalf("body = %s, want it to contain %s", response.Body.String(), want)
 		}
+	}
+}
+
+func TestTelemetryHistoryAcceptsLight(t *testing.T) {
+	plotStub := &plotServiceStub{plot: &plot.Plot{ID: 11, OwnerID: 7, Code: "A3", Status: plot.StatusActive}}
+	telemetryStub := &telemetryServiceStub{history: &telemetry.History{PlotID: 11, Metric: "light", Points: []telemetry.HistoryPoint{}}}
+	router := newTelemetryHistoryTestRouter(plotStub, telemetryStub)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/telemetry/history?plotId=11&metric=light&range=1h", nil)
+	request.Header.Set("Authorization", "Bearer signed-token")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"unit":"lx"`) {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 }

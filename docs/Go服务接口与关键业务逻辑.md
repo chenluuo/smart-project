@@ -162,7 +162,7 @@
 
 关键逻辑：
 
-- 汇总当前用户全部地块的最新湿度和温度。
+- 批量读取并汇总当前用户全部地块的最新土壤湿度、温度和光照。
 - 统计设备在线、离线和总数。
 - `active` 统计 `ACTIVE` 告警。
 - `pendingConfirm` 按当前接口契约统计 `CONFIRMED` 告警，并兼容旧的 `ACKNOWLEDGED` 数据。
@@ -184,6 +184,10 @@
       "value": 26.3,
       "unit": "°C"
     },
+    "avgLight": {
+      "value": 920,
+      "unit": "lx"
+    },
     "deviceOnline": {
       "online": 12,
       "total": 13,
@@ -199,6 +203,7 @@
         "code": "A1",
         "soilMoisture": 27.8,
         "temperature": 26.3,
+        "light": 920,
         "status": "ACTIVE"
       }
     ]
@@ -277,6 +282,10 @@
       "temperature": {
         "value": 26.3,
         "unit": "°C"
+      },
+      "light": {
+        "value": 920,
+        "unit": "lx"
       }
     },
     "sourceDevices": [
@@ -284,7 +293,7 @@
         "id": 31,
         "name": "A1 土壤传感器",
         "status": "ONLINE",
-        "battery": 86
+        "battery": null
       }
     ]
   }
@@ -309,6 +318,7 @@
       "plotCode": "A1",
       "soilMoisture": 27.8,
       "temperature": 26.3,
+      "light": 920,
       "status": "ALERT",
       "sampleTime": "2026-08-22T08:20:00Z"
     }
@@ -324,7 +334,7 @@
 
 关键规则：
 
-- `metric`：`soilMoisture` 或 `temperature`。
+- `metric`：`soilMoisture`、`temperature` 或 `light`。
 - 时间可使用 `range=1h|24h|7d|30d`，也可使用 `startTime` 和 `endTime`。
 - `interval`：`5m`、`1h` 或 `1d`，默认 `1h`。
 - 查询区间不能超过 30 天。

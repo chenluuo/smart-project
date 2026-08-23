@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -22,6 +23,7 @@ import (
 	"github.com/chenluuo/smart-project/backend/internal/outbox"
 	"github.com/chenluuo/smart-project/backend/internal/platform/database"
 	"github.com/chenluuo/smart-project/backend/internal/platform/objectstore"
+	"github.com/chenluuo/smart-project/backend/internal/platform/redisstore"
 	"github.com/chenluuo/smart-project/backend/internal/plot"
 	"github.com/chenluuo/smart-project/backend/internal/telemetry"
 )
@@ -45,6 +47,18 @@ func main() {
 	}
 	defer sqlDB.Close()
 
+	var redisClient *redisstore.Client
+	if cfg.Redis.Enabled {
+		redisContext, redisCancel := context.WithTimeout(context.Background(), cfg.Redis.DialTimeout)
+		redisClient, err = redisstore.Open(redisContext, cfg.Redis)
+		redisCancel()
+		if err != nil {
+			slog.Error("connect to Redis", "error", err)
+			os.Exit(1)
+		}
+		defer redisClient.Close()
+	}
+
 	if cfg.Database.Migrate {
 		if err := database.Migrate(context.Background(), sqlDB); err != nil {
 			slog.Error("run database migrations", "error", err)
@@ -57,12 +71,38 @@ func main() {
 		os.Exit(1)
 	}
 	authService := identity.NewAuthService(identity.NewRepositories(db), tokenManager)
-	plotService := plot.NewService(plot.NewRepositories(db))
-	deviceService := device.NewService(device.NewRepositories(db))
+	var plotStore plot.Store = plot.NewRepositories(db)
+	var deviceStore device.Store = device.NewRepositories(db)
+	var alertStore alert.Store = alert.NewRepositories(db)
+	if redisClient != nil {
+		plotStore = plot.NewCachedStore(plotStore, redisClient, cfg.Redis.QueryCacheTTL)
+		deviceStore = device.NewCachedStore(deviceStore, redisClient, cfg.Redis.QueryCacheTTL)
+		alertStore = alert.NewCachedStore(alertStore, redisClient, cfg.Redis.AlertCacheTTL)
+	}
+	plotService := plot.NewService(plotStore)
+	var activityStore device.ActivityStore
+	if redisClient != nil {
+		activityStore = device.NewRedisActivityStore(redisClient.Client, cfg.Redis.DeviceActivityTTL)
+	}
+	deviceService := device.NewService(deviceStore)
+	if activityStore != nil {
+		deviceService = device.NewService(deviceStore, activityStore)
+		deviceService.ConfigureActivityTimeout(cfg.Redis.DeviceOfflineAfter)
+	}
 	eventBroker := events.NewBroker(512)
 	controlService := control.NewService(control.NewRepository(db), eventBroker)
-	alertService := alert.NewService(alert.NewRepositories(db), eventBroker)
-	telemetryService := telemetry.NewService(telemetry.NullStore{})
+	alertService := alert.NewService(alertStore, eventBroker)
+	var latestStore telemetry.LatestStore = telemetry.NullStore{}
+	if redisClient != nil {
+		latestStore = telemetry.NewRedisStore(redisClient.Client, cfg.Redis.TelemetryTTL)
+		controlService.ConfigureSnapshotStore(control.NewRedisIrrigationStore(redisClient.Client, cfg.Redis.IrrigationTTL))
+	}
+	telemetryService := telemetry.NewService(latestStore, telemetry.NullStore{})
+	// The ingestor is intentionally kept internal until the MQTT adapter is
+	// introduced. Its payload accepts only temperature, soil moisture, light and
+	// the three warning flags; routing identity comes from trusted broker context.
+	telemetryIngestService := telemetry.NewIngestService(latestStore, activityStore, alertService, eventBroker)
+	_ = telemetryIngestService
 	agentService := agent.NewService(agent.NewRepository(db))
 	var knowledgeObjectStore knowledge.ObjectStore
 	if cfg.ObjectStorage.Enabled {
@@ -115,10 +155,11 @@ func main() {
 		go dispatcher.Run(workerContext, cfg.Internal.OutboxDispatchInterval, cfg.Internal.OutboxBatchSize)
 	}
 
+	healthPinger := &combinedPinger{mysql: sqlDB, redis: redisClient}
 	server := &http.Server{
 		Addr: ":" + cfg.Server.Port,
 		Handler: httpserver.NewRouterWithBackendServices(
-			cfg.Server.Mode, sqlDB, authService, plotService, deviceService, controlService, alertService,
+			cfg.Server.Mode, healthPinger, authService, plotService, deviceService, controlService, alertService,
 			agentService, knowledgeService, telemetryService, cfg.Internal.ServiceKey, eventBroker,
 		),
 		ReadHeaderTimeout: 5 * time.Second,
@@ -155,4 +196,22 @@ func main() {
 		slog.Error("graceful shutdown", "error", err)
 		os.Exit(1)
 	}
+}
+
+type combinedPinger struct {
+	mysql *sql.DB
+	redis *redisstore.Client
+}
+
+func (p *combinedPinger) PingContext(ctx context.Context) error {
+	if p.mysql == nil {
+		return errors.New("MySQL is not configured")
+	}
+	if err := p.mysql.PingContext(ctx); err != nil {
+		return err
+	}
+	if p.redis != nil {
+		return p.redis.PingContext(ctx)
+	}
+	return nil
 }

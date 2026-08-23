@@ -14,9 +14,25 @@ import (
 type Config struct {
 	Server        ServerConfig
 	Database      DatabaseConfig
+	Redis         RedisConfig
 	Auth          AuthConfig
 	Internal      InternalConfig
 	ObjectStorage ObjectStorageConfig
+}
+
+type RedisConfig struct {
+	Enabled            bool
+	URL                string
+	PoolSize           int
+	DialTimeout        time.Duration
+	ReadTimeout        time.Duration
+	WriteTimeout       time.Duration
+	QueryCacheTTL      time.Duration
+	AlertCacheTTL      time.Duration
+	TelemetryTTL       time.Duration
+	IrrigationTTL      time.Duration
+	DeviceActivityTTL  time.Duration
+	DeviceOfflineAfter time.Duration
 }
 
 type ServerConfig struct {
@@ -72,6 +88,53 @@ func Load() (Config, error) {
 	migrate, err := boolValue("DB_MIGRATE", true)
 	if err != nil {
 		return Config{}, err
+	}
+	redisEnabled, err := boolValue("REDIS_ENABLED", true)
+	if err != nil {
+		return Config{}, err
+	}
+	redisPoolSize, err := intValue("REDIS_POOL_SIZE", 10)
+	if err != nil || redisPoolSize < 1 {
+		return Config{}, fmt.Errorf("REDIS_POOL_SIZE must be a positive integer")
+	}
+	redisDialTimeout, err := durationValue("REDIS_DIAL_TIMEOUT", 2*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	redisReadTimeout, err := durationValue("REDIS_READ_TIMEOUT", time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	redisWriteTimeout, err := durationValue("REDIS_WRITE_TIMEOUT", time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	queryCacheTTL, err := durationValue("REDIS_QUERY_CACHE_TTL", time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	alertCacheTTL, err := durationValue("REDIS_ALERT_CACHE_TTL", 10*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	telemetryTTL, err := durationValue("REDIS_TELEMETRY_TTL", 5*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	irrigationTTL, err := durationValue("REDIS_IRRIGATION_TTL", 35*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	deviceActivityTTL, err := durationValue("REDIS_DEVICE_ACTIVITY_TTL", 24*time.Hour)
+	if err != nil {
+		return Config{}, err
+	}
+	deviceOfflineAfter, err := durationValue("DEVICE_OFFLINE_AFTER", 2*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	if deviceActivityTTL <= deviceOfflineAfter {
+		return Config{}, fmt.Errorf("REDIS_DEVICE_ACTIVITY_TTL must be greater than DEVICE_OFFLINE_AFTER")
 	}
 
 	dsn, err := databaseDSN()
@@ -131,6 +194,12 @@ func Load() (Config, error) {
 			MaxIdleConns:    maxIdle,
 			ConnMaxLifetime: 30 * time.Minute,
 			Migrate:         migrate,
+		},
+		Redis: RedisConfig{
+			Enabled: redisEnabled, URL: value("REDIS_URL", "redis://localhost:6379/0"), PoolSize: redisPoolSize,
+			DialTimeout: redisDialTimeout, ReadTimeout: redisReadTimeout, WriteTimeout: redisWriteTimeout,
+			QueryCacheTTL: queryCacheTTL, AlertCacheTTL: alertCacheTTL, TelemetryTTL: telemetryTTL,
+			IrrigationTTL: irrigationTTL, DeviceActivityTTL: deviceActivityTTL, DeviceOfflineAfter: deviceOfflineAfter,
 		},
 		Auth: AuthConfig{
 			JWTSecret: jwtSecret,

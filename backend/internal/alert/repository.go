@@ -82,8 +82,8 @@ func (r Repositories) UpsertRuleByOwner(ctx context.Context, ownerID uint64, rul
 
 func (r Repositories) ListAlertsByOwner(ctx context.Context, ownerID uint64, filter ListFilter) ([]AlertListRow, int64, error) {
 	query := r.db.WithContext(ctx).Table("alerts AS a").
-		Joins("JOIN alert_rules AS ar ON ar.id = a.rule_id").
-		Joins("JOIN plots AS p ON p.id = ar.plot_id").
+		Joins("LEFT JOIN alert_rules AS ar ON ar.id = a.rule_id").
+		Joins("JOIN plots AS p ON p.id = a.plot_id").
 		Where("p.owner_id = ?", ownerID)
 	if filter.PlotID != nil {
 		query = query.Where("p.id = ?", *filter.PlotID)
@@ -107,8 +107,8 @@ func (r Repositories) ListAlertsByOwner(ctx context.Context, ownerID uint64, fil
 		return nil, 0, err
 	}
 	var rows []AlertListRow
-	err := query.Select(`a.id, ar.plot_id, p.code AS plot_code, ar.metric,
-		ar.comparison_operator AS operator, ar.threshold, ar.duration_seconds,
+	err := query.Select(`a.id, a.plot_id, p.code AS plot_code, COALESCE(ar.metric, '') AS metric,
+		a.warning_type, COALESCE(ar.comparison_operator, '') AS operator, ar.threshold, COALESCE(ar.duration_seconds, 0) AS duration_seconds,
 		a.level, a.status, a.trigger_value, a.triggered_at, a.acknowledged_at,
 		a.confirmation_remark, a.resolved_at`).
 		Order("a.triggered_at DESC, a.id DESC").
@@ -121,8 +121,7 @@ func (r Repositories) ConfirmAlertByOwner(ctx context.Context, ownerID, alertID 
 	var result Alert
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Table("alerts AS a").Select("a.*").
-			Joins("JOIN alert_rules AS ar ON ar.id = a.rule_id").
-			Joins("JOIN plots AS p ON p.id = ar.plot_id").
+			Joins("JOIN plots AS p ON p.id = a.plot_id").
 			Where("a.id = ? AND p.owner_id = ?", alertID, ownerID).
 			Clauses(clause.Locking{Strength: "UPDATE"}).Take(&result).Error; err != nil {
 			return err
@@ -198,8 +197,9 @@ func (r Repositories) CreateTriggeredAlert(ctx context.Context, input TriggerInp
 			return err
 		}
 
+		ruleID := rule.ID
 		alert := Alert{
-			RuleID: rule.ID, DeviceID: input.DeviceID, Level: rule.Level,
+			RuleID: &ruleID, PlotID: rule.PlotID, DeviceID: input.DeviceID, Source: SourceRule, Level: rule.Level,
 			Status: StatusActive, TriggerValue: decimalFromFloat(input.TriggerValue),
 			TriggeredAt: triggeredAt,
 			Auditable:   persistence.Auditable{CreatedAt: now, UpdatedAt: now},
@@ -235,6 +235,86 @@ func (r Repositories) CreateTriggeredAlert(ctx context.Context, input TriggerInp
 		return nil, err
 	}
 	return result, nil
+}
+
+func (r Repositories) SyncDeviceWarnings(ctx context.Context, input DeviceWarningInput, now time.Time) ([]WarningTransition, error) {
+	type warningSpec struct {
+		kind   WarningType
+		metric string
+		active bool
+		value  float64
+	}
+	specs := []warningSpec{
+		{kind: WarningTemperature, metric: "temperature", active: input.TemperatureWarning, value: input.Temperature},
+		{kind: WarningSoilMoisture, metric: "soilMoisture", active: input.SoilMoistureWarning, value: input.SoilMoisture},
+		{kind: WarningLight, metric: "light", active: input.LightWarning, value: input.Light},
+	}
+	transitions := make([]WarningTransition, 0, len(specs))
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var lockedDevice struct{ ID uint64 }
+		if err := tx.Table("devices AS d").Select("d.id").
+			Joins("JOIN device_bindings AS b ON b.device_id = d.id AND b.unbound_at IS NULL").
+			Joins("JOIN plots AS p ON p.id = b.plot_id").
+			Where("d.id = ? AND p.id = ? AND p.owner_id = ?", input.DeviceID, input.PlotID, input.OwnerID).
+			Clauses(clause.Locking{Strength: "UPDATE"}).Take(&lockedDevice).Error; err != nil {
+			return err
+		}
+		var plotCode string
+		if err := tx.Table("plots").Select("code").Where("id = ?", input.PlotID).Scan(&plotCode).Error; err != nil {
+			return err
+		}
+		for _, spec := range specs {
+			dedupKey := fmt.Sprintf("device:%d:%s", input.DeviceID, spec.kind)
+			var existing Alert
+			err := tx.Where("active_dedup_key = ?", dedupKey).Take(&existing).Error
+			if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+			if spec.active {
+				if err == nil {
+					if err := tx.Model(&Alert{}).Where("id = ?", existing.ID).Updates(map[string]any{
+						"trigger_value": decimalFromFloat(spec.value), "updated_at": now,
+					}).Error; err != nil {
+						return err
+					}
+					continue
+				}
+				kind, key := spec.kind, dedupKey
+				alert := Alert{
+					PlotID: input.PlotID, DeviceID: &input.DeviceID, Source: SourceDevice, WarningType: &kind,
+					ActiveDedupKey: &key, Level: LevelMedium, Status: StatusActive,
+					TriggerValue: decimalFromFloat(spec.value), TriggeredAt: input.OccurredAt.UTC(),
+					Auditable: persistence.Auditable{CreatedAt: now, UpdatedAt: now},
+				}
+				if err := tx.Create(&alert).Error; err != nil {
+					return err
+				}
+				sentAt := now
+				content := fmt.Sprintf("%s 地块设备上报%s警告，当前值 %s%s", plotCode, warningMetricLabel(spec.kind), alert.TriggerValue.String(), metricUnit(spec.metric))
+				if err := tx.Create(&notification.Notification{
+					AlertID: alert.ID, UserID: input.OwnerID, Channel: notification.ChannelInApp,
+					Content: content, Status: notification.StatusSent, SentAt: &sentAt,
+					Auditable: persistence.Auditable{CreatedAt: now, UpdatedAt: now},
+				}).Error; err != nil {
+					return err
+				}
+				transitions = append(transitions, WarningTransition{Alert: alert, Created: true, OwnerID: input.OwnerID, PlotID: input.PlotID, PlotCode: plotCode, Metric: spec.metric})
+				continue
+			}
+			if err == nil {
+				resolvedAt := input.OccurredAt.UTC()
+				if err := tx.Model(&Alert{}).Where("id = ?", existing.ID).Updates(map[string]any{
+					"status": StatusResolved, "resolved_at": resolvedAt, "active_dedup_key": nil, "updated_at": now,
+				}).Error; err != nil {
+					return err
+				}
+				existing.Status, existing.ResolvedAt, existing.ActiveDedupKey = StatusResolved, &resolvedAt, nil
+				transitions = append(transitions, WarningTransition{Alert: existing, Recovered: true, OwnerID: input.OwnerID, PlotID: input.PlotID, PlotCode: plotCode, Metric: spec.metric})
+			}
+		}
+		return nil
+	})
+	return transitions, err
 }
 
 func decimalFromFloat(value float64) decimal.Decimal {

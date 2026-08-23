@@ -7,7 +7,7 @@ import (
 )
 
 func TestLoadDefaults(t *testing.T) {
-	for _, key := range []string{"DB_DSN", "DB_URL", "DB_USERNAME", "DB_PASSWORD", "DB_POOL_MAX_SIZE", "DB_POOL_MIN_IDLE", "DB_MIGRATE", "SERVER_PORT", "GIN_MODE", "JWT_SECRET", "JWT_ISSUER", "JWT_TTL", "INTERNAL_SERVICE_KEY", "KNOWLEDGE_NOTIFY_URL", "AGENT_ALERT_URL", "OUTBOX_DISPATCH_INTERVAL", "OUTBOX_BATCH_SIZE", "AGENT_HTTP_TIMEOUT", "OBJECT_STORAGE_ENABLED", "MINIO_SECURE", "KNOWLEDGE_MAX_UPLOAD_BYTES", "MINIO_SIGNED_URL_TTL"} {
+	for _, key := range []string{"DB_DSN", "DB_URL", "DB_USERNAME", "DB_PASSWORD", "DB_POOL_MAX_SIZE", "DB_POOL_MIN_IDLE", "DB_MIGRATE", "SERVER_PORT", "GIN_MODE", "JWT_SECRET", "JWT_ISSUER", "JWT_TTL", "INTERNAL_SERVICE_KEY", "KNOWLEDGE_NOTIFY_URL", "AGENT_ALERT_URL", "OUTBOX_DISPATCH_INTERVAL", "OUTBOX_BATCH_SIZE", "AGENT_HTTP_TIMEOUT", "OBJECT_STORAGE_ENABLED", "MINIO_SECURE", "KNOWLEDGE_MAX_UPLOAD_BYTES", "MINIO_SIGNED_URL_TTL", "REDIS_ENABLED", "REDIS_URL", "REDIS_POOL_SIZE", "REDIS_DIAL_TIMEOUT", "REDIS_READ_TIMEOUT", "REDIS_WRITE_TIMEOUT", "REDIS_QUERY_CACHE_TTL", "REDIS_ALERT_CACHE_TTL", "REDIS_TELEMETRY_TTL", "REDIS_IRRIGATION_TTL", "REDIS_DEVICE_ACTIVITY_TTL", "DEVICE_OFFLINE_AFTER"} {
 		t.Setenv(key, "")
 	}
 
@@ -38,6 +38,22 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.ObjectStorage.Enabled || cfg.ObjectStorage.MaxUploadBytes != 20*1024*1024 || cfg.ObjectStorage.SignedURLTimeout != 15*time.Minute {
 		t.Fatalf("unexpected object storage defaults: %+v", cfg.ObjectStorage)
+	}
+	if !cfg.Redis.Enabled || cfg.Redis.URL != "redis://localhost:6379/0" || cfg.Redis.QueryCacheTTL != time.Minute || cfg.Redis.DeviceOfflineAfter != 2*time.Minute {
+		t.Fatalf("unexpected Redis defaults: %+v", cfg.Redis)
+	}
+}
+
+func TestInvalidRedisConfiguration(t *testing.T) {
+	t.Setenv("REDIS_POOL_SIZE", "0")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil, want invalid Redis pool size")
+	}
+	t.Setenv("REDIS_POOL_SIZE", "10")
+	t.Setenv("REDIS_DEVICE_ACTIVITY_TTL", "1m")
+	t.Setenv("DEVICE_OFFLINE_AFTER", "2m")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil, want activity TTL ordering error")
 	}
 }
 

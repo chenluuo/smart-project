@@ -34,6 +34,7 @@ type TelemetryUpdated struct {
 	PlotCode     string
 	SoilMoisture *float64
 	Temperature  *float64
+	Light        *float64
 	SampleTime   time.Time
 }
 
@@ -73,7 +74,7 @@ type CommandResult struct {
 func PublishTelemetryUpdated(publisher Publisher, update TelemetryUpdated) (Event, error) {
 	update.PlotCode = strings.TrimSpace(update.PlotCode)
 	if publisher == nil || update.OwnerID == 0 || update.PlotID == 0 || update.PlotCode == "" || update.SampleTime.IsZero() ||
-		update.SoilMoisture == nil && update.Temperature == nil || invalidNumber(update.SoilMoisture) || invalidNumber(update.Temperature) {
+		update.SoilMoisture == nil && update.Temperature == nil && update.Light == nil || invalidNumber(update.SoilMoisture) || invalidNumber(update.Temperature) || invalidNumber(update.Light) {
 		return Event{}, ErrInvalidEvent
 	}
 	payload := map[string]any{
@@ -86,6 +87,9 @@ func PublishTelemetryUpdated(publisher Publisher, update TelemetryUpdated) (Even
 	}
 	if update.Temperature != nil {
 		payload["temperature"] = *update.Temperature
+	}
+	if update.Light != nil {
+		payload["light"] = *update.Light
 	}
 	return publisher.Publish(Event{
 		Type: TypeTelemetryUpdated, OwnerID: update.OwnerID, EventTime: update.SampleTime,

@@ -35,7 +35,7 @@ func TestDashboardOverviewAggregates(t *testing.T) {
 		alert.StatusActive:    {Total: 1},
 		alert.StatusConfirmed: {Total: 1},
 	}}
-	telemetryStub := &telemetryServiceStub{err: telemetry.ErrNotFound}
+	telemetryStub := &telemetryServiceStub{latestList: []telemetry.Latest{}}
 
 	router := newDashboardTestRouter(plotStub, deviceStub, alertStub, telemetryStub)
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/dashboard/overview", nil)

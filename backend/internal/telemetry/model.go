@@ -10,10 +10,18 @@ type MetricValue struct {
 
 // Latest 是某个地块的最新遥测快照；指标尚未接入时为 nil。
 type Latest struct {
-	PlotID       uint64
-	SampleTime   time.Time
-	SoilMoisture *MetricValue
-	Temperature  *MetricValue
+	PlotID       uint64       `json:"plotId"`
+	SampleTime   time.Time    `json:"sampleTime"`
+	SoilMoisture *MetricValue `json:"soilMoisture,omitempty"`
+	Temperature  *MetricValue `json:"temperature,omitempty"`
+	Light        *MetricValue `json:"light,omitempty"`
+	Warnings     WarningState `json:"warnings"`
+}
+
+type WarningState struct {
+	Temperature  bool `json:"temperature"`
+	SoilMoisture bool `json:"soilMoisture"`
+	Light        bool `json:"light"`
 }
 
 // HistoryPoint 是某个聚合时间窗口内的统计值。

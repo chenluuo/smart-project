@@ -8,6 +8,7 @@
 - Gin
 - GORM
 - MySQL 8.4 LTS
+- Redis 8.4
 - Docker Compose
 
 ## 模块结构
@@ -47,14 +48,14 @@ backend/
 - `chat_sessions`、`chat_messages`、`ai_suggestions`
 - `knowledge_documents`
 
-高频温度、湿度遥测不进入 MySQL；后续由 `telemetry` 模块批量写入 TDengine，并将设备最新状态写入 Redis。
+高频温度、土壤湿度和光照遥测不进入 MySQL。最新地块快照写入 Redis；设备在线状态由服务端收到遥测的时间推导，设备不会上报状态、电量或信号。历史遥测后续由 `telemetry` 模块批量写入 TDengine。
 
 ## 本地启动
 
-启动 MySQL 和 MinIO：
+启动 MySQL、Redis 和 MinIO：
 
 ```powershell
-docker compose up -d mysql minio
+docker compose up -d mysql redis minio
 ```
 
 安装依赖并执行测试：
@@ -105,6 +106,8 @@ GET  /api/v1/events/stream   # Bearer Token；支持 Last-Event-ID 断线续传
 
 支持的实时事件为 `telemetry.updated`、`alert.created`、`alert.recovered`、`device.status.changed` 和 `command.result`。告警创建和控制命令完成已接入现有业务流程；其余类型的发布函数供 MQTT 遥测、告警恢复和设备心跳模块接入。
 
+后续 MQTT 适配器必须通过 `telemetry.DecodePayload` 和 `IngestService` 接入。设备 JSON 仅允许 `temperature/soilMoisture/light` 与 `temperatureWarning/soilMoistureWarning/lightWarning` 六个必填字段；设备、owner、地块和接收时间从可信 Topic 与绑定关系补充。未知字段会被拒绝。
+
 智能问答会话接口：
 
 ```text
@@ -152,6 +155,18 @@ password: smart_agriculture
 | `DB_POOL_MAX_SIZE` | `10` | 最大连接数 |
 | `DB_POOL_MIN_IDLE` | `2` | 最大空闲连接数 |
 | `DB_MIGRATE` | `true` | 启动时执行嵌入式 SQL 迁移 |
+| `REDIS_ENABLED` | `true` | 是否启用 Redis；启用后启动阶段必须连接成功 |
+| `REDIS_URL` | `redis://localhost:6379/0` | Redis URL，可包含认证信息和 DB 编号 |
+| `REDIS_POOL_SIZE` | `10` | Redis 连接池大小 |
+| `REDIS_DIAL_TIMEOUT` | `2s` | Redis 建连超时 |
+| `REDIS_READ_TIMEOUT` | `1s` | Redis 读超时 |
+| `REDIS_WRITE_TIMEOUT` | `1s` | Redis 写超时 |
+| `REDIS_QUERY_CACHE_TTL` | `1m` | 地块和设备查询缓存时长 |
+| `REDIS_ALERT_CACHE_TTL` | `10s` | 活动告警查询缓存时长 |
+| `REDIS_TELEMETRY_TTL` | `5m` | 最新地块遥测快照时长 |
+| `REDIS_IRRIGATION_TTL` | `35m` | 灌溉状态快照时长 |
+| `REDIS_DEVICE_ACTIVITY_TTL` | `24h` | 设备最后接收时间保留时长 |
+| `DEVICE_OFFLINE_AFTER` | `2m` | 超过该时间未收到遥测则推导为离线 |
 | `JWT_SECRET` | 仅供本地开发的默认密钥 | HS256 签名密钥，至少 32 个字符 |
 | `JWT_ISSUER` | `smart-agriculture-api` | JWT 签发方 |
 | `JWT_TTL` | `2h` | 访问令牌有效期（Go duration） |
@@ -177,7 +192,7 @@ password: smart_agriculture
 
 ## 下一步
 
-1. 接入 EMQX、TDengine 和 Redis。
+1. 接入 EMQX 和 TDengine，并把 MQTT 消息交给现有遥测写入服务。
 2. 将控制命令演示桩替换为 MQTT 下发/回执状态机。
 3. 配置智能体服务并联调知识文档通知与告警转发。
 4. 实现 `/api/v1/ai/chat` 的智能体编排和 AI 建议采纳流程。
