@@ -138,6 +138,7 @@ type alertService interface {
 type agentService interface {
 	CreateSession(context.Context, uint64, *uint64) (*agent.Session, error)
 	AppendMessage(context.Context, string, agent.MessageInput) (*agent.Message, error)
+	AppendMessageByOwner(context.Context, uint64, string, agent.MessageInput) (*agent.Message, error)
 	ListMessages(context.Context, uint64, string, int, int) (agent.MessageList, error)
 	CloseSession(context.Context, uint64, string) (*agent.Session, error)
 }

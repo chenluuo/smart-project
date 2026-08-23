@@ -29,9 +29,24 @@ func (r *Repository) CreateSession(ctx context.Context, session *Session) error 
 }
 
 func (r *Repository) AppendMessage(ctx context.Context, message *Message) error {
+	return r.appendMessage(ctx, message, 0)
+}
+
+func (r *Repository) AppendMessageByOwner(ctx context.Context, message *Message, userID uint64) error {
+	if userID == 0 {
+		return ErrInvalidInput
+	}
+	return r.appendMessage(ctx, message, userID)
+}
+
+func (r *Repository) appendMessage(ctx context.Context, message *Message, userID uint64) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var session Session
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", message.SessionID).Take(&session).Error; err != nil {
+		query := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", message.SessionID)
+		if userID != 0 {
+			query = query.Where("user_id = ?", userID)
+		}
+		if err := query.Take(&session).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return ErrNotFound
 			}

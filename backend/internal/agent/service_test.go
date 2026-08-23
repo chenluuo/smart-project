@@ -38,6 +38,14 @@ func (s *memoryStore) AppendMessage(_ context.Context, message *Message) error {
 	return nil
 }
 
+func (s *memoryStore) AppendMessageByOwner(ctx context.Context, message *Message, userID uint64) error {
+	session := s.sessions[message.SessionID]
+	if session == nil || session.UserID != userID {
+		return ErrNotFound
+	}
+	return s.AppendMessage(ctx, message)
+}
+
 func (s *memoryStore) ListMessagesByOwner(_ context.Context, sessionID string, userID uint64, page, pageSize int) ([]Message, int64, error) {
 	session := s.sessions[sessionID]
 	if session == nil || session.UserID != userID {
@@ -101,6 +109,9 @@ func TestServiceSessionMessageLifecycle(t *testing.T) {
 
 	if _, err := service.ListMessages(context.Background(), 8, session.ID, 1, 20); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("cross-owner ListMessages() error = %v, want ErrNotFound", err)
+	}
+	if _, err := service.AppendMessageByOwner(context.Background(), 8, session.ID, MessageInput{Role: "USER", Content: "cross owner"}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cross-owner AppendMessageByOwner() error = %v, want ErrNotFound", err)
 	}
 	if _, err := service.CloseSession(context.Background(), 7, session.ID); err != nil {
 		t.Fatalf("CloseSession() error = %v", err)
