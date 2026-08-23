@@ -32,6 +32,9 @@ type IssueInput struct {
 	Mode            string
 	Reason          string
 	IdempotencyKey  string
+	// TargetHumidity 目标湿度模式：设备侧闭环（设备开泵、自测湿度、达标自停）。
+	// 提供时 OPEN 命令不依赖 DurationSeconds（设备按湿度达标控制，时长作兜底）。
+	TargetHumidity *float64
 }
 
 type IssueResult struct {
@@ -157,7 +160,12 @@ func (s *Service) Issue(ctx context.Context, ownerID, plotID uint64, input Issue
 	}
 	payload := map[string]any{"mode": input.Mode, "reason": input.Reason}
 	if input.Action == "OPEN" {
-		payload["durationSeconds"] = input.DurationSeconds
+		if input.TargetHumidity != nil {
+			// 目标湿度模式：设备侧闭环，设备自测湿度达标自停
+			payload["targetHumidity"] = *input.TargetHumidity
+		} else {
+			payload["durationSeconds"] = input.DurationSeconds
+		}
 	}
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
@@ -333,6 +341,10 @@ func validIssueInput(input IssueInput) bool {
 		return false
 	}
 	if input.Action == "OPEN" {
+		if input.TargetHumidity != nil {
+			// 目标湿度模式：设备侧闭环，0 < 目标 <= 100
+			return *input.TargetHumidity > 0 && *input.TargetHumidity <= 100
+		}
 		return input.DurationSeconds >= 60 && input.DurationSeconds <= MaxIrrigationSeconds
 	}
 	return input.DurationSeconds == 0

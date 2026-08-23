@@ -13,10 +13,11 @@ import (
 type controlHandler struct{ service controlService }
 
 type irrigationCommandRequest struct {
-	Action          string `json:"action"`
-	DurationSeconds int    `json:"durationSeconds"`
-	Mode            string `json:"mode"`
-	Reason          string `json:"reason"`
+	Action          string   `json:"action"`
+	DurationSeconds int      `json:"durationSeconds"`
+	Mode            string   `json:"mode"`
+	Reason          string   `json:"reason"`
+	TargetHumidity  *float64 `json:"targetHumidity"`
 }
 
 func registerControlRoutes(router *gin.Engine, auth authService, service controlService) {
@@ -47,6 +48,7 @@ func (h controlHandler) issue(c *gin.Context) {
 	result, err := h.service.Issue(c.Request.Context(), claims.UserID, plotID, control.IssueInput{
 		Action: request.Action, DurationSeconds: request.DurationSeconds,
 		Mode: request.Mode, Reason: request.Reason, IdempotencyKey: c.GetHeader("Idempotency-Key"),
+		TargetHumidity: request.TargetHumidity,
 	})
 	switch {
 	case errors.Is(err, control.ErrInvalidInput):
