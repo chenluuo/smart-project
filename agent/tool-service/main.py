@@ -16,9 +16,11 @@ from jsonschema import Draft202012Validator  # noqa: E402
 
 from registry import get_registry  # noqa: E402
 from tools.impl import register_all  # noqa: E402
+from shared.observability import install_observability  # noqa: E402
 from shared.trace import HEADER, ensure_trace_id  # noqa: E402
 
 app = FastAPI(title="tool-service", version="0.1.0")
+install_observability(app, "tool-service")
 
 register_all()
 _registry = get_registry()
@@ -53,8 +55,6 @@ def execute(
     authorization: str = Header(default=""),
     x_trace_id: str = Header(default="", alias=HEADER),
 ) -> dict:
-    ensure_trace_id() if not x_trace_id else None
-
     tool_def = _registry.get_def(name)
     if tool_def is None:
         raise HTTPException(status_code=404, detail=f"未知工具: {name}")
@@ -78,6 +78,6 @@ def execute(
         result = fn(authorization, req.args)
     except Exception as e:
         # 工具异常：返回 ok=false，不抛 HTTP 错误（agent 可向 LLM 解释）
-        return {"ok": False, "error": f"工具执行失败: {e}", "trace_id": x_trace_id or ensure_trace_id()}
-    result["trace_id"] = x_trace_id or ensure_trace_id()
+        return {"ok": False, "error": f"工具执行失败: {e}", "trace_id": ensure_trace_id()}
+    result["trace_id"] = ensure_trace_id()
     return result

@@ -130,8 +130,13 @@ func jwtAuthentication(service authService) gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-		claims, err := service.Authenticate(parts[1])
+		claims, err := service.Authenticate(c.Request.Context(), parts[1])
 		if err != nil {
+			if !errors.Is(err, identity.ErrInvalidToken) {
+				respondError(c, http.StatusInternalServerError, 50000, "服务器内部错误")
+				c.Abort()
+				return
+			}
 			c.Header("WWW-Authenticate", "Bearer")
 			respondError(c, http.StatusUnauthorized, 40101, "未登录或访问令牌无效")
 			c.Abort()

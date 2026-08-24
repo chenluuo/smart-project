@@ -24,7 +24,13 @@ def decode_token(token: str) -> dict[str, Any]:
     if not secret:
         raise JWTError("未配置 JWT_SECRET")
     try:
-        return jwt.decode(token, secret, algorithms=[cfg.get("jwt_algorithm", "HS256")])
+        # verify_iat=False：Go 容器时钟为 UTC，与本地时钟存在偏差时
+        # iat 可能被判"未来"导致 ImmatureSignatureError；签名与 exp 仍严格校验
+        return jwt.decode(
+            token, secret,
+            algorithms=[cfg.get("jwt_algorithm", "HS256")],
+            options={"verify_iat": False},
+        )
     except jwt.PyJWTError as e:
         raise JWTError(f"JWT 无效: {e}") from e
 

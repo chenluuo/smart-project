@@ -23,7 +23,7 @@ type databasePinger interface {
 func NewRouter(mode string, db databasePinger, authServices ...authService) *gin.Engine {
 	gin.SetMode(mode)
 	router := gin.New()
-	router.Use(gin.Logger(), gin.Recovery())
+	router.Use(observabilityMiddleware(), gin.Recovery())
 
 	health := healthHandler{db: db}
 	actuator := router.Group("/actuator/health")
@@ -92,6 +92,8 @@ func NewRouterWithBackendServices(
 	if telemetry != nil {
 		registerDashboardRoutes(router, auth, plots, devices, alerts, telemetry)
 		registerTelemetryRoutes(router, auth, plots, devices, telemetry)
+		registerTelemetryListRoutes(router, auth, plots, alerts, telemetry)
+		registerTelemetryHistoryRoutes(router, auth, plots, telemetry)
 	}
 	if len(eventSubscribers) > 0 && eventSubscribers[0] != nil {
 		registerEventRoutes(router, auth, eventSubscribers[0])
@@ -103,7 +105,7 @@ type authService interface {
 	Register(context.Context, identity.RegisterInput) (*identity.User, error)
 	Login(context.Context, string, string) (*identity.LoginResult, error)
 	CurrentUser(context.Context, uint64) (*identity.CurrentUserResult, error)
-	Authenticate(string) (identity.Claims, error)
+	Authenticate(context.Context, string) (identity.Claims, error)
 }
 
 type plotService interface {
@@ -136,6 +138,7 @@ type alertService interface {
 type agentService interface {
 	CreateSession(context.Context, uint64, *uint64) (*agent.Session, error)
 	AppendMessage(context.Context, string, agent.MessageInput) (*agent.Message, error)
+	AppendMessageByOwner(context.Context, uint64, string, agent.MessageInput) (*agent.Message, error)
 	ListMessages(context.Context, uint64, string, int, int) (agent.MessageList, error)
 	CloseSession(context.Context, uint64, string) (*agent.Session, error)
 }
@@ -151,6 +154,8 @@ type knowledgeService interface {
 
 type telemetryService interface {
 	LatestByPlot(context.Context, uint64) (*telemetry.Latest, error)
+	LatestByPlots(context.Context, []uint64) ([]telemetry.Latest, error)
+	History(context.Context, telemetry.HistoryQuery) (*telemetry.History, error)
 }
 
 type healthHandler struct {

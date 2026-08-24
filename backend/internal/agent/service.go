@@ -22,6 +22,7 @@ var (
 type Store interface {
 	CreateSession(context.Context, *Session) error
 	AppendMessage(context.Context, *Message) error
+	AppendMessageByOwner(context.Context, *Message, uint64) error
 	ListMessagesByOwner(context.Context, string, uint64, int, int) ([]Message, int64, error)
 	CloseSessionByOwner(context.Context, string, uint64, time.Time) (*Session, error)
 }
@@ -69,6 +70,31 @@ func (s *Service) CreateSession(ctx context.Context, userID uint64, plotID *uint
 }
 
 func (s *Service) AppendMessage(ctx context.Context, sessionID string, input MessageInput) (*Message, error) {
+	message, err := s.newMessage(sessionID, input)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.store.AppendMessage(ctx, message); err != nil {
+		return nil, fmt.Errorf("append chat message: %w", err)
+	}
+	return message, nil
+}
+
+func (s *Service) AppendMessageByOwner(ctx context.Context, userID uint64, sessionID string, input MessageInput) (*Message, error) {
+	if userID == 0 {
+		return nil, ErrInvalidInput
+	}
+	message, err := s.newMessage(sessionID, input)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.store.AppendMessageByOwner(ctx, message, userID); err != nil {
+		return nil, fmt.Errorf("append chat message by owner: %w", err)
+	}
+	return message, nil
+}
+
+func (s *Service) newMessage(sessionID string, input MessageInput) (*Message, error) {
 	sessionID = strings.TrimSpace(sessionID)
 	input.Content = strings.TrimSpace(input.Content)
 	input.ModelVersion = strings.TrimSpace(input.ModelVersion)
@@ -94,9 +120,6 @@ func (s *Service) AppendMessage(ctx context.Context, sessionID string, input Mes
 	message := &Message{
 		SessionID: sessionID, Role: role, Content: input.Content, CitationsJSON: citations,
 		PlotID: input.PlotID, ModelVersion: optionalString(input.ModelVersion), TraceID: optionalString(input.TraceID), CreatedAt: now,
-	}
-	if err := s.store.AppendMessage(ctx, message); err != nil {
-		return nil, fmt.Errorf("append chat message: %w", err)
 	}
 	return message, nil
 }

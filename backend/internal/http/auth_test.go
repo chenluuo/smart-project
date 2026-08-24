@@ -3,7 +3,6 @@ package http
 import (
 	"bytes"
 	"context"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -31,9 +30,9 @@ func (authServiceStub) Login(_ context.Context, accountName, password string) (*
 	}, nil
 }
 
-func (authServiceStub) Authenticate(token string) (identity.Claims, error) {
+func (authServiceStub) Authenticate(_ context.Context, token string) (identity.Claims, error) {
 	if token != "signed-token" {
-		return identity.Claims{}, errors.New("invalid token")
+		return identity.Claims{}, identity.ErrInvalidToken
 	}
 	return identity.Claims{UserID: 7, AccountName: "grower", Role: "FARMER"}, nil
 }

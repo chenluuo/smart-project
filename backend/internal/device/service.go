@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"gorm.io/gorm"
@@ -23,6 +25,10 @@ type ListFilter struct {
 	DeviceType string
 	Page       int
 	PageSize   int
+	// DerivedStatus and ActiveDeviceIDs are populated by Service after reading
+	// server-observed activity. They are never accepted from HTTP callers.
+	DerivedStatus   *Status
+	ActiveDeviceIDs []uint64
 }
 
 type ListItem struct {
@@ -51,9 +57,32 @@ type Store interface {
 	FindByIDAndOwner(context.Context, uint64, uint64) (*Device, error)
 }
 
-type Service struct{ devices Store }
+type ActivityStore interface {
+	MarkActive(context.Context, uint64, uint64, time.Time) error
+	LastSeen(context.Context, uint64, []uint64) (map[uint64]time.Time, error)
+	OnlineDeviceIDs(context.Context, uint64, time.Time) ([]uint64, error)
+	Forget(context.Context, uint64, uint64) error
+}
 
-func NewService(devices Store) *Service { return &Service{devices: devices} }
+type Service struct {
+	devices      Store
+	activity     ActivityStore
+	offlineAfter time.Duration
+}
+
+func NewService(devices Store, activity ...ActivityStore) *Service {
+	service := &Service{devices: devices, offlineAfter: 2 * time.Minute}
+	if len(activity) > 0 {
+		service.activity = activity[0]
+	}
+	return service
+}
+
+func (s *Service) ConfigureActivityTimeout(value time.Duration) {
+	if value > 0 {
+		s.offlineAfter = value
+	}
+}
 
 func (s *Service) List(ctx context.Context, ownerID uint64, filter ListFilter) (ListResult, error) {
 	if filter.Page == 0 {
@@ -70,9 +99,27 @@ func (s *Service) List(ctx context.Context, ownerID uint64, filter ListFilter) (
 		return ListResult{}, ErrInvalidInput
 	}
 
-	items, total, err := s.devices.ListByOwner(ctx, ownerID, filter)
+	queryFilter := filter
+	if s.activity != nil && filter.Status != nil && (*filter.Status == StatusOnline || *filter.Status == StatusOffline) {
+		activeIDs, err := s.activity.OnlineDeviceIDs(ctx, ownerID, time.Now().UTC().Add(-s.offlineAfter))
+		if err != nil {
+			return ListResult{}, fmt.Errorf("read device activity: %w", err)
+		}
+		if *filter.Status == StatusOnline && len(activeIDs) == 0 {
+			return ListResult{Items: []ListItem{}, Page: filter.Page, PageSize: filter.PageSize, Total: 0}, nil
+		}
+		queryFilter.Status = nil
+		derivedStatus := *filter.Status
+		queryFilter.DerivedStatus = &derivedStatus
+		queryFilter.ActiveDeviceIDs = activeIDs
+	}
+
+	items, total, err := s.devices.ListByOwner(ctx, ownerID, queryFilter)
 	if err != nil {
 		return ListResult{}, fmt.Errorf("list devices: %w", err)
+	}
+	if err := s.applyActivity(ctx, ownerID, items); err != nil {
+		return ListResult{}, err
 	}
 	if items == nil {
 		items = []ListItem{}
@@ -95,6 +142,7 @@ func (s *Service) Bind(ctx context.Context, ownerID uint64, input BindInput) (*D
 	if err != nil {
 		return nil, fmt.Errorf("bind device: %w", err)
 	}
+	clearDynamicDeviceFields(result)
 	return result, nil
 }
 
@@ -107,6 +155,11 @@ func (s *Service) Unbind(ctx context.Context, ownerID, deviceID uint64) error {
 			return ErrNotFound
 		}
 		return fmt.Errorf("unbind device: %w", err)
+	}
+	if s.activity != nil {
+		if err := s.activity.Forget(ctx, ownerID, deviceID); err != nil {
+			slog.Warn("remove unbound device activity", "ownerId", ownerID, "deviceId", deviceID, "error", err)
+		}
 	}
 	return nil
 }
@@ -122,7 +175,54 @@ func (s *Service) Status(ctx context.Context, ownerID, deviceID uint64) (*Device
 	if err != nil {
 		return nil, fmt.Errorf("get device status: %w", err)
 	}
+	items := []ListItem{{Device: *result}}
+	if err := s.applyActivity(ctx, ownerID, items); err != nil {
+		return nil, err
+	}
+	result = &items[0].Device
 	return result, nil
+}
+
+func (s *Service) applyActivity(ctx context.Context, ownerID uint64, items []ListItem) error {
+	ids := make([]uint64, 0, len(items))
+	for i := range items {
+		clearDynamicDeviceFields(&items[i].Device)
+		ids = append(ids, items[i].Device.ID)
+	}
+	if s.activity == nil || len(ids) == 0 {
+		return nil
+	}
+	lastSeen, err := s.activity.LastSeen(ctx, ownerID, ids)
+	if err != nil {
+		return fmt.Errorf("read device activity: %w", err)
+	}
+	cutoff := time.Now().UTC().Add(-s.offlineAfter)
+	for i := range items {
+		if items[i].Device.Status == StatusUnactivated || items[i].Device.Status == StatusDisabled ||
+			items[i].Device.Status == StatusFault || items[i].Device.Status == StatusReconnecting {
+			continue
+		}
+		seenAt, ok := lastSeen[items[i].Device.ID]
+		if ok {
+			seenAt = seenAt.UTC()
+			items[i].Device.LastSeenAt = &seenAt
+		}
+		if ok && !seenAt.Before(cutoff) {
+			items[i].Device.Status = StatusOnline
+		} else {
+			items[i].Device.Status = StatusOffline
+		}
+	}
+	return nil
+}
+
+func clearDynamicDeviceFields(value *Device) {
+	if value == nil {
+		return
+	}
+	value.Battery = nil
+	value.Signal = nil
+	value.StatusMessage = nil
 }
 
 func ValidStatus(status Status) bool {

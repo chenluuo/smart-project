@@ -132,8 +132,22 @@ func (s *AuthService) Login(ctx context.Context, accountName, password string) (
 	return &LoginResult{AccessToken: token, ExpiresIn: expiresIn, User: user, Role: role}, nil
 }
 
-func (s *AuthService) Authenticate(token string) (Claims, error) {
-	return s.tokens.Parse(token)
+func (s *AuthService) Authenticate(ctx context.Context, token string) (Claims, error) {
+	claims, err := s.tokens.Parse(token)
+	if err != nil {
+		return Claims{}, err
+	}
+	user, err := s.users.FindUserByID(ctx, claims.UserID)
+	if errors.Is(err, ErrUserNotFound) {
+		return Claims{}, ErrInvalidToken
+	}
+	if err != nil {
+		return Claims{}, fmt.Errorf("verify token user: %w", err)
+	}
+	if user.Status != UserStatusActive {
+		return Claims{}, ErrInvalidToken
+	}
+	return claims, nil
 }
 
 func (s *AuthService) CurrentUser(ctx context.Context, userID uint64) (*CurrentUserResult, error) {

@@ -2,6 +2,8 @@ package control
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 
 	"github.com/chenluuo/smart-project/backend/internal/device"
 	"github.com/chenluuo/smart-project/backend/internal/shared/persistence"
@@ -45,13 +47,21 @@ func (r *Repository) FindByDeviceAndStatuses(ctx context.Context, deviceID uint6
 
 func (r *Repository) FindIrrigationDevice(ctx context.Context, ownerID, plotID uint64) (*IrrigationDevice, error) {
 	var result IrrigationDevice
+	// 注意：不能用 gorm 的 First(&struct{}) —— 该结构体无主键字段时
+	// GORM 会把 device_id 当主键并自动追加 ORDER BY p.device_id（plots 无此列报 1054）。
+	// 用显式 Row() 取第一行，完全绕开 GORM 默认排序生成。
 	err := r.db.WithContext(ctx).Table("plots AS p").
 		Select("d.id AS device_id, p.id AS plot_id, d.status AS status").
 		Joins("JOIN device_bindings AS b ON b.plot_id = p.id AND b.unbound_at IS NULL").
 		Joins("JOIN devices AS d ON d.id = b.device_id").
 		Where("p.id = ? AND p.owner_id = ? AND d.device_type = ?", plotID, ownerID, "IRRIGATION_VALVE").
-		Order("d.id ASC").Take(&result).Error
+		Order("d.id").
+		Limit(1).
+		Row().Scan(&result.DeviceID, &result.PlotID, &result.Status)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, gorm.ErrRecordNotFound
+		}
 		return nil, err
 	}
 	return &result, nil
@@ -69,9 +79,12 @@ func (r *Repository) FindByIdempotencyKeyAndOwner(ctx context.Context, key strin
 	return &result, nil
 }
 
-func (r *Repository) FindLatestByDeviceAndPlot(ctx context.Context, deviceID, plotID uint64) (*Command, error) {
+func (r *Repository) FindLatestSuccessfulByDeviceAndPlot(ctx context.Context, deviceID, plotID uint64) (*Command, error) {
 	var result Command
-	err := r.db.WithContext(ctx).Where("device_id = ? AND plot_id = ?", deviceID, plotID).
+	err := r.db.WithContext(ctx).Where(
+		"device_id = ? AND plot_id = ? AND status IN ?",
+		deviceID, plotID, []Status{StatusAcknowledged, StatusSucceeded},
+	).
 		Order("created_at DESC, id DESC").First(&result).Error
 	if err != nil {
 		return nil, err

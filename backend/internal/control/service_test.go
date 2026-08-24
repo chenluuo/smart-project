@@ -57,7 +57,7 @@ func (s *storeStub) FindIrrigationDevice(_ context.Context, ownerID, plotID uint
 	return s.irrigationDevice, s.irrigationErr
 }
 
-func (s *storeStub) FindLatestByDeviceAndPlot(_ context.Context, deviceID, plotID uint64) (*Command, error) {
+func (s *storeStub) FindLatestSuccessfulByDeviceAndPlot(_ context.Context, deviceID, plotID uint64) (*Command, error) {
 	s.deviceID, s.plotID = deviceID, plotID
 	return s.latest, s.latestErr
 }
@@ -142,10 +142,11 @@ func TestIssueCommandValidationAndDeviceState(t *testing.T) {
 		input IssueInput
 		want  error
 	}{
-		{name: "short open duration", store: &storeStub{}, input: IssueInput{Action: "OPEN", DurationSeconds: 59, Mode: "MANUAL"}, want: ErrInvalidInput},
-		{name: "close with duration", store: &storeStub{}, input: IssueInput{Action: "CLOSE", DurationSeconds: 60, Mode: "MANUAL"}, want: ErrInvalidInput},
-		{name: "missing valve", store: &storeStub{irrigationErr: gorm.ErrRecordNotFound}, input: IssueInput{Action: "CLOSE", Mode: "MANUAL"}, want: ErrNotFound},
-		{name: "offline valve", store: &storeStub{irrigationDevice: &IrrigationDevice{DeviceID: 3, PlotID: 11, Status: device.StatusOffline}}, input: IssueInput{Action: "CLOSE", Mode: "MANUAL"}, want: ErrDeviceOffline},
+		{name: "missing idempotency key", store: &storeStub{}, input: IssueInput{Action: "CLOSE", Mode: "MANUAL"}, want: ErrInvalidInput},
+		{name: "short open duration", store: &storeStub{}, input: IssueInput{Action: "OPEN", DurationSeconds: 59, Mode: "MANUAL", IdempotencyKey: "request-1"}, want: ErrInvalidInput},
+		{name: "close with duration", store: &storeStub{}, input: IssueInput{Action: "CLOSE", DurationSeconds: 60, Mode: "MANUAL", IdempotencyKey: "request-1"}, want: ErrInvalidInput},
+		{name: "missing valve", store: &storeStub{irrigationErr: gorm.ErrRecordNotFound}, input: IssueInput{Action: "CLOSE", Mode: "MANUAL", IdempotencyKey: "request-1"}, want: ErrNotFound},
+		{name: "offline valve", store: &storeStub{irrigationDevice: &IrrigationDevice{DeviceID: 3, PlotID: 11, Status: device.StatusOffline}}, input: IssueInput{Action: "CLOSE", Mode: "MANUAL", IdempotencyKey: "request-1"}, want: ErrDeviceOffline},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -2,8 +2,10 @@
 # 用法：docker compose -f agent/docker-compose.yml up -d
 # 敏感配置经 .env 注入（agent/.env，不入库）
 services:
+  # agent 侧独立 Redis（不复用 go 端/共享实例），宿主 6379 独占
   redis:
     image: redis:7-alpine
+    container_name: agent-redis
     ports: ["6379:6379"]
     command: ["redis-server", "--appendonly", "yes"]
 
@@ -13,6 +15,8 @@ services:
       - ETCD_AUTO_COMPACTION_MODE=revision
       - ETCD_AUTO_COMPACTION_RETENTION=1000
       - ETCD_QUOTA_BACKEND_BYTES=4294967296
+      - ETCD_SNAPSHOT_COUNT=50000
+    command: etcd -advertise-client-urls=http://127.0.0.1:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
     volumes: ["milvus-etcd:/etcd"]
 
   milvus-minio:
@@ -24,7 +28,7 @@ services:
     volumes: ["milvus-minio:/minios"]
 
   milvus:
-    image: milvusdb/milvus:v2.4-latest
+    image: milvusdb/milvus:v2.4.1
     command: ["milvus", "run", "standalone"]
     environment:
       ETCD_ENDPOINTS: milvus-etcd:2379
