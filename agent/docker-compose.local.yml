@@ -1,0 +1,70 @@
+# agent 4 服务容器化（本地测试版）
+# 用法：
+#   1. 准备 agent/.env（密钥：LLM_API_KEY / EMBEDDING_API_KEY / JWT_SECRET / GO_INTERNAL_KEY / MINIO_SECRET_KEY）
+#   2. docker compose -f agent/docker-compose.local.yml up -d --build
+# 说明：
+#   - 复用宿主运行的依赖（Go 8080 / MySQL / Redis 6379 / Milvus 19530 / MinIO 9000），
+#     通过 host.docker.internal 访问（Windows/Mac Docker Desktop 自动支持）
+#   - 4 服务共用同一镜像 smart-project-agent:local，compose 网络内服务名互通
+#   - 前端 vite proxy /api -> localhost:8080、/agent -> localhost:8000 不变
+services:
+  agent-service:
+    build: {context: ., dockerfile: Dockerfile}
+    image: smart-project-agent:local
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
+    working_dir: /app/agent-service
+    env_file: .env
+    environment:
+      REDIS_HOST: host.docker.internal
+      MILVUS_HOST: host.docker.internal
+      MINIO_ENDPOINT: host.docker.internal:9000
+      GO_BASE_URL: http://host.docker.internal:8080/api/v1
+      CONTEXT_BASE_URL: http://context-service:8001
+      TOOL_BASE_URL: http://tool-service:8002
+    ports: ["8000:8000"]
+
+  context-service:
+    image: smart-project-agent:local
+    command: uvicorn main:app --host 0.0.0.0 --port 8001
+    working_dir: /app/context-service
+    env_file: .env
+    environment:
+      REDIS_HOST: host.docker.internal
+      MILVUS_HOST: host.docker.internal
+      MINIO_ENDPOINT: host.docker.internal:9000
+      GO_BASE_URL: http://host.docker.internal:8080/api/v1
+      AGENT_BASE_URL: http://agent-service:8000
+      TOOL_BASE_URL: http://tool-service:8002
+    ports: ["8001:8001"]
+
+  tool-service:
+    image: smart-project-agent:local
+    command: uvicorn main:app --host 0.0.0.0 --port 8002
+    working_dir: /app/tool-service
+    env_file: .env
+    environment:
+      REDIS_HOST: host.docker.internal
+      MILVUS_HOST: host.docker.internal
+      MINIO_ENDPOINT: host.docker.internal:9000
+      GO_BASE_URL: http://host.docker.internal:8080/api/v1
+      AGENT_BASE_URL: http://agent-service:8000
+      CONTEXT_BASE_URL: http://context-service:8001
+    ports: ["8002:8002"]
+
+  ingest-service:
+    image: smart-project-agent:local
+    command: python worker.py
+    working_dir: /app/ingest-service
+    env_file: .env
+    environment:
+      REDIS_HOST: host.docker.internal
+      MILVUS_HOST: host.docker.internal
+      MINIO_ENDPOINT: host.docker.internal:9000
+      GO_BASE_URL: http://host.docker.internal:8080/api/v1
+
+  # 前端：node 构建 + nginx 托管；/api → 宿主 Go 8080，/agent → agent-service 容器
+  frontend:
+    build: {context: ../frontend, dockerfile: Dockerfile}
+    image: smart-project-frontend:local
+    ports: ["5173:80"]
+    depends_on: [agent-service]

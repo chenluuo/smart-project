@@ -4,7 +4,7 @@
 #   MINIO_SECRET_KEY / JWT_SECRET / GO_INTERNAL_KEY
 services:
   redis:
-    host: localhost
+    host: ${REDIS_HOST:-localhost}
     port: 6379
     db: 0
     password: ""            # 本地无密码；生产用 ${REDIS_PASSWORD}
@@ -12,7 +12,7 @@ services:
     consumer_group: "ingest"
 
   go:
-    base_url: "http://localhost:8080/api/v1"
+    base_url: ${GO_BASE_URL:-http://localhost:8080/api/v1}
     timeout_seconds: 10
     internal_key: ${GO_INTERNAL_KEY}
 
@@ -35,7 +35,7 @@ services:
     dimensions: 1024        # 自定义输出维度（multimodal 支持 1024，实测 512 不支持）
 
   milvus:
-    host: localhost
+    host: ${MILVUS_HOST:-localhost}
     port: 19530
     token: ""               # 本地无认证；生产用 ${MILVUS_TOKEN}
     dimension: 1024         # 与 embedding.dimensions 一致（火山接口支持 1024）
@@ -43,7 +43,7 @@ services:
     memory_collection: "memory"
 
   minio:
-    endpoint: "localhost:9000"
+    endpoint: ${MINIO_ENDPOINT:-localhost:9000}
     access_key: "minioadmin"
     secret_key: ${MINIO_SECRET_KEY}
     bucket: "knowledge"
@@ -51,7 +51,7 @@ services:
 
   agent:
     port: 8000
-    base_url: "http://localhost:8000"
+    base_url: ${AGENT_BASE_URL:-http://localhost:8000}
     max_tool_rounds: 5
     close_timeout_minutes: 5
     min_messages_for_summary: 2
@@ -61,11 +61,11 @@ services:
 
   context:
     port: 8001
-    base_url: "http://localhost:8001"
+    base_url: ${CONTEXT_BASE_URL:-http://localhost:8001}
 
   tool:
     port: 8002
-    base_url: "http://localhost:8002"
+    base_url: ${TOOL_BASE_URL:-http://localhost:8002}
     mock_go: false          # Go 已部署联调：工具走真实 Go 接口
     top_k: 5                # search_knowledge 默认 top_k
     plots_full_threshold: 5 # get_user_plots 全量返回阈值
