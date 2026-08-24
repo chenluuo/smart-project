@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { api, ApiError } from '../../api';
-import type { AdminKnowledgeDoc, AdminPlot, AdminUser, Device } from '../../types';
+import type { AdminDevice, AdminKnowledgeDoc, AdminPlot, AdminUser } from '../../types';
 
 type AdminSection = 'overview' | 'users' | 'plots' | 'knowledge' | 'devices';
 
@@ -75,7 +75,7 @@ export function AdminPanel(props: { user: { id: number; name: string } | null; o
           {section === 'users' && <AdminUsers />}
           {section === 'plots' && <AdminPlots />}
           {section === 'knowledge' && <AdminKnowledge />}
-          {section === 'devices' && <AdminDevices adminUserId={props.user?.id ?? 0} />}
+          {section === 'devices' && <AdminDevices />}
         </div>
       </main>
     </div>
@@ -736,8 +736,8 @@ function PreviewDrawer(props: { doc: AdminKnowledgeDoc; onClose: () => void }) {
 
 // ---------------- 设备管理 ----------------
 
-function AdminDevices(props: { adminUserId: number }) {
-  const { data, loading, error, refresh } = useAdminLoader(() => api.devices({ pageSize: 100 }), []);
+function AdminDevices() {
+  const { data, loading, error, refresh } = useAdminLoader(() => api.adminDevices({ pageSize: 100 }), []);
   const plots = useAdminLoader(() => api.adminPlots({ pageSize: 100 }), []);
   const [sn, setSn] = useState('');
   const [name, setName] = useState('');
@@ -745,11 +745,6 @@ function AdminDevices(props: { adminUserId: number }) {
   const [plotId, setPlotId] = useState('');
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
-
-  const myPlots = useMemo(
-    () => (plots.data?.items ?? []).filter((plot) => plot.ownerId === props.adminUserId),
-    [plots.data, props.adminUserId]
-  );
 
   async function bind(event: FormEvent) {
     event.preventDefault();
@@ -760,7 +755,7 @@ function AdminDevices(props: { adminUserId: number }) {
     }
     setBusy(true);
     try {
-      await api.bindDevice({ deviceSn: sn.trim(), plotId: Number(plotId), name: name.trim(), type: type.trim() });
+      await api.adminBindDevice({ deviceSn: sn.trim(), plotId: Number(plotId), name: name.trim(), type: type.trim() });
       setNotice('设备已绑定');
       setSn('');
       setName('');
@@ -774,13 +769,13 @@ function AdminDevices(props: { adminUserId: number }) {
     }
   }
 
-  async function unbind(device: Device) {
+  async function unbind(device: AdminDevice) {
     const ok = window.confirm(`确认解绑设备「${device.name}」（${device.deviceSn}）？`);
     if (!ok) return;
     setBusy(true);
     setNotice('');
     try {
-      await api.unbindDevice(device.id);
+      await api.adminUnbindDevice(device.id);
       setNotice('设备已解绑');
       refresh();
     } catch (err) {
@@ -794,7 +789,7 @@ function AdminDevices(props: { adminUserId: number }) {
     <div className="admin-stack">
       {notice && <div className="admin-notice">{notice}</div>}
       <section className="admin-card">
-        <h3>绑定设备</h3>
+        <h3>绑定设备（可绑定到任意地块）</h3>
         <form className="admin-bind-form" onSubmit={bind}>
           <input value={sn} onChange={(event) => setSn(event.target.value)} placeholder="设备序列号 deviceSn" />
           <input value={name} onChange={(event) => setName(event.target.value)} placeholder="设备名称" />
@@ -806,9 +801,9 @@ function AdminDevices(props: { adminUserId: number }) {
           </select>
           <select value={plotId} onChange={(event) => setPlotId(event.target.value)}>
             <option value="">选择地块</option>
-            {myPlots.map((plot) => (
+            {(plots.data?.items ?? []).map((plot) => (
               <option value={plot.id} key={plot.id}>
-                {plot.code} {plot.name}
+                {plot.code} {plot.name}（{plot.ownerName || `#${plot.ownerId}`}）
               </option>
             ))}
           </select>
@@ -816,13 +811,10 @@ function AdminDevices(props: { adminUserId: number }) {
             {busy ? '处理中…' : '绑定'}
           </button>
         </form>
-        {myPlots.length === 0 && (
-          <p className="admin-modal-hint">当前账号名下暂无地块，请先在「地块管理」中把地块分配给你，再绑定设备。</p>
-        )}
       </section>
       <AdminState loading={loading} error={error}>
         <section className="admin-card">
-          <h3>当前账号设备</h3>
+          <h3>全部设备</h3>
           <div className="admin-table-wrap">
             <table className="admin-table">
               <thead>
@@ -831,6 +823,8 @@ function AdminDevices(props: { adminUserId: number }) {
                   <th>名称</th>
                   <th>类型</th>
                   <th>状态</th>
+                  <th>绑定地块</th>
+                  <th>归属用户</th>
                   <th>操作</th>
                 </tr>
               </thead>
@@ -844,9 +838,19 @@ function AdminDevices(props: { adminUserId: number }) {
                       <span className={`admin-badge ${device.status === 'ONLINE' ? 'ok' : ''}`}>{device.status}</span>
                     </td>
                     <td>
-                      <button className="admin-link-btn danger" disabled={busy} onClick={() => void unbind(device)}>
-                        解绑
-                      </button>
+                      {device.plotId > 0 ? (
+                        `${device.plotCode ?? '#' + device.plotId} ${device.plotName ?? ''}`
+                      ) : (
+                        <span className="admin-badge off">未绑定</span>
+                      )}
+                    </td>
+                    <td>{device.ownerName || '--'}</td>
+                    <td>
+                      {device.plotId > 0 && (
+                        <button className="admin-link-btn danger" disabled={busy} onClick={() => void unbind(device)}>
+                          解绑
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}

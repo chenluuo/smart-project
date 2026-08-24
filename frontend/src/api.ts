@@ -1,5 +1,6 @@
 import type {
   AdminDeleteResult,
+  AdminDevice,
   AdminKnowledgeDoc,
   AdminPlot,
   AdminUser,
@@ -157,6 +158,15 @@ export const api = {
   // ---------------- 管理后台（SYSTEM_ADMIN） ----------------
   adminUsers: (params: { keyword?: string; role?: string; status?: string; page?: number; pageSize?: number } = {}) =>
     request<PageResult<AdminUser>>(`/api/v1/admin/users${query({ page: 1, pageSize: 50, ...params })}`),
+  adminDevices: (params: { plotId?: number; status?: string; type?: string; page?: number; pageSize?: number } = {}) =>
+    request<PageResult<AdminDevice>>(`/api/v1/admin/devices${query({ page: 1, pageSize: 100, ...params })}`),
+  adminBindDevice: (payload: { deviceSn: string; plotId: number; name: string; type: string }) =>
+    request<{ id: number; deviceSn: string; status: string }>('/api/v1/admin/devices/bind', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  adminUnbindDevice: (deviceId: number) =>
+    request<boolean>(`/api/v1/admin/devices/${deviceId}/binding`, { method: 'DELETE' }),
   adminPlots: (params: { keyword?: string; ownerId?: number; status?: string; page?: number; pageSize?: number } = {}) =>
     request<PageResult<AdminPlot>>(`/api/v1/admin/plots${query({ page: 1, pageSize: 100, ...params })}`),
   adminCreatePlot: (payload: { code: string; name: string; area?: number | null; location?: string | null; ownerId: number }) =>

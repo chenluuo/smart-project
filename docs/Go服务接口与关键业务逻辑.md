@@ -1457,3 +1457,57 @@ DELETE /api/v1/admin/knowledge/docs/{docId}
 
 - 审批/发布复用现有接口：`POST /api/v1/knowledge/docs/{docId}/approve`、`/publish`、`/archive`（见 §9.3）。
 - 向量清理为异步最终一致：删除响应返回后极短时间内旧向量可能仍可被检索到。
+
+### 12.7 设备列表（全量，管理后台）
+
+`GET /api/v1/admin/devices`（SYSTEM_ADMIN）
+
+与农户视角的 `GET /api/v1/devices`（按 JWT 归属过滤）不同，此接口返回**全部设备**（含未绑定设备），并附当前有效绑定的地块与归属用户。
+
+查询参数：`page`、`pageSize`（上限100）、`plotId`、`status`、`type`
+
+响应：
+
+```json
+{
+  "code": 0,
+  "message": "OK",
+  "data": {
+    "items": [
+      {
+        "id": 1,
+        "deviceSn": "SN-001",
+        "name": "A1 土壤传感器",
+        "type": "SOIL_SENSOR",
+        "status": "ONLINE",
+        "plotId": 1,
+        "plotCode": "A1",
+        "plotName": "A1 番茄地",
+        "ownerName": "testfarmer",
+        "firmwareVersion": null,
+        "lastSeenAt": null
+      }
+    ],
+    "page": 1,
+    "pageSize": 20,
+    "total": 6
+  }
+}
+```
+
+- `plotId = 0` 表示未绑定（`plotCode`/`plotName`/`ownerName` 为 null）。
+
+### 12.8 绑定设备（任意地块，管理后台）
+
+`POST /api/v1/admin/devices/bind`（SYSTEM_ADMIN）
+
+请求体与农户版 `POST /api/v1/devices/bind` 一致（`deviceSn`/`plotId`/`name`/`type`），但**不做地块归属校验**——管理员可将设备绑定到任意农户的地块（农户版受 JWT 归属限制）。
+
+- 错误：`40001` 参数不合法；`40401` 地块不存在；`40901` 设备已绑定或类型不一致。
+- 响应：`{ "id", "deviceSn", "status" }`。
+
+### 12.9 解绑设备（任意，管理后台）
+
+`DELETE /api/v1/admin/devices/{deviceId}/binding`（SYSTEM_ADMIN）
+
+解绑任意设备（农户版受 JWT 归属限制）。错误：`40402` 设备不存在或未绑定。

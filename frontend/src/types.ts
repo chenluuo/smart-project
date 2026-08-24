@@ -273,3 +273,17 @@ export type AdminDeleteResult = {
   deleted: boolean;
   indexCleanup: string;
 };
+
+export type AdminDevice = {
+  id: number;
+  deviceSn: string;
+  name: string;
+  type: string;
+  status: string;
+  plotId: number;
+  plotCode?: string | null;
+  plotName?: string | null;
+  ownerName?: string | null;
+  firmwareVersion?: string | null;
+  lastSeenAt?: string | null;
+};

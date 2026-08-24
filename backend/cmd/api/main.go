@@ -76,7 +76,8 @@ func main() {
 	authService := identity.NewAuthService(identity.NewRepositories(db), tokenManager)
 	plotRepositories := plot.NewRepositories(db)
 	var plotStore plot.Store = plotRepositories
-	var deviceStore device.Store = device.NewRepositories(db)
+	deviceRepositories := device.NewRepositories(db)
+	var deviceStore device.Store = deviceRepositories
 	alertRepositories := alert.NewRepositories(db)
 	var alertStore alert.Store = alertRepositories
 	if redisClient != nil {
@@ -202,7 +203,7 @@ func main() {
 		Handler: httpserver.NewRouterWithAdminServices(
 			cfg.Server.Mode, healthPinger, authService, plotService, deviceService, controlService, alertService,
 			agentService, knowledgeService, telemetryService, cfg.Internal.ServiceKey,
-			identity.NewRepositories(db), plotRepositories, knowledgeService, eventBroker,
+			identity.NewRepositories(db), plotRepositories, knowledgeService, deviceRepositories, eventBroker,
 		),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
