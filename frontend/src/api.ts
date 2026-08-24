@@ -167,6 +167,8 @@ export const api = {
     }),
   adminUnbindDevice: (deviceId: number) =>
     request<boolean>(`/api/v1/admin/devices/${deviceId}/binding`, { method: 'DELETE' }),
+  adminDeleteDevice: (deviceId: number) =>
+    request<{ id: number; deleted: boolean }>(`/api/v1/admin/devices/${deviceId}`, { method: 'DELETE' }),
   adminPlots: (params: { keyword?: string; ownerId?: number; status?: string; page?: number; pageSize?: number } = {}) =>
     request<PageResult<AdminPlot>>(`/api/v1/admin/plots${query({ page: 1, pageSize: 100, ...params })}`),
   adminCreatePlot: (payload: { code: string; name: string; area?: number | null; location?: string | null; ownerId: number }) =>

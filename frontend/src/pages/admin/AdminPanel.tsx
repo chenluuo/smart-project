@@ -749,14 +749,15 @@ function AdminDevices() {
   async function bind(event: FormEvent) {
     event.preventDefault();
     setNotice('');
-    if (!sn.trim() || !name.trim() || !type.trim() || !plotId) {
-      setNotice('请填写完整的设备信息并选择地块');
+    if (!sn.trim() || !name.trim() || !type.trim()) {
+      setNotice('请填写完整的设备信息（序列号/名称/类型）');
       return;
     }
     setBusy(true);
     try {
-      await api.adminBindDevice({ deviceSn: sn.trim(), plotId: Number(plotId), name: name.trim(), type: type.trim() });
-      setNotice('设备已绑定');
+      const onlyAdd = !plotId;
+      await api.adminBindDevice({ deviceSn: sn.trim(), plotId: onlyAdd ? 0 : Number(plotId), name: name.trim(), type: type.trim() });
+      setNotice(onlyAdd ? '设备已添加（未绑定地块）' : '设备已绑定');
       setSn('');
       setName('');
       setType('');
@@ -785,22 +786,35 @@ function AdminDevices() {
     }
   }
 
+  async function removeDevice(device: AdminDevice) {
+    const ok = window.confirm(
+      `确认删除设备「${device.name}」（${device.deviceSn}）？\n将同时删除绑定记录，不可恢复。`
+    );
+    if (!ok) return;
+    setBusy(true);
+    setNotice('');
+    try {
+      await api.adminDeleteDevice(device.id);
+      setNotice('设备已删除');
+      refresh();
+    } catch (err) {
+      setNotice(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="admin-stack">
       {notice && <div className="admin-notice">{notice}</div>}
       <section className="admin-card">
-        <h3>绑定设备（可绑定到任意地块）</h3>
+        <h3>添加 / 绑定设备</h3>
         <form className="admin-bind-form" onSubmit={bind}>
-          <input value={sn} onChange={(event) => setSn(event.target.value)} placeholder="设备序列号 deviceSn" />
+          <input value={sn} onChange={(event) => setSn(event.target.value)} placeholder="设备序列号 deviceSn（不存在则自动创建）" />
           <input value={name} onChange={(event) => setName(event.target.value)} placeholder="设备名称" />
-          <select value={type} onChange={(event) => setType(event.target.value)}>
-            <option value="">设备类型</option>
-            <option value="SOIL_SENSOR">土壤传感器</option>
-            <option value="VALVE">灌溉阀门</option>
-            <option value="WEATHER">气象站</option>
-          </select>
+          <input value={type} onChange={(event) => setType(event.target.value)} placeholder="设备类型，如 SOIL_SENSOR / VALVE" />
           <select value={plotId} onChange={(event) => setPlotId(event.target.value)}>
-            <option value="">选择地块</option>
+            <option value="">暂不绑定（仅添加设备）</option>
             {(plots.data?.items ?? []).map((plot) => (
               <option value={plot.id} key={plot.id}>
                 {plot.code} {plot.name}（{plot.ownerName || `#${plot.ownerId}`}）
@@ -808,7 +822,7 @@ function AdminDevices() {
             ))}
           </select>
           <button type="submit" className="primary" disabled={busy}>
-            {busy ? '处理中…' : '绑定'}
+            {busy ? '处理中…' : plotId ? '绑定设备' : '添加设备'}
           </button>
         </form>
       </section>
@@ -845,12 +859,16 @@ function AdminDevices() {
                       )}
                     </td>
                     <td>{device.ownerName || '--'}</td>
-                    <td>
+                    <td className="admin-actions">
                       {device.plotId > 0 && (
                         <button className="admin-link-btn danger" disabled={busy} onClick={() => void unbind(device)}>
                           解绑
                         </button>
                       )}
+                      <button className="admin-link-btn danger" disabled={busy} onClick={() => void removeDevice(device)}>
+                        <Trash2 size={14} />
+                        删除
+                      </button>
                     </td>
                   </tr>
                 ))}

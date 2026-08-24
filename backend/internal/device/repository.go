@@ -226,13 +226,17 @@ func (r Repositories) AdminList(ctx context.Context, filter ListFilter) ([]Admin
 	return items, total, nil
 }
 
-// AdminBind 管理后台绑定设备到任意地块（不做 owner 归属校验；BoundBy 记录操作者）。
+// AdminBind 管理后台添加/绑定设备：plotID=0 时只创建（或更新名称）设备记录、不绑定地块；
+// plotID>0 时绑定到任意地块（不做 owner 归属校验；BoundBy 记录操作者）。
+// 序列号不存在时自动创建设备记录（生成 device_code）。
 func (r Repositories) AdminBind(ctx context.Context, actorID uint64, input BindInput) (*Device, error) {
 	var result Device
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var target plot.Plot
-		if err := tx.Select("id").Where("id = ?", input.PlotID).First(&target).Error; err != nil {
-			return err
+		if input.PlotID > 0 {
+			if err := tx.Select("id").Where("id = ?", input.PlotID).First(&target).Error; err != nil {
+				return err
+			}
 		}
 
 		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("serial_no = ?", input.SerialNo).First(&result).Error
@@ -252,6 +256,15 @@ func (r Repositories) AdminBind(ctx context.Context, actorID uint64, input BindI
 			}
 		default:
 			return err
+		}
+
+		if input.PlotID == 0 {
+			// 仅添加/更新设备，不绑定（已存在时保留现有绑定）
+			if err := tx.Model(&result).Update("name", input.Name).Error; err != nil {
+				return err
+			}
+			result.Name = input.Name
+			return nil
 		}
 
 		var active Binding
@@ -290,6 +303,35 @@ func (r Repositories) AdminUnbind(ctx context.Context, deviceID uint64) error {
 			return err
 		}
 		return tx.Model(&Binding{}).Where("id = ? AND unbound_at IS NULL", binding.ID).Update("unbound_at", time.Now()).Error
+	})
+}
+
+// ErrDeviceHasCommands 设备存在命令记录，禁止物理删除（保留操作历史）。
+var ErrDeviceHasCommands = errors.New("device has command records")
+
+// AdminDelete 管理后台物理删除设备：
+// 1) 删除该设备全部绑定记录（含历史）；2) 告警解除设备引用（保留告警历史）；
+// 3) 设备存在命令记录时拒绝删除（保留操作历史）；4) 删除设备行。
+func (r Repositories) AdminDelete(ctx context.Context, deviceID uint64) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var result Device
+		if err := tx.First(&result, deviceID).Error; err != nil {
+			return err
+		}
+		var commandCount int64
+		if err := tx.Raw("SELECT COUNT(*) FROM device_commands WHERE device_id = ?", deviceID).Scan(&commandCount).Error; err != nil {
+			return err
+		}
+		if commandCount > 0 {
+			return ErrDeviceHasCommands
+		}
+		if err := tx.Where("device_id = ?", deviceID).Delete(&Binding{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Exec("UPDATE alerts SET device_id = NULL WHERE device_id = ?", deviceID).Error; err != nil {
+			return err
+		}
+		return tx.Delete(&Device{}, deviceID).Error
 	})
 }
 

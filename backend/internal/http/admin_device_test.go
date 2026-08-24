@@ -18,8 +18,10 @@ type adminDeviceServiceStub struct {
 	listErr     error
 	bindErr     error
 	unbindErr   error
+	deleteErr   error
 	boundInput  device.BindInput
 	unboundID   uint64
+	deletedID   uint64
 }
 
 func (s *adminDeviceServiceStub) AdminList(_ context.Context, _ device.ListFilter) ([]device.AdminDeviceItem, int64, error) {
@@ -40,6 +42,11 @@ func (s *adminDeviceServiceStub) AdminBind(_ context.Context, _ uint64, input de
 func (s *adminDeviceServiceStub) AdminUnbind(_ context.Context, deviceID uint64) error {
 	s.unboundID = deviceID
 	return s.unbindErr
+}
+
+func (s *adminDeviceServiceStub) AdminDelete(_ context.Context, deviceID uint64) error {
+	s.deletedID = deviceID
+	return s.deleteErr
 }
 
 func newAdminDeviceRouter(auth authService, service adminDeviceService) *gin.Engine {
@@ -134,5 +141,33 @@ func TestAdminDevicesUnbindNotFound(t *testing.T) {
 	router.ServeHTTP(response, request)
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", response.Code)
+	}
+}
+
+func TestAdminDevicesDelete(t *testing.T) {
+	service := &adminDeviceServiceStub{}
+	router := newAdminDeviceRouter(adminAuthServiceStub{}, service)
+	request := httptest.NewRequest(http.MethodDelete, "/api/v1/admin/devices/3", nil)
+	request.Header.Set("Authorization", "Bearer signed-token")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK || service.deletedID != 3 {
+		t.Fatalf("status = %d, deletedID = %d, body = %s", response.Code, service.deletedID, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"deleted":true`) {
+		t.Fatalf("body = %s, want deleted true", response.Body.String())
+	}
+}
+
+func TestAdminDevicesDeleteWithCommands(t *testing.T) {
+	service := &adminDeviceServiceStub{deleteErr: device.ErrDeviceHasCommands}
+	router := newAdminDeviceRouter(adminAuthServiceStub{}, service)
+	request := httptest.NewRequest(http.MethodDelete, "/api/v1/admin/devices/3", nil)
+	request.Header.Set("Authorization", "Bearer signed-token")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", response.Code)
 	}
 }

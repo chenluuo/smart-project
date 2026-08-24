@@ -1503,7 +1503,8 @@ DELETE /api/v1/admin/knowledge/docs/{docId}
 
 请求体与农户版 `POST /api/v1/devices/bind` 一致（`deviceSn`/`plotId`/`name`/`type`），但**不做地块归属校验**——管理员可将设备绑定到任意农户的地块（农户版受 JWT 归属限制）。
 
-- 错误：`40001` 参数不合法；`40401` 地块不存在；`40901` 设备已绑定或类型不一致。
+- **`plotId` 传 0（或缺省）时只添加设备、不绑定地块**：序列号不存在则自动创建设备记录（生成 device_code，status=OFFLINE）；已存在则仅更新名称、保留现有绑定。
+- 错误：`40001` 参数不合法；`40401` 地块不存在；`40901` 设备已绑定到其他地块（提示"请先解绑"）或设备类型与已登记信息不一致。
 - 响应：`{ "id", "deviceSn", "status" }`。
 
 ### 12.9 解绑设备（任意，管理后台）
@@ -1511,3 +1512,12 @@ DELETE /api/v1/admin/knowledge/docs/{docId}
 `DELETE /api/v1/admin/devices/{deviceId}/binding`（SYSTEM_ADMIN）
 
 解绑任意设备（农户版受 JWT 归属限制）。错误：`40402` 设备不存在或未绑定。
+
+### 12.10 删除设备（管理后台）
+
+`DELETE /api/v1/admin/devices/{deviceId}`（SYSTEM_ADMIN）
+
+物理删除设备：删除该设备全部绑定记录（含历史）、告警解除设备引用（保留告警历史）、删除设备行。
+
+- **保护**：设备存在命令记录（`device_commands`）时返回 `40901` 拒绝删除（保留操作历史）。
+- 错误：`40402` 设备不存在；`40901` 设备存在命令记录，无法删除。

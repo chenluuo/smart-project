@@ -16,6 +16,7 @@ type adminDeviceService interface {
 	AdminList(context.Context, device.ListFilter) ([]device.AdminDeviceItem, int64, error)
 	AdminBind(context.Context, uint64, device.BindInput) (*device.Device, error)
 	AdminUnbind(context.Context, uint64) error
+	AdminDelete(context.Context, uint64) error
 }
 
 type adminDeviceHandler struct {
@@ -42,6 +43,7 @@ func registerAdminDeviceRoutes(router *gin.Engine, auth authService, service adm
 	admin.GET("/devices", handler.list)
 	admin.POST("/devices/bind", handler.bind)
 	admin.DELETE("/devices/:deviceId/binding", handler.unbind)
+	admin.DELETE("/devices/:deviceId", handler.delete)
 }
 
 func (h adminDeviceHandler) list(c *gin.Context) {
@@ -99,7 +101,7 @@ func (h adminDeviceHandler) bind(c *gin.Context) {
 	case errors.Is(err, device.ErrNotFound):
 		respondError(c, http.StatusNotFound, 40401, "地块不存在")
 	case errors.Is(err, device.ErrAlreadyBound):
-		respondError(c, http.StatusConflict, 40901, "设备已绑定")
+		respondError(c, http.StatusConflict, 40901, "绑定失败：该设备已绑定到其他地块，请先解绑")
 	case errors.Is(err, device.ErrDeviceTypeMismatch):
 		respondError(c, http.StatusConflict, 40901, "设备类型与已登记信息不一致")
 	case err != nil:
@@ -124,6 +126,26 @@ func (h adminDeviceHandler) unbind(c *gin.Context) {
 		return
 	}
 	respondSuccess(c, http.StatusOK, true)
+}
+
+func (h adminDeviceHandler) delete(c *gin.Context) {
+	deviceID, err := strconv.ParseUint(c.Param("deviceId"), 10, 64)
+	if err != nil || deviceID == 0 {
+		respondError(c, http.StatusBadRequest, 40001, "参数错误：deviceId 必须为正整数")
+		return
+	}
+	if err := h.service.AdminDelete(c.Request.Context(), deviceID); err != nil {
+		switch {
+		case errors.Is(err, gorm.ErrRecordNotFound):
+			respondError(c, http.StatusNotFound, 40402, "设备不存在")
+		case errors.Is(err, device.ErrDeviceHasCommands):
+			respondError(c, http.StatusConflict, 40901, "设备存在命令记录，无法删除（保留操作历史）")
+		default:
+			respondError(c, http.StatusInternalServerError, 50000, "服务器内部错误")
+		}
+		return
+	}
+	respondSuccess(c, http.StatusOK, gin.H{"id": deviceID, "deleted": true})
 }
 
 func parseAdminDeviceListFilter(c *gin.Context) (device.ListFilter, error) {
