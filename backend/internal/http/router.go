@@ -111,6 +111,7 @@ type authService interface {
 type plotService interface {
 	List(context.Context, uint64) ([]plot.Plot, error)
 	Get(context.Context, uint64, uint64) (*plot.Plot, error)
+	UpdateCrop(context.Context, uint64, uint64, string) (*plot.Plot, error)
 }
 
 type deviceService interface {

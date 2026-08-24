@@ -252,6 +252,7 @@
     "code": "A1",
     "name": "西侧棚",
     "cropName": "番茄",
+    "plantingTime": "2026-08-10T00:00:00Z",
     "area": 12.5,
     "status": "ACTIVE",
     "createdAt": "2026-08-01T00:00:00Z"
@@ -259,7 +260,35 @@
 }
 ```
 
-### 3.4 单个地块最新遥测
+### 3.4 更新地块作物
+
+`POST /api/v1/plots/{plotId}/crop`
+
+请求体：
+
+```json
+{
+  "cropName": "番茄"
+}
+```
+
+关键逻辑：校验地块归属后，更新该地块当前种植的作物名称，并将种植时间自动置为本次更新的时间戳（无需前端传入）。当 `cropName` 为空或超过 64 个字符时返回 `40001`。
+
+响应：
+
+```json
+{
+  "code": 0,
+  "message": "OK",
+  "data": {
+    "id": 11,
+    "cropName": "番茄",
+    "plantingTime": "2026-08-24T10:00:00Z"
+  }
+}
+```
+
+### 3.5 单个地块最新遥测
 
 `GET /api/v1/plots/{plotId}/telemetry/latest`
 
@@ -300,7 +329,7 @@
 }
 ```
 
-### 3.5 多地块最新遥测
+### 3.6 多地块最新遥测
 
 `GET /api/v1/telemetry/latest?plotId=11`
 
@@ -328,7 +357,7 @@
 
 其中 `status` 为 `NORMAL` 或 `ALERT`，由该地块是否存在活动告警决定。
 
-### 3.6 历史趋势
+### 3.7 历史趋势
 
 `GET /api/v1/telemetry/history?plotId=11&metric=soilMoisture&range=24h&interval=1h`
 

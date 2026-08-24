@@ -34,7 +34,7 @@
 
 | 表 | 用途 | 关键字段 | 主要关系或约束 |
 | --- | --- | --- | --- |
-| `plots` | 用户拥有的地块 | `id`、`owner_id`、`code`、`name`、`crop_type`、`growth_stage`、`area`、`location`、`status` | `owner_id -> users.id`；用户与地块是一对多 |
+| `plots` | 用户拥有的地块 | `id`、`owner_id`、`code`、`name`、`crop_type`、`planting_time`、`growth_stage`、`area`、`location`、`status` | `owner_id -> users.id`；用户与地块是一对多 |
 | `devices` | 设备主数据 | `id`、`device_code`、`serial_no`、`name`、`device_type`、`model`、`status`、`battery`、`signal`、`firmware_version`、`last_seen_at` | `device_code`、`serial_no` 唯一 |
 | `device_bindings` | 设备与地块的绑定历史 | `id`、`device_id`、`plot_id`、`bound_by`、`bound_at`、`unbound_at` | 分别关联 `devices`、`plots`、`users`；`unbound_at IS NULL` 表示当前绑定 |
 | `device_commands` | 设备控制命令及执行结果 | `id`、`command_id`、`device_id`、`plot_id`、`issued_by`、`action`、`parameters_json`、`idempotency_key`、`status`、执行时间和错误信息 | `command_id`、`idempotency_key` 唯一；关联设备、地块和发起用户 |
@@ -113,6 +113,7 @@
 | `code` | `VARCHAR(32)` | 否 | — | 与 `owner_id` 组成唯一键 `uk_plots_owner_code` | 用户范围内的地块编码 |
 | `name` | `VARCHAR(128)` | 否 | — | — | 地块名称 |
 | `crop_type` | `VARCHAR(64)` | 是 | `NULL` | — | 作物类型 |
+| `planting_time` | `DATETIME(6)` | 是 | `NULL` | — | 作物种植时间，更新作物时自动置为当前时间戳 |
 | `growth_stage` | `VARCHAR(64)` | 是 | `NULL` | — | 当前生长阶段 |
 | `area` | `DECIMAL(12,2)` | 是 | `NULL` | — | 地块面积 |
 | `location` | `VARCHAR(255)` | 是 | `NULL` | — | 地块位置描述 |
