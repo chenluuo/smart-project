@@ -84,6 +84,15 @@ class GoClient:
     def get_thresholds(self, authorization: str, plot_id: str) -> list[Any]:
         return self._request("GET", f"/plots/{plot_id}/thresholds", authorization=authorization)
 
+    def update_threshold(self, authorization: str, plot_id: str, threshold_id: str,
+                         body: dict[str, Any]) -> dict[str, Any]:
+        """修改地块告警阈值规则（Go PUT /plots/{id}/thresholds/{tid}）。"""
+        data = self._request(
+            "PUT", f"/plots/{plot_id}/thresholds/{threshold_id}",
+            authorization=authorization, json=body,
+        )
+        return data if isinstance(data, dict) else {}
+
     def get_devices(self, authorization: str, **query: Any) -> list[Any]:
         return self._request("GET", "/devices", authorization=authorization, params=query)
 
@@ -135,6 +144,14 @@ class GoClient:
     def get_command_result(self, authorization: str, command_id: str) -> dict[str, Any]:
         data = self._request(
             "GET", f"/commands/{command_id}", authorization=authorization
+        )
+        return data if isinstance(data, dict) else {}
+
+    def update_plot_crop(self, authorization: str, plot_id: str, crop_name: str) -> dict[str, Any]:
+        """设置地块种植作物（Go POST /plots/{id}/crop，cropName 非空且 ≤64 字符）。"""
+        data = self._request(
+            "POST", f"/plots/{plot_id}/crop", authorization=authorization,
+            json={"cropName": crop_name},
         )
         return data if isinstance(data, dict) else {}
 

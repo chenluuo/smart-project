@@ -14,6 +14,7 @@ type IrrigationDevice struct {
 	DeviceID uint64        `gorm:"column:device_id"`
 	PlotID   uint64        `gorm:"column:plot_id"`
 	Status   device.Status `gorm:"column:status"`
+	DeviceSN string        `gorm:"column:device_sn"`
 }
 
 type CommandListRow struct {
@@ -51,13 +52,13 @@ func (r *Repository) FindIrrigationDevice(ctx context.Context, ownerID, plotID u
 	// GORM 会把 device_id 当主键并自动追加 ORDER BY p.device_id（plots 无此列报 1054）。
 	// 用显式 Row() 取第一行，完全绕开 GORM 默认排序生成。
 	err := r.db.WithContext(ctx).Table("plots AS p").
-		Select("d.id AS device_id, p.id AS plot_id, d.status AS status").
+		Select("d.id AS device_id, p.id AS plot_id, d.status AS status, d.serial_no AS device_sn").
 		Joins("JOIN device_bindings AS b ON b.plot_id = p.id AND b.unbound_at IS NULL").
 		Joins("JOIN devices AS d ON d.id = b.device_id").
 		Where("p.id = ? AND p.owner_id = ? AND d.device_type = ?", plotID, ownerID, "IRRIGATION_VALVE").
 		Order("d.id").
 		Limit(1).
-		Row().Scan(&result.DeviceID, &result.PlotID, &result.Status)
+		Row().Scan(&result.DeviceID, &result.PlotID, &result.Status, &result.DeviceSN)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, gorm.ErrRecordNotFound
