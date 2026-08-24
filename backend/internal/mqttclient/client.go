@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/chenluuo/smart-project/backend/internal/config"
@@ -14,7 +13,6 @@ import (
 
 type Client struct {
 	client         paho.Client
-	prefix         string
 	telemetryTopic string
 	ackTopic       string
 	handler        *Handler
@@ -28,12 +26,7 @@ type MessageHandler interface {
 
 func New(cfg config.MQTTConfig, handler *Handler, ackHandlers ...MessageHandler) *Client {
 	telemetryTopic := cfg.TopicPrefix + "/+/+/telemetry"
-	result := &Client{
-		prefix:         strings.Trim(cfg.TopicPrefix, "/"),
-		telemetryTopic: telemetryTopic,
-		handler:        handler,
-		messageTimeout: cfg.MessageTimeout,
-	}
+	result := &Client{telemetryTopic: telemetryTopic, handler: handler, messageTimeout: cfg.MessageTimeout}
 	if len(ackHandlers) > 0 {
 		result.ackHandler = ackHandlers[0]
 		result.ackTopic = cfg.TopicPrefix + "/+/+/config/thresholds/ack"
@@ -89,25 +82,6 @@ func (c *Client) Start() {
 
 func (c *Client) Close() {
 	c.client.Disconnect(250)
-}
-
-// PublishCommand 向设备下发命令: {prefix}/{ownerID}/{deviceSN}/command (QoS 1)。
-// 非阻塞: 仅检查消息是否成功进入发送队列, broker 不可用时由 paho 自动重连补发。
-func (c *Client) PublishCommand(ownerID uint64, deviceSN string, payload []byte) error {
-	if ownerID == 0 || strings.TrimSpace(deviceSN) == "" {
-		return errors.New("invalid command route")
-	}
-	topic := fmt.Sprintf("%s/%d/%s/command", c.prefix, ownerID, deviceSN)
-	token := c.client.Publish(topic, 1, false, payload)
-	select {
-	case <-token.Done():
-		if err := token.Error(); err != nil {
-			return fmt.Errorf("publish command %s: %w", topic, err)
-		}
-		return nil
-	case <-time.After(c.messageTimeout):
-		return fmt.Errorf("publish command %s: timed out", topic)
-	}
 }
 
 func (c *Client) onTelemetry(_ paho.Client, message paho.Message) {
