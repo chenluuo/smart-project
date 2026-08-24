@@ -63,6 +63,14 @@ class GoClient:
         data = self._request("GET", "/users/me", authorization=authorization)
         return data if isinstance(data, dict) else {}
 
+    def login(self, username: str, password: str) -> str:
+        """账号登录拿 JWT（服务账号场景，如 ingest 拉文档清单）。"""
+        data = self._request("POST", "/auth/login", json={"username": username, "password": password})
+        token = (data or {}).get("accessToken") or ""
+        if not token:
+            raise RuntimeError("登录失败：未返回 accessToken")
+        return token
+
     # ---------- 工具取数（JWT） ----------
     def get_plots(self, authorization: str, **query: Any) -> list[Any]:
         return self._request("GET", "/plots", authorization=authorization, params=query)

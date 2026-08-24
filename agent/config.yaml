@@ -78,3 +78,7 @@ services:
     evict_batch: 5          # 每次逐出数量
     chunk_size: 800
     chunk_overlap: 100
+    # 服务账号：ingest 拉取 Go 文档清单 /knowledge/docs 用的 JWT 来源（测试环境账号，上线前替换）
+    service_account:
+      username: codex08231008
+      password: Password123!

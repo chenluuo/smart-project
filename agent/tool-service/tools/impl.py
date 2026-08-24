@@ -244,9 +244,11 @@ def search_knowledge(authorization: str, args: dict) -> dict:
              "source": "knowledge/tomato-irrigation.pdf", "score": 0.91,
              "content": "见干见湿原则：土壤湿度低于 30% 时建议灌溉……"},
         ]}
+    from shared.embedding import embed  # 延迟导入
     from shared.milvus_client import search_knowledge as _milvus_search  # 延迟导入
     top_k = args.get("top_k") or _top_k()
-    results = _milvus_search(args["query"], category=args.get("category"), top_k=top_k)
+    query_vec = embed([args["query"]])[0]
+    results = _milvus_search(query_vec, category=args.get("category"), top_k=top_k)
     return {"ok": True, "data": results}
 
 
