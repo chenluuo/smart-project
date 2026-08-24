@@ -2,6 +2,7 @@ package alert
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -237,13 +238,15 @@ func (r Repositories) CreateTriggeredAlert(ctx context.Context, input TriggerInp
 	return result, nil
 }
 
+// warningSpec 设备上报警告规格（告警类型→指标映射）。
+type warningSpec struct {
+	kind   WarningType
+	metric string
+	active bool
+	value  float64
+}
+
 func (r Repositories) SyncDeviceWarnings(ctx context.Context, input DeviceWarningInput, now time.Time) ([]WarningTransition, error) {
-	type warningSpec struct {
-		kind   WarningType
-		metric string
-		active bool
-		value  float64
-	}
 	specs := []warningSpec{
 		{kind: WarningTemperature, metric: "temperature", active: input.TemperatureWarning, value: input.Temperature},
 		{kind: WarningSoilMoisture, metric: "soilMoisture", active: input.SoilMoistureWarning, value: input.SoilMoisture},
@@ -272,10 +275,17 @@ func (r Repositories) SyncDeviceWarnings(ctx context.Context, input DeviceWarnin
 			}
 			if spec.active {
 				if err == nil {
+					// 已有 ACTIVE 设备告警：更新触发值
 					if err := tx.Model(&Alert{}).Where("id = ?", existing.ID).Updates(map[string]any{
 						"trigger_value": decimalFromFloat(spec.value), "updated_at": now,
 					}).Error; err != nil {
 						return err
+					}
+					// 持续告警再推送给 agent：告警 ACTIVE 期间每 3 分钟推一次
+					if shouldRepushDeviceAlert(tx, existing, now) {
+						if err := createDeviceAlertOutbox(tx, existing, input, spec, now); err != nil {
+							return err
+						}
 					}
 					continue
 				}
@@ -296,6 +306,10 @@ func (r Repositories) SyncDeviceWarnings(ctx context.Context, input DeviceWarnin
 					Content: content, Status: notification.StatusSent, SentAt: &sentAt,
 					Auditable: persistence.Auditable{CreatedAt: now, UpdatedAt: now},
 				}).Error; err != nil {
+					return err
+				}
+				// 设备告警推送给 agent：写 outbox（ALERT_ 前缀，alert dispatcher 消费转发）
+				if err := createDeviceAlertOutbox(tx, alert, input, spec, now); err != nil {
 					return err
 				}
 				transitions = append(transitions, WarningTransition{Alert: alert, Created: true, OwnerID: input.OwnerID, PlotID: input.PlotID, PlotCode: plotCode, Metric: spec.metric})
@@ -319,4 +333,38 @@ func (r Repositories) SyncDeviceWarnings(ctx context.Context, input DeviceWarnin
 
 func decimalFromFloat(value float64) decimal.Decimal {
 	return decimal.NewFromFloat(value)
+}
+
+// alertRepushInterval 持续告警再推送间隔：告警 ACTIVE 期间每 3 分钟推一次给 agent。
+const alertRepushInterval = 3 * time.Minute
+
+// createDeviceAlertOutbox 写设备告警 outbox 事件（dispatcher 转发给 agent）。
+func createDeviceAlertOutbox(tx *gorm.DB, alert Alert, input DeviceWarningInput, spec warningSpec, now time.Time) error {
+	devicePayload := map[string]any{
+		"alertId": alert.ID, "ownerId": input.OwnerID, "plotId": input.PlotID,
+		"deviceId": input.DeviceID, "metric": spec.metric, "level": string(alert.Level),
+		"status": string(alert.Status), "triggerValue": spec.value,
+		"warningType": string(spec.kind),
+	}
+	devicePayloadJSON, err := json.Marshal(devicePayload)
+	if err != nil {
+		return err
+	}
+	return tx.Create(&outbox.Event{
+		AggregateType: "ALERT", AggregateID: strconv.FormatUint(alert.ID, 10),
+		EventType: "ALERT_DEVICE_TRIGGERED", Payload: datatypes.JSON(devicePayloadJSON),
+		Status: outbox.StatusPending, AvailableAt: now,
+		Auditable: persistence.Auditable{CreatedAt: now, UpdatedAt: now},
+	}).Error
+}
+
+// shouldRepushDeviceAlert 判断持续告警是否再次推送：距上次推送已满 alertRepushInterval。
+func shouldRepushDeviceAlert(tx *gorm.DB, alert Alert, now time.Time) bool {
+	var lastPushAt time.Time
+	if err := tx.Table("outbox_events").Select("MAX(available_at)").
+		Where("aggregate_type = ? AND aggregate_id = ?", "ALERT", strconv.FormatUint(alert.ID, 10)).
+		Scan(&lastPushAt).Error; err != nil {
+		return false // 查询失败不推送，避免放大
+	}
+	return now.Sub(lastPushAt) >= alertRepushInterval
 }
