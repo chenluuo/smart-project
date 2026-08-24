@@ -17,25 +17,25 @@ from shared.go_client import get_go_client
 from shared.milvus_client import ensure_collections, upsert_documents
 
 _token_lock = threading.Lock()
-_service_token: str = ""
+_cached_token: str = ""
 _token_fetched_at = 0.0
 _TOKEN_TTL = 1800  # 服务账号 JWT 缓存时长（秒）
 
 
 def _service_token() -> str:
     """服务账号登录拿 JWT（缓存 TTL 内复用；Go /knowledge/docs 需要 JWT）。"""
-    global _service_token, _token_fetched_at
+    global _cached_token, _token_fetched_at
     now = time.time()
     with _token_lock:
-        if _service_token and now - _token_fetched_at < _TOKEN_TTL:
-            return _service_token
+        if _cached_token and now - _token_fetched_at < _TOKEN_TTL:
+            return _cached_token
         cfg = get_config("ingest").get("service_account") or {}
         username, password = cfg.get("username"), cfg.get("password")
         if not username or not password:
             raise RuntimeError("ingest 未配置 service_account（config.yaml ingest.service_account）")
-        _service_token = get_go_client().login(username, password)
+        _cached_token = get_go_client().login(username, password)
         _token_fetched_at = now
-        return _service_token
+        return _cached_token
 
 
 def _fetch(url: str) -> str:
