@@ -74,7 +74,8 @@ func main() {
 		os.Exit(1)
 	}
 	authService := identity.NewAuthService(identity.NewRepositories(db), tokenManager)
-	var plotStore plot.Store = plot.NewRepositories(db)
+	plotRepositories := plot.NewRepositories(db)
+	var plotStore plot.Store = plotRepositories
 	var deviceStore device.Store = device.NewRepositories(db)
 	alertRepositories := alert.NewRepositories(db)
 	var alertStore alert.Store = alertRepositories
@@ -198,9 +199,10 @@ func main() {
 	healthPinger := &combinedPinger{mysql: sqlDB, redis: redisClient}
 	server := &http.Server{
 		Addr: ":" + cfg.Server.Port,
-		Handler: httpserver.NewRouterWithBackendServices(
+		Handler: httpserver.NewRouterWithAdminServices(
 			cfg.Server.Mode, healthPinger, authService, plotService, deviceService, controlService, alertService,
-			agentService, knowledgeService, telemetryService, cfg.Internal.ServiceKey, eventBroker,
+			agentService, knowledgeService, telemetryService, cfg.Internal.ServiceKey,
+			identity.NewRepositories(db), plotRepositories, knowledgeService, eventBroker,
 		),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,

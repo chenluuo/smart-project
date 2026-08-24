@@ -73,7 +73,15 @@ def process_doc_event(event: dict) -> dict:
     docs = get_go_client().get_knowledge_docs(authorization="Bearer " + _service_token())
     doc = next((d for d in docs if str(d.get("id")) == str(doc_id)), None)
     if doc is None:
-        return {"doc_id": doc_id, "status": "skipped", "reason": "文档不可用或不存在"}
+        # 文档不在可用（ACTIVE）清单：未发布 / 已删除 / 已归档 → 清理该文档历史向量（幂等）。
+        # 同一通道同时服务上传通知与删除通知：上传 DRAFT 时无向量、删除幂等，安全。
+        try:
+            from shared.milvus_client import delete_documents
+
+            delete_documents(doc_id)
+        except Exception as e:
+            return {"doc_id": doc_id, "status": "failed", "reason": f"清理向量失败: {e}"}
+        return {"doc_id": doc_id, "status": "deleted", "reason": "文档不可用或不存在，已清理向量"}
 
     download_url = doc.get("downloadUrl")
     if not download_url:

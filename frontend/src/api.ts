@@ -1,4 +1,8 @@
 import type {
+  AdminDeleteResult,
+  AdminKnowledgeDoc,
+  AdminPlot,
+  AdminUser,
   AgentMessage,
   AgentSession,
   AgentStreamEvent,
@@ -149,7 +153,27 @@ export const api = {
     request<PageResult<AgentMessage>>(`/api/v1/ai/sessions/${sessionId}/messages?page=1&pageSize=50`),
   closeSession: (sessionId: string) =>
     request<{ sessionId: string; status: string }>(`/api/v1/ai/sessions/${sessionId}/close`, { method: 'POST' }),
-  closeAgentChat: (sessionId: string) => closeAgentChat(sessionId)
+  closeAgentChat: (sessionId: string) => closeAgentChat(sessionId),
+  // ---------------- 管理后台（SYSTEM_ADMIN） ----------------
+  adminUsers: (params: { keyword?: string; role?: string; status?: string; page?: number; pageSize?: number } = {}) =>
+    request<PageResult<AdminUser>>(`/api/v1/admin/users${query({ page: 1, pageSize: 50, ...params })}`),
+  adminPlots: (params: { keyword?: string; ownerId?: number; status?: string; page?: number; pageSize?: number } = {}) =>
+    request<PageResult<AdminPlot>>(`/api/v1/admin/plots${query({ page: 1, pageSize: 100, ...params })}`),
+  adminCreatePlot: (payload: { code: string; name: string; area?: number | null; location?: string | null; ownerId: number }) =>
+    request<AdminPlot>('/api/v1/admin/plots', { method: 'POST', body: JSON.stringify(payload) }),
+  adminAssignPlot: (plotId: number, ownerId: number) =>
+    request<AdminPlot>(`/api/v1/admin/plots/${plotId}/owner`, {
+      method: 'PUT',
+      body: JSON.stringify({ ownerId })
+    }),
+  adminKnowledgeDocs: (params: { status?: string; category?: string; keyword?: string; page?: number; pageSize?: number } = {}) =>
+    request<PageResult<AdminKnowledgeDoc>>(`/api/v1/admin/knowledge/docs${query({ page: 1, pageSize: 50, ...params })}`),
+  adminDeleteKnowledgeDoc: (docId: number) =>
+    request<AdminDeleteResult>(`/api/v1/admin/knowledge/docs/${docId}`, { method: 'DELETE' }),
+  approveKnowledgeDoc: (docId: number) =>
+    request<KnowledgeDocument>(`/api/v1/knowledge/docs/${docId}/approve`, { method: 'POST' }),
+  publishKnowledgeDoc: (docId: number) =>
+    request<KnowledgeDocument>(`/api/v1/knowledge/docs/${docId}/publish`, { method: 'POST' })
 };
 
 export async function streamAgentChat(

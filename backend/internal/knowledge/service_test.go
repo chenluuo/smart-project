@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"testing"
 	"time"
 )
@@ -68,6 +69,32 @@ func (s *memoryStore) Create(_ context.Context, document *Document, _ uint64, _ 
 	copy := *document
 	s.documents[document.ID] = &copy
 	return nil
+}
+
+func (s *memoryStore) ListAll(_ context.Context, filter AdminListFilter) ([]DocumentWithUploader, int64, error) {
+	var result []DocumentWithUploader
+	for _, document := range s.documents {
+		if filter.Status != nil && document.Status != *filter.Status {
+			continue
+		}
+		if filter.Category != "" && document.Category != filter.Category {
+			continue
+		}
+		if filter.Keyword != "" && !strings.Contains(document.Title, filter.Keyword) {
+			continue
+		}
+		result = append(result, DocumentWithUploader{Document: *document, UploaderName: "uploader"})
+	}
+	return result, int64(len(result)), nil
+}
+
+func (s *memoryStore) Delete(_ context.Context, documentID, _ uint64, _ string) (*Document, error) {
+	document := s.documents[documentID]
+	if document == nil {
+		return nil, ErrNotFound
+	}
+	delete(s.documents, documentID)
+	return document, nil
 }
 
 func (s *memoryStore) Transition(_ context.Context, documentID, actorID uint64, target Status, _ string, now time.Time) (*Document, error) {

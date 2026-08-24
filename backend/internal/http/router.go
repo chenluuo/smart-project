@@ -101,6 +101,41 @@ func NewRouterWithBackendServices(
 	return router
 }
 
+// NewRouterWithAdminServices 注册管理后台路由（/api/v1/admin/*，全部 SYSTEM_ADMIN）。
+// 依赖具体仓库层实现：admin 操作不做 JWT 归属过滤，仅做角色校验。
+func NewRouterWithAdminServices(
+	mode string,
+	db databasePinger,
+	auth authService,
+	plots plotService,
+	devices deviceService,
+	controls controlService,
+	alerts alertService,
+	agents agentService,
+	knowledgeDocuments knowledgeService,
+	telemetry telemetryService,
+	internalServiceKey string,
+	adminUsers adminUserService,
+	adminPlots adminPlotService,
+	adminKnowledge adminKnowledgeService,
+	eventSubscribers ...eventSubscriber,
+) *gin.Engine {
+	router := NewRouterWithBackendServices(
+		mode, db, auth, plots, devices, controls, alerts, agents, knowledgeDocuments,
+		telemetry, internalServiceKey, eventSubscribers...,
+	)
+	if adminUsers != nil {
+		registerAdminUserRoutes(router, auth, adminUsers)
+	}
+	if adminPlots != nil {
+		registerAdminPlotRoutes(router, auth, adminPlots)
+	}
+	if adminKnowledge != nil {
+		registerAdminKnowledgeRoutes(router, auth, adminKnowledge)
+	}
+	return router
+}
+
 type authService interface {
 	Register(context.Context, identity.RegisterInput) (*identity.User, error)
 	Login(context.Context, string, string) (*identity.LoginResult, error)

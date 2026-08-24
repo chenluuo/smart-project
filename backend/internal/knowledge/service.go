@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"path"
 	"regexp"
 	"strconv"
@@ -28,8 +29,10 @@ var sha256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 type Store interface {
 	ListActive(context.Context, string) ([]Document, error)
+	ListAll(context.Context, AdminListFilter) ([]DocumentWithUploader, int64, error)
 	Create(context.Context, *Document, uint64, string) error
 	Transition(context.Context, uint64, uint64, Status, string, time.Time) (*Document, error)
+	Delete(context.Context, uint64, uint64, string) (*Document, error)
 }
 
 type ObjectStore interface {
@@ -70,6 +73,29 @@ type DocumentView struct {
 	DownloadURL string     `json:"downloadUrl,omitempty"`
 	PublishedAt *time.Time `json:"publishedAt,omitempty"`
 	UpdatedAt   time.Time  `json:"updatedAt"`
+}
+
+// AdminListFilter 管理后台全状态文档列表过滤条件。
+type AdminListFilter struct {
+	Status   *Status
+	Category string
+	Keyword  string
+	Page     int
+	PageSize int
+}
+
+// AdminDocumentView 管理后台文档列表项（含上传人，供审批队列展示）。
+type AdminDocumentView struct {
+	ID           uint64    `json:"id"`
+	Title        string    `json:"title"`
+	Category     string    `json:"category"`
+	Status       Status    `json:"status"`
+	Version      int       `json:"version"`
+	Source       *string   `json:"source,omitempty"`
+	UploaderName string    `json:"uploaderName"`
+	DownloadURL  string    `json:"downloadUrl,omitempty"`
+	CreatedAt    time.Time `json:"createdAt"`
+	UpdatedAt    time.Time `json:"updatedAt"`
 }
 
 type Service struct {
@@ -126,6 +152,57 @@ func (s *Service) ListActive(ctx context.Context, category string) ([]DocumentVi
 		views = append(views, view)
 	}
 	return views, nil
+}
+
+func (s *Service) ListAll(ctx context.Context, filter AdminListFilter) ([]AdminDocumentView, int64, error) {
+	filter.Category = strings.TrimSpace(filter.Category)
+	filter.Keyword = strings.TrimSpace(filter.Keyword)
+	if filter.Page < 1 {
+		filter.Page = 1
+	}
+	if filter.PageSize < 1 || filter.PageSize > 100 {
+		filter.PageSize = 20
+	}
+	documents, total, err := s.store.ListAll(ctx, filter)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list knowledge documents: %w", err)
+	}
+	views := make([]AdminDocumentView, 0, len(documents))
+	for index := range documents {
+		view := AdminDocumentView{
+			ID: documents[index].ID, Title: documents[index].Title, Category: documents[index].Category,
+			Status: documents[index].Status, Version: documents[index].Version, Source: documents[index].Source,
+			UploaderName: documents[index].UploaderName,
+			CreatedAt:    documents[index].CreatedAt, UpdatedAt: documents[index].UpdatedAt,
+		}
+		if s.objects != nil {
+			downloadURL, err := s.objects.PresignedGet(ctx, documents[index].ObjectKey, s.signedURLTimeout)
+			if err != nil {
+				return nil, 0, fmt.Errorf("sign knowledge document download: %w", err)
+			}
+			view.DownloadURL = downloadURL
+		}
+		views = append(views, view)
+	}
+	return views, total, nil
+}
+
+func (s *Service) Delete(ctx context.Context, actorID, documentID uint64, traceID string) (*Document, error) {
+	traceID = strings.TrimSpace(traceID)
+	if actorID == 0 || documentID == 0 || len(traceID) > 64 {
+		return nil, ErrInvalidInput
+	}
+	document, err := s.store.Delete(ctx, documentID, actorID, traceID)
+	if err != nil {
+		return nil, fmt.Errorf("delete knowledge document: %w", err)
+	}
+	// 物理删除对象文件；失败不阻断（DB 行已删，孤儿对象可后续清理）
+	if s.objects != nil {
+		if err := s.objects.Remove(ctx, document.ObjectKey); err != nil {
+			slog.Warn("remove knowledge document object", "docId", document.ID, "objectKey", document.ObjectKey, "error", err)
+		}
+	}
+	return document, nil
 }
 
 func (s *Service) Upload(ctx context.Context, actorID uint64, input UploadInput) (*Document, error) {
