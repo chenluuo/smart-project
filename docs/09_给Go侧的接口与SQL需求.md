@@ -128,14 +128,15 @@ PENDING -> SENT -> SUCCEEDED
 
 | 状态 | 方法与路径 | Go 侧要求 |
 |---|---|---|
-| 部分具备 | `GET /api/v1/plots/{plotId}/thresholds` | 返回阈值、持续时间、回差、级别和启用状态 |
-| 部分具备 | `PUT /api/v1/plots/{plotId}/thresholds/{thresholdId}` | 校验地块归属、指标和阈值范围；更新后写审计 |
+| 已具备 | `GET /api/v1/plots/{plotId}/thresholds` | 返回阈值、持续时间、回差、级别和启用状态 |
+| 已具备 | `PUT /api/v1/plots/{plotId}/thresholds/{thresholdId}` | 校验归属和取值；规则、审计、版本、逐设备投递与 Outbox 同事务落库；返回版本和初始同步状态 |
+| 已具备 | `GET /api/v1/plots/{plotId}/thresholds/{thresholdId}/sync` | 返回当前配置版本、聚合状态以及每台机器的 `PENDING/SENT/APPLIED/FAILED/TIMEOUT` 明细 |
 | 部分具备 | `GET /api/v1/alerts` | 支持 `plotId/status/page/pageSize`，只返回当前用户告警 |
 | 部分具备 | `GET /api/v1/alerts/logs` | 支持开始/结束时间和状态筛选，包含恢复、确认、关闭记录 |
 | 部分具备 | `POST /api/v1/alerts/{alertId}/confirm` | 幂等确认，保存确认人、时间和备注；写审计 |
 | 已具备 | `POST /internal/alerts/trigger` | 内部密钥鉴权；活动告警去重后，同事务创建 owner 站内通知与 `ALERT_TRIGGERED` Outbox，并把原始 JSON 请求可靠转发到 Agent |
 
-告警触发已按规则行锁实现活动告警去重；告警引擎仍需实现持续时间、回差和恢复逻辑。Agent 转发由 `AGENT_ALERT_URL` 启用，失败采用指数退避，不能回滚已经提交的告警和 owner 通知。
+持续时间、回差和阈值比较由机器本地执行，机器通过遥测 warning 字段上报告警判定。Go 不重复计算阈值，只验证设备身份和绑定关系，并按 warning 状态幂等创建或恢复告警。内部规则触发接口仍使用行锁去重；Agent 转发由 `AGENT_ALERT_URL` 启用，失败采用指数退避，不能回滚已经提交的告警和 owner 通知。
 
 ### 3.7 实时推送 SSE
 
@@ -153,7 +154,7 @@ PENDING -> SENT -> SUCCEEDED
 
 每条事件至少包含事件 ID、事件时间和资源 ID；禁止向连接推送其他用户的地块数据。
 
-五类事件的类型化发布契约均已具备，统一校验 owner、资源和事件时间并自动生成事件 ID。`alert.created` 已接入告警事务提交后的新告警触发点，`command.result` 已接入控制命令完成点；`telemetry.updated`、`alert.recovered` 和 `device.status.changed` 由后续 MQTT 遥测接入、告警恢复引擎和设备心跳调度器调用同一发布契约。
+五类事件的类型化发布契约均已具备，统一校验 owner、资源和事件时间并自动生成事件 ID。MQTT 遥测已接入 `telemetry.updated`，机器 warning 状态变化已接入 `alert.created/alert.recovered`，命令完成已接入 `command.result`；设备心跳调度器继续使用同一契约发布 `device.status.changed`。
 
 ### 3.8 智能问答与知识文档
 
@@ -206,7 +207,11 @@ Content-Type: application/json
 | 设备 -> Go | `agri/{ownerId}/{deviceSn}/heartbeat` | 更新 Redis 在线状态和 MySQL `last_seen_at`，推送状态变化 |
 | 设备 -> Go | `agri/{ownerId}/{deviceSn}/command/ack` | 校验命令与设备，幂等更新命令终态，推送结果 |
 | Go -> 设备 | `agri/{ownerId}/{deviceSn}/command` | 从 Outbox 发布命令，QoS 1，记录发送结果 |
+| Go -> 设备 | `agri/{ownerId}/{deviceSn}/config/thresholds/v/{configVersion}` | 从 Outbox 发布当前地块全部阈值规则，QoS 1、retained；发布成功只表示 `SENT` |
+| 设备 -> Go | `agri/{ownerId}/{deviceSn}/config/thresholds/ack` | 校验 owner、设备、消息 ID 和版本，幂等更新为 `APPLIED` 或 `FAILED` |
 | 设备 -> Go | `agri/{ownerId}/{deviceSn}/event` | 记录设备异常并按规则生成通知 |
+
+阈值配置使用完整快照和地块级单调版本。机器只应用高于本地版本的快照，先原子持久化再 ACK；服务器在 `MQTT_THRESHOLD_ACK_TIMEOUT` 到期后把未完成投递改为 `TIMEOUT`。
 
 ### 4.2 必须实现的任务
 
@@ -216,7 +221,10 @@ Content-Type: application/json
 - `CommandAckHandler`：回执状态机、设备匹配和重复回执处理。
 - `DeviceOfflineScheduler`：心跳过期转离线并发 SSE。
 - `CommandTimeoutScheduler`：过期命令转 `TIMEOUT`。
-- `AlertEvaluator`：持续时间、回差、去重和恢复。
+- `ThresholdConfigDispatcher`：认领阈值 Outbox，向版本化 Topic 发布完整快照，成功后标记 `SENT`。
+- `ThresholdAckHandler`：校验 ACK Topic 和 Payload，维护 `APPLIED/FAILED` 终态及幂等规则。
+- `ThresholdExpiryWorker`：将到期且仍为 `PENDING/SENT` 的投递转为 `TIMEOUT`。
+- `DeviceWarningHandler`：接收机器本地判断的 warning 状态，负责告警去重和恢复，不重新计算阈值。
 - `OutboxDispatcher`：可靠投递 MQTT、SSE/通知和智能体文档事件。
 
 ---
@@ -241,7 +249,7 @@ Content-Type: application/json
 - `users`、`roles`、`user_roles`
 - `plots`
 - `devices`、`device_bindings`
-- `alert_rules`、`alerts`
+- `alert_rules`、`plot_threshold_configs`、`threshold_config_deliveries`、`alerts`
 - `device_commands`
 - `notifications`
 - `audit_logs`

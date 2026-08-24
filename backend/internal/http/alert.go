@@ -42,9 +42,35 @@ func registerAlertRoutes(router *gin.Engine, auth authService, service alertServ
 	api := router.Group("/api/v1", jwtAuthentication(auth))
 	api.GET("/plots/:plotId/thresholds", handler.listRules)
 	api.PUT("/plots/:plotId/thresholds/:thresholdId", handler.upsertRule)
+	api.GET("/plots/:plotId/thresholds/:thresholdId/sync", handler.thresholdSync)
 	api.GET("/alerts", handler.list)
 	api.GET("/alerts/logs", handler.logs)
 	api.POST("/alerts/:alertId/confirm", handler.confirm)
+}
+
+func (h alertHandler) thresholdSync(c *gin.Context) {
+	claims, ok := authenticatedClaims(c)
+	if !ok {
+		respondError(c, http.StatusUnauthorized, 40101, "未登录或访问令牌无效")
+		return
+	}
+	plotID, plotErr := positivePathID(c, "plotId")
+	thresholdID, thresholdErr := positivePathID(c, "thresholdId")
+	if plotErr != nil || thresholdErr != nil {
+		respondError(c, http.StatusBadRequest, 40001, "参数错误：plotId 和 thresholdId 必须为正整数")
+		return
+	}
+	result, err := h.service.ThresholdSync(c.Request.Context(), claims.UserID, plotID, thresholdID)
+	switch {
+	case errors.Is(err, alert.ErrInvalidInput):
+		respondError(c, http.StatusBadRequest, 40001, "参数错误：plotId 和 thresholdId 必须为正整数")
+	case errors.Is(err, alert.ErrNotFound):
+		respondError(c, http.StatusNotFound, 40401, "地块或阈值规则不存在")
+	case err != nil:
+		respondError(c, http.StatusInternalServerError, 50000, "服务器内部错误")
+	default:
+		respondSuccess(c, http.StatusOK, result)
+	}
 }
 
 func registerInternalAlertRoutes(router *gin.Engine, service alertService, internalServiceKey string) {

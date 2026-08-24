@@ -108,11 +108,20 @@ GET  /api/v1/events/stream   # Bearer Token；支持 Last-Event-ID 断线续传
 
 MQTT 客户端订阅 `agri/+/+/telemetry`，并通过 `telemetry.DecodePayload` 和 `IngestService` 接入。设备 JSON 仅允许 `temperature/soilMoisture/light` 与 `temperatureWarning/soilMoistureWarning/lightWarning` 六个必填字段；设备、owner、地块和接收时间从可信 Topic 与绑定关系补充。未知字段会被拒绝。客户端使用 QoS 1、自动重连；BearPi-HM Nano 暂未上线或 Broker 暂不可达时不会阻塞 HTTP API 启动。
 
+阈值由机器本地判定。用户更新规则时，规则、审计日志、地块配置版本、每台绑定机器的投递记录和 `THRESHOLD_CONFIG_REQUESTED` Outbox 在同一 MySQL 事务内提交。后台以 QoS 1 retained 消息发布地块完整规则快照到 `agri/{ownerId}/{deviceSn}/config/thresholds/v/{configVersion}`；版本进入 Topic 可避免旧 Outbox 重试覆盖 Broker 中的新快照。机器原子持久化后向 `agri/{ownerId}/{deviceSn}/config/thresholds/ack` 返回 `APPLIED` 或带原因的 `FAILED`。服务端按设备维护 `PENDING -> SENT -> APPLIED/FAILED/TIMEOUT`，旧版本、跨设备和终态冲突 ACK 会被拒绝。
+
 BearPi-HM Nano 发布示例：
 
 ```text
 Topic: agri/{ownerId}/{deviceSn}/telemetry
 Payload: {"temperature":26.5,"soilMoisture":48,"light":920,"temperatureWarning":false,"soilMoistureWarning":false,"lightWarning":false}
+```
+
+阈值同步查询：
+
+```text
+PUT /api/v1/plots/{plotId}/thresholds/{thresholdId}       # 保存规则并返回 configVersion/syncStatus/targetCount
+GET /api/v1/plots/{plotId}/thresholds/{thresholdId}/sync  # 查询当前版本及每台机器的投递状态
 ```
 
 智能问答会话接口：
@@ -179,6 +188,7 @@ password: smart_agriculture
 | `MQTT_CONNECT_TIMEOUT` | `5s` | 单次连接/订阅等待时间 |
 | `MQTT_RECONNECT_BACKOFF` | `5s` | 断线重连间隔 |
 | `MQTT_MESSAGE_TIMEOUT` | `10s` | 单条遥测处理超时 |
+| `MQTT_THRESHOLD_ACK_TIMEOUT` | `2m` | 阈值快照发布后等待机器 ACK 的最长时间 |
 | `REDIS_IRRIGATION_TTL` | `35m` | 灌溉状态快照时长 |
 | `REDIS_DEVICE_ACTIVITY_TTL` | `24h` | 设备最后接收时间保留时长 |
 | `DEVICE_OFFLINE_AFTER` | `2m` | 超过该时间未收到遥测则推导为离线 |

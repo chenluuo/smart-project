@@ -33,8 +33,12 @@ func (s *cachedStore) ListRulesByOwner(ctx context.Context, ownerID, plotID uint
 	return s.next.ListRulesByOwner(ctx, ownerID, plotID)
 }
 
-func (s *cachedStore) UpsertRuleByOwner(ctx context.Context, ownerID uint64, rule *Rule, hysteresis *decimal.Decimal) error {
-	return s.next.UpsertRuleByOwner(ctx, ownerID, rule, hysteresis)
+func (s *cachedStore) UpsertRuleByOwner(ctx context.Context, ownerID uint64, rule *Rule, hysteresis *decimal.Decimal, expiresAt time.Time) (RulePersistenceResult, error) {
+	return s.next.UpsertRuleByOwner(ctx, ownerID, rule, hysteresis, expiresAt)
+}
+
+func (s *cachedStore) ThresholdSyncByOwner(ctx context.Context, ownerID, plotID, ruleID uint64) (*ThresholdSyncView, error) {
+	return s.next.ThresholdSyncByOwner(ctx, ownerID, plotID, ruleID)
 }
 
 func (s *cachedStore) ListAlertsByOwner(ctx context.Context, ownerID uint64, filter ListFilter) ([]AlertListRow, int64, error) {

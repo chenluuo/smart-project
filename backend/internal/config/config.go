@@ -33,15 +33,16 @@ type TDengineConfig struct {
 }
 
 type MQTTConfig struct {
-	Enabled          bool
-	BrokerURL        string
-	ClientID         string
-	Username         string
-	Password         string
-	TopicPrefix      string
-	ConnectTimeout   time.Duration
-	ReconnectBackoff time.Duration
-	MessageTimeout   time.Duration
+	Enabled             bool
+	BrokerURL           string
+	ClientID            string
+	Username            string
+	Password            string
+	TopicPrefix         string
+	ConnectTimeout      time.Duration
+	ReconnectBackoff    time.Duration
+	MessageTimeout      time.Duration
+	ThresholdAckTimeout time.Duration
 }
 
 type RedisConfig struct {
@@ -185,6 +186,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	mqttThresholdAckTimeout, err := durationValue("MQTT_THRESHOLD_ACK_TIMEOUT", 2*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
 
 	tdengineEnabled, err := boolValue("TDENGINE_ENABLED", false)
 	if err != nil {
@@ -269,11 +274,12 @@ func Load() (Config, error) {
 			Username: strings.TrimSpace(os.Getenv("MQTT_USERNAME")), Password: os.Getenv("MQTT_PASSWORD"),
 			TopicPrefix: mqttTopicPrefix, ConnectTimeout: mqttConnectTimeout,
 			ReconnectBackoff: mqttReconnectBackoff, MessageTimeout: mqttMessageTimeout,
+			ThresholdAckTimeout: mqttThresholdAckTimeout,
 		},
 		TDengine: TDengineConfig{
 			Enabled: tdengineEnabled, RESTURL: strings.TrimRight(value("TDENGINE_REST_URL", "http://localhost:6041"), "/"),
 			Username: value("TDENGINE_USERNAME", "root"), Password: value("TDENGINE_PASSWORD", "taosdata"),
-			Database: value("TDENGINE_DATABASE", "agri_telemetry"),
+			Database:  value("TDENGINE_DATABASE", "agri_telemetry"),
 			BatchSize: tdengineBatchSize, FlushPeriod: tdengineFlushPeriod,
 		},
 		Auth: AuthConfig{

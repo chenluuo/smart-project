@@ -233,7 +233,25 @@ mosquitto_pub \
 
 如 Broker 已启用认证，需要增加 `-u 用户名 -P 密码`。测试前必须确保示例中的 `ownerId`、`deviceSn` 已在服务端完成有效绑定。
 
-## 11. 当前未接入的消息
+## 11. 阈值配置下发与 ACK
+
+服务端通过 QoS 1 retained 消息向下列 Topic 发布当前地块的完整阈值规则快照：
+
+```text
+agri/{ownerId}/{deviceSn}/config/thresholds/v/{configVersion}
+```
+
+设备订阅 `agri/{ownerId}/{deviceSn}/config/thresholds/v/+`。消息包含 `messageId`、递增的 `configVersion`、`plotId`、完整 `rules`、`issuedAt` 和 `expiresAt`。设备只接受高于本地版本的配置，必须先原子持久化完整快照，再切换生效版本并发送 ACK：
+
+```text
+Topic: agri/{ownerId}/{deviceSn}/config/thresholds/ack
+成功: {"messageId":"thr_xxx","configVersion":7,"status":"APPLIED"}
+失败: {"messageId":"thr_xxx","configVersion":7,"status":"FAILED","reason":"flash write failed"}
+```
+
+重复消息必须幂等处理；低于或等于本地已应用版本的重复配置不得回滚本地规则，但应对相同 `messageId` 重发相同 ACK。
+
+## 12. 当前未接入的消息
 
 以下 Topic 属于后续扩展，当前硬件联调阶段不要依赖其业务处理结果：
 
@@ -244,7 +262,7 @@ mosquitto_pub \
 
 当前设备在线状态由遥测上报自动维持，不需要单独发送心跳包。
 
-## 12. 硬件交付检查表
+## 13. 硬件交付检查表
 
 - [ ] `deviceSn` 可配置且每台设备唯一；
 - [ ] MQTT Client ID 每台设备唯一；
@@ -255,3 +273,4 @@ mosquitto_pub \
 - [ ] 重连后只发送最新数据，不集中补发旧数据；
 - [ ] 生产环境支持账号密码和 TLS 证书校验；
 - [ ] 真机上报后，业务系统能看到遥测更新和设备在线。
+- [ ] 阈值快照先持久化再生效，并对重复 `messageId` 幂等 ACK；

@@ -557,7 +557,7 @@ Idempotency-Key: <最长64字符>
 
 ### `PUT /api/v1/plots/{plotId}/thresholds/{thresholdId}`
 
-用途：更新阈值规则。
+用途：更新阈值规则，并在同一事务中创建版本化机器配置下发任务。HTTP 成功不代表机器已应用。
 
 需要认证。
 
@@ -579,9 +579,50 @@ Idempotency-Key: <最长64字符>
 ```json
 {
   "id": 100,
-  "updatedAt": "2026-08-22T08:21:00+08:00"
+  "updatedAt": "2026-08-22T08:21:00+08:00",
+  "configVersion": 7,
+  "syncStatus": "PENDING",
+  "targetCount": 2
 }
 ```
+
+### `GET /api/v1/plots/{plotId}/thresholds/{thresholdId}/sync`
+
+用途：查询当前阈值配置版本以及每台绑定机器的下发、ACK 或超时状态。状态为 `PENDING`、`SENT`、`APPLIED`、`FAILED` 或 `TIMEOUT`。
+
+需要认证。
+
+响应 `data`：
+
+```json
+{
+  "ruleId": 100,
+  "configVersion": 7,
+  "status": "SENT",
+  "targetCount": 2,
+  "devices": [
+    {
+      "deviceId": 3,
+      "deviceSn": "BEARPI-001",
+      "messageId": "thr_01K3...",
+      "status": "APPLIED",
+      "sentAt": "2026-08-22T08:21:01+08:00",
+      "acknowledgedAt": "2026-08-22T08:21:03+08:00",
+      "expiresAt": "2026-08-22T08:23:00+08:00"
+    },
+    {
+      "deviceId": 4,
+      "deviceSn": "BEARPI-002",
+      "messageId": "thr_01K4...",
+      "status": "SENT",
+      "sentAt": "2026-08-22T08:21:01+08:00",
+      "expiresAt": "2026-08-22T08:23:00+08:00"
+    }
+  ]
+}
+```
+
+前端应轮询本接口展示最终设备结果；不要把 PUT 返回的 `PENDING` 当作失败，也不要仅凭 MQTT 已发送就展示为 `APPLIED`。
 
 ### `GET /api/v1/alerts`
 

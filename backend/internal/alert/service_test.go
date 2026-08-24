@@ -13,25 +13,28 @@ import (
 )
 
 type alertStoreStub struct {
-	rules         []Rule
-	rows          []AlertListRow
-	total         int64
-	confirmed     *Alert
-	err           error
-	ownerID       uint64
-	plotID        uint64
-	alertID       uint64
-	rule          *Rule
-	hysteresis    *decimal.Decimal
-	filter        ListFilter
-	confirmRemark string
-	confirmedAt   time.Time
-	triggerInput  TriggerInput
-	triggeredAt   time.Time
-	triggerRecord *TriggerRecord
-	warningInput  DeviceWarningInput
-	transitions   []WarningTransition
-	listCalls     int
+	rules             []Rule
+	rows              []AlertListRow
+	total             int64
+	confirmed         *Alert
+	err               error
+	ownerID           uint64
+	plotID            uint64
+	alertID           uint64
+	rule              *Rule
+	hysteresis        *decimal.Decimal
+	filter            ListFilter
+	confirmRemark     string
+	confirmedAt       time.Time
+	triggerInput      TriggerInput
+	triggeredAt       time.Time
+	triggerRecord     *TriggerRecord
+	warningInput      DeviceWarningInput
+	transitions       []WarningTransition
+	listCalls         int
+	persistenceResult RulePersistenceResult
+	syncResult        *ThresholdSyncView
+	expiresAt         time.Time
 }
 
 func (s *alertStoreStub) ListRulesByOwner(_ context.Context, ownerID, plotID uint64) ([]Rule, error) {
@@ -39,9 +42,14 @@ func (s *alertStoreStub) ListRulesByOwner(_ context.Context, ownerID, plotID uin
 	return s.rules, s.err
 }
 
-func (s *alertStoreStub) UpsertRuleByOwner(_ context.Context, ownerID uint64, rule *Rule, hysteresis *decimal.Decimal) error {
-	s.ownerID, s.rule, s.hysteresis = ownerID, rule, hysteresis
-	return s.err
+func (s *alertStoreStub) UpsertRuleByOwner(_ context.Context, ownerID uint64, rule *Rule, hysteresis *decimal.Decimal, expiresAt time.Time) (RulePersistenceResult, error) {
+	s.ownerID, s.rule, s.hysteresis, s.expiresAt = ownerID, rule, hysteresis, expiresAt
+	return s.persistenceResult, s.err
+}
+
+func (s *alertStoreStub) ThresholdSyncByOwner(_ context.Context, ownerID, plotID, ruleID uint64) (*ThresholdSyncView, error) {
+	s.ownerID, s.plotID, s.alertID = ownerID, plotID, ruleID
+	return s.syncResult, s.err
 }
 
 func (s *alertStoreStub) ListAlertsByOwner(_ context.Context, ownerID uint64, filter ListFilter) ([]AlertListRow, int64, error) {
@@ -80,7 +88,10 @@ func TestListRulesMapsContractFields(t *testing.T) {
 }
 
 func TestUpsertRuleNormalizesAndValidatesInput(t *testing.T) {
-	store := &alertStoreStub{}
+	store := &alertStoreStub{persistenceResult: RulePersistenceResult{
+		ConfigVersion: 7,
+		Deliveries:    []ThresholdDelivery{{Status: ThresholdSyncPending}, {Status: ThresholdSyncPending}},
+	}}
 	service := NewService(store)
 	now := time.Date(2026, 8, 22, 8, 20, 0, 0, time.UTC)
 	hysteresis := 2.5
@@ -89,7 +100,8 @@ func TestUpsertRuleNormalizesAndValidatesInput(t *testing.T) {
 		Metric: " soilMoisture ", Operator: "lt", Value: 28, Hysteresis: &hysteresis,
 		DurationSeconds: 300, Level: "medium", Enabled: true,
 	})
-	if err != nil || result.ID != 2 || !result.UpdatedAt.Equal(now) {
+	if err != nil || result.ID != 2 || !result.UpdatedAt.Equal(now) || result.ConfigVersion != 7 ||
+		result.SyncStatus != ThresholdSyncPending || result.TargetCount != 2 || !store.expiresAt.Equal(now.Add(defaultThresholdAckTimeout)) {
 		t.Fatalf("UpsertRule() = (%+v, %v)", result, err)
 	}
 	if store.ownerID != 7 || store.rule.PlotID != 11 || store.rule.Metric != "soilMoisture" || store.rule.Level != LevelMedium ||
@@ -107,6 +119,28 @@ func TestUpsertRuleNormalizesAndValidatesInput(t *testing.T) {
 	})
 	if !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("negative hysteresis error = %v, want ErrInvalidInput", err)
+	}
+	for _, input := range []RuleInput{
+		{Metric: "unknown", Operator: OperatorLT, Value: 1, DurationSeconds: 1, Level: LevelLow},
+		{Metric: "soilMoisture", Operator: OperatorLT, Value: 101, DurationSeconds: 1, Level: LevelLow},
+		{Metric: "temperature", Operator: OperatorGT, Value: -51, DurationSeconds: 1, Level: LevelLow},
+	} {
+		if _, err := service.UpsertRule(context.Background(), 7, 11, 2, input); !errors.Is(err, ErrInvalidInput) {
+			t.Fatalf("invalid metric threshold %+v error = %v", input, err)
+		}
+	}
+}
+
+func TestThresholdSyncMapsStoreErrors(t *testing.T) {
+	want := &ThresholdSyncView{RuleID: 2, ConfigVersion: 7, Status: ThresholdSyncApplied, TargetCount: 1}
+	store := &alertStoreStub{syncResult: want}
+	result, err := NewService(store).ThresholdSync(context.Background(), 7, 11, 2)
+	if err != nil || result != want || store.ownerID != 7 || store.plotID != 11 || store.alertID != 2 {
+		t.Fatalf("ThresholdSync() = (%+v, %v), store=%+v", result, err, store)
+	}
+	store.err = gorm.ErrRecordNotFound
+	if _, err := NewService(store).ThresholdSync(context.Background(), 7, 11, 2); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("ThresholdSync missing error = %v", err)
 	}
 }
 
