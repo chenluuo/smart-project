@@ -56,18 +56,28 @@ async def _call_context(payload: dict, authorization: str) -> dict:
 
 
 async def _call_tool(name: str, args: dict, authorization: str) -> dict:
-    async with httpx.AsyncClient(timeout=15, trust_env=False) as client:
-        resp = await client.post(
-            f"{_tool_url}/tools/{name}/execute",
-            json={"args": args},
-            headers={
-                "Authorization": authorization,
-                "X-Trace-Id": ensure_trace_id(),
-                REQUEST_HEADER: ensure_request_id(),
-            },
-        )
-        resp.raise_for_status()
+    # 超时放宽：目标湿度灌溉等工具在"执行内闭环"（OPEN→轮询湿度→达标/超时→CLOSE）
+    # 可能运行数分钟，普通工具不受影响（其自身执行很快）
+    timeout = float(get_config("agent").get("tool_call_timeout_seconds", 720))
+    try:
+        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+            resp = await client.post(
+                f"{_tool_url}/tools/{name}/execute",
+                json={"args": args},
+                headers={
+                    "Authorization": authorization,
+                    "X-Trace-Id": ensure_trace_id(),
+                    REQUEST_HEADER: ensure_request_id(),
+                },
+            )
+        if resp.status_code >= 400:
+            # 工具执行失败（如 422 参数错误）：不中断对话，把错误信息回填给 LLM，
+            # 让模型看到失败原因后自行修正参数重试或放弃该工具
+            body = resp.text[:800]
+            return {"ok": False, "error": f"工具 {name} 返回 {resp.status_code}: {body}"}
         return resp.json()
+    except Exception as e:  # 网络/超时/解析错误同样回填，避免整段对话中断
+        return {"ok": False, "error": f"工具 {name} 调用失败: {e}"}
 
 
 async def _tool_schemas() -> list[dict]:
@@ -156,11 +166,22 @@ async def handle_question(
         except Exception:
             return []
 
+    def _safe_alerts():
+        """复用 Go GET /alerts?status=ACTIVE：主动拉当前用户活跃告警注入上下文，
+        让 LLM 无需等待工具调用即可感知最新告警（Go 侧零改动）。"""
+        try:
+            data = get_go_client().get_alerts(authorization, status="ACTIVE", page=1, pageSize=20)
+            items = data.get("items", []) if isinstance(data, dict) else []
+            return [a for a in items if isinstance(a, dict)]
+        except Exception:
+            return []
+
     import asyncio
 
-    knowledge, memory = await asyncio.gather(
+    knowledge, memory, active_alerts = await asyncio.gather(
         asyncio.to_thread(_safe_rag),
         asyncio.to_thread(_safe_memory),
+        asyncio.to_thread(_safe_alerts),
     )
 
     # ---------- 组装（context-service，不含 live_data：工具结果走对话上下文） ----------
@@ -173,6 +194,7 @@ async def handle_question(
             "knowledge_chunks": [k.get("content", "") for k in knowledge[:5]],
             "memory_chunks": [m["summary"] for m in memory[:3]],
             "live_data": [],
+            "alerts": active_alerts,
         },
         authorization,
     )

@@ -233,14 +233,17 @@ export default function App() {
     if (!selectedPlot) return false;
     setBusy(true);
     try {
-      await api.updateThreshold(selectedPlot.id, rule);
+      const update = await api.updateThreshold(selectedPlot.id, { ...rule, enabled: !rule.enabled });
       const thresholds = await api.thresholds(selectedPlot.id);
       setData((current) => ({
         ...current,
         thresholds: { ...current.thresholds, [selectedPlot.id]: thresholds }
       }));
-      setNotice('阈值规则已保存');
-      return true;
+      setNotice(
+        update.targetCount > 0
+          ? `阈值规则已保存，第 ${update.configVersion} 版正在下发至 ${update.targetCount} 台机器`
+          : `阈值规则已保存，第 ${update.configVersion} 版当前无绑定机器需要下发`
+      );
     } catch (error) {
       setNotice(errorMessage(error));
       return false;

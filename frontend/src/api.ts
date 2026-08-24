@@ -15,6 +15,8 @@ import type {
   Plot,
   TelemetryLatest,
   ThresholdRule,
+  ThresholdSync,
+  ThresholdUpdateResult,
   User
 } from './types';
 
@@ -90,17 +92,20 @@ export const api = {
   telemetry: (plotId: number) => request<TelemetryLatest>(`/api/v1/plots/${plotId}/telemetry/latest`),
   thresholds: (plotId: number) => request<ThresholdRule[]>(`/api/v1/plots/${plotId}/thresholds`),
   updateThreshold: (plotId: number, rule: ThresholdRule) =>
-    request<{ id: number; updatedAt: string }>(`/api/v1/plots/${plotId}/thresholds/${rule.id}`, {
+    request<ThresholdUpdateResult>(`/api/v1/plots/${plotId}/thresholds/${rule.id}`, {
       method: 'PUT',
       body: JSON.stringify({
         metric: rule.metric,
         operator: rule.operator,
         value: rule.value,
+        hysteresis: rule.hysteresis,
         durationSeconds: rule.durationSeconds,
         level: rule.level,
         enabled: rule.enabled
       })
     }),
+  thresholdSync: (plotId: number, thresholdId: number) =>
+    request<ThresholdSync>(`/api/v1/plots/${plotId}/thresholds/${thresholdId}/sync`),
   devices: (params: { plotId?: number; status?: string; type?: string; page?: number; pageSize?: number } = {}) =>
     request<PageResult<Device>>(`/api/v1/devices${query({ page: 1, pageSize: 50, ...params })}`),
   bindDevice: (payload: { deviceSn: string; plotId: number; name: string; type: string }) =>

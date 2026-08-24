@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -22,7 +23,7 @@ from orchestrator import handle_question  # noqa: E402
 from session import STATUS_CLOSED, close, get_session  # noqa: E402
 from shared.config import get_config  # noqa: E402
 from shared.go_client import get_go_client  # noqa: E402
-from shared.jwt import JWTError, user_id_from_token  # noqa: E402
+from shared.jwt import JWTError, issue_user_token, user_id_from_token  # noqa: E402
 from shared.observability import install_observability  # noqa: E402
 from shared.redis_client import get_redis  # noqa: E402
 from shared.trace import set_actor_id  # noqa: E402
@@ -170,12 +171,102 @@ class NotifyRequest(BaseModel):
 
 
 @app.post("/internal/knowledge/notify")
-def knowledge_notify(req: NotifyRequest, x_internal_key: str = Header(default="", alias="X-Internal-Key")) -> dict:
+def knowledge_notify(req: NotifyRequest, x_internal_key: str = Header(default="", alias="X-Internal-Key"),
+                     x_internal_service_key: str = Header(default="", alias="X-Internal-Service-Key")) -> dict:
     """Go 在文档上传/变更时调用；校验内部密钥后入队加工。"""
     expected = get_config("go").get("internal_key")
-    if not expected or x_internal_key != expected:
+    if not expected or (x_internal_key != expected and x_internal_service_key != expected):
         raise HTTPException(status_code=401, detail="内部密钥无效")
     get_redis().xadd("doc.process", {
         "doc_id": req.doc_id, "event": req.event, "version": req.version,
     })
     return {"ok": True}
+
+
+# ============================================================
+# 告警主动推送：Go alert dispatcher → /internal/alerts/notify
+# 收到告警后，以该用户身份"像用户发起会话一样"触发 agent 处理，
+# 生成主动告警分析与建议，存入 Redis agent:proactive:{ownerId} 供前端/会话读取。
+# ============================================================
+class AlertNotifyRequest(BaseModel):
+    alertId: int | None = None
+    ownerId: int | None = None
+    ruleId: int | None = None
+    plotId: int | None = None
+    deviceId: int | None = None
+    triggerValue: float | None = None
+    metric: str | None = None
+    level: str | None = None
+    status: str | None = None
+    title: str | None = None
+    traceId: str | None = None
+    triggeredAt: str | None = None
+
+
+def _build_alert_question(payload: dict) -> str:
+    metric = payload.get("metric") or "未知指标"
+    level = payload.get("level") or ""
+    value = payload.get("triggerValue")
+    plot = payload.get("plotId")
+    parts = [f"【系统告警主动通知】地块 {plot} 触发{level}告警（{metric}）"]
+    if value is not None:
+        parts.append(f"，当前值 {value}")
+    parts.append("。请以该用户生产顾问的身份，分析告警情况并给出处理建议。")
+    return "".join(parts)
+
+
+def _handle_alert_in_background(payload: dict) -> None:
+    """后台线程：以告警所属用户身份跑完整 agent 编排，结果存 Redis 主动通知。"""
+    import asyncio
+    import threading
+
+    owner_id = payload.get("ownerId") or payload.get("owner_id")
+    if not owner_id:
+        print(f"[alert-notify] 缺少 ownerId，跳过: {payload}", flush=True)
+        return
+    try:
+        token = issue_user_token(owner_id)
+    except Exception as e:
+        print(f"[alert-notify] 签发用户 token 失败: {e}", flush=True)
+        return
+
+    collected: list[dict] = []
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        async def run():
+            async for ev in handle_question(
+                user_id=str(owner_id),
+                question=_build_alert_question(payload),
+                session_id=None,
+                plot_id=str(payload["plotId"]) if payload.get("plotId") else None,
+                authorization=f"Bearer {token}",
+            ):
+                collected.append(ev)
+
+        loop.run_until_complete(run())
+        loop.close()
+    except Exception as e:
+        print(f"[alert-notify] 主动处理失败: {e}", flush=True)
+
+    final = "".join(ev.get("delta", "") for ev in collected if ev.get("type") == "answer")
+    get_redis().proactive_push(str(owner_id), {
+        "ts": time.time(),
+        "alert": payload,
+        "summary": final or "(agent 未生成摘要)",
+    })
+    print(f"[alert-notify] owner={owner_id} 主动处理完成, summary_len={len(final)}", flush=True)
+
+
+@app.post("/internal/alerts/notify")
+def alert_notify(req: AlertNotifyRequest, x_internal_key: str = Header(default="", alias="X-Internal-Key"),
+                 x_internal_service_key: str = Header(default="", alias="X-Internal-Service-Key")) -> dict:
+    """Go alert dispatcher 推送告警：校验内部密钥后后台触发 agent 主动处理。"""
+    import threading
+    expected = get_config("go").get("internal_key")
+    if not expected or (x_internal_key != expected and x_internal_service_key != expected):
+        raise HTTPException(status_code=401, detail="内部密钥无效")
+    payload = req.model_dump()
+    threading.Thread(target=_handle_alert_in_background, args=(payload,), daemon=True).start()
+    return {"ok": True, "accepted": True}

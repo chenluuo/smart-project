@@ -252,6 +252,7 @@
     "code": "A1",
     "name": "西侧棚",
     "cropName": "番茄",
+    "plantingTime": "2026-08-10T00:00:00Z",
     "area": 12.5,
     "status": "ACTIVE",
     "createdAt": "2026-08-01T00:00:00Z"
@@ -259,7 +260,35 @@
 }
 ```
 
-### 3.4 单个地块最新遥测
+### 3.4 更新地块作物
+
+`POST /api/v1/plots/{plotId}/crop`
+
+请求体：
+
+```json
+{
+  "cropName": "番茄"
+}
+```
+
+关键逻辑：校验地块归属后，更新该地块当前种植的作物名称，并将种植时间自动置为本次更新的时间戳（无需前端传入）。当 `cropName` 为空或超过 64 个字符时返回 `40001`。
+
+响应：
+
+```json
+{
+  "code": 0,
+  "message": "OK",
+  "data": {
+    "id": 11,
+    "cropName": "番茄",
+    "plantingTime": "2026-08-24T10:00:00Z"
+  }
+}
+```
+
+### 3.5 单个地块最新遥测
 
 `GET /api/v1/plots/{plotId}/telemetry/latest`
 
@@ -300,7 +329,7 @@
 }
 ```
 
-### 3.5 多地块最新遥测
+### 3.6 多地块最新遥测
 
 `GET /api/v1/telemetry/latest?plotId=11`
 
@@ -328,7 +357,7 @@
 
 其中 `status` 为 `NORMAL` 或 `ALERT`，由该地块是否存在活动告警决定。
 
-### 3.6 历史趋势
+### 3.7 历史趋势
 
 `GET /api/v1/telemetry/history?plotId=11&metric=soilMoisture&range=24h&interval=1h`
 
@@ -637,7 +666,7 @@ Idempotency-Key: irrigation-11-20260822-001
 }
 ```
 
-### 6.2 新增或更新阈值规则
+### 6.2 新增或更新阈值规则并下发配置
 
 `PUT /api/v1/plots/{plotId}/thresholds/{thresholdId}`
 
@@ -645,8 +674,10 @@ Idempotency-Key: irrigation-11-20260822-001
 
 - `operator`：`LT`、`LTE`、`GT` 或 `GTE`。
 - `level`：`LOW`、`MEDIUM` 或 `HIGH`。
+- `metric`：`temperature`、`soilMoisture` 或 `light`；取值范围依次为 `-50～100`、`0～100` 和 `0～200000`。
 - `durationSeconds` 范围为 0～86400。
 - `hysteresis` 必须大于等于 0；更新时不传该字段会保留已有回差值，传入时才覆盖。
+- 路径中的 `thresholdId` 不存在时创建该 ID 的规则；已存在时只能在其原地块内更新。
 
 请求：
 
@@ -670,12 +701,137 @@ Idempotency-Key: irrigation-11-20260822-001
   "message": "OK",
   "data": {
     "id": 2,
-    "updatedAt": "2026-08-22T08:22:00Z"
+    "updatedAt": "2026-08-22T08:22:00Z",
+    "configVersion": 7,
+    "syncStatus": "PENDING",
+    "targetCount": 2
   }
 }
 ```
 
-### 6.3 告警列表
+HTTP `200` 只表示规则和下发任务已经可靠落库，不表示机器已经应用。服务端在一个 MySQL 事务中完成：
+
+1. 校验地块归属并锁定地块版本。
+2. 新增或更新规则，同时保存操作审计。
+3. 将地块级 `configVersion` 单调加一。
+4. 读取该地块全部阈值规则，生成完整配置快照。
+5. 为每台当前绑定机器写入一条 `PENDING` 投递记录。
+6. 为每台目标机器写入 `THRESHOLD_CONFIG_REQUESTED` Outbox 事件。
+
+事务回滚时以上数据全部回滚。存在目标机器时，初始 `syncStatus` 为 `PENDING`；没有绑定机器时，`targetCount` 为 `0`，聚合状态为 `APPLIED`，表示当前没有待同步目标。
+
+### 6.3 查询阈值同步状态
+
+`GET /api/v1/plots/{plotId}/thresholds/{thresholdId}/sync`
+
+响应：
+
+```json
+{
+  "code": 0,
+  "message": "OK",
+  "data": {
+    "ruleId": 2,
+    "configVersion": 7,
+    "status": "SENT",
+    "targetCount": 2,
+    "devices": [
+      {
+        "deviceId": 3,
+        "deviceSn": "BEARPI-001",
+        "messageId": "thr_01K3...",
+        "status": "APPLIED",
+        "sentAt": "2026-08-22T08:22:01Z",
+        "acknowledgedAt": "2026-08-22T08:22:03Z",
+        "expiresAt": "2026-08-22T08:24:00Z"
+      },
+      {
+        "deviceId": 4,
+        "deviceSn": "BEARPI-002",
+        "messageId": "thr_01K4...",
+        "status": "SENT",
+        "sentAt": "2026-08-22T08:22:01Z",
+        "expiresAt": "2026-08-22T08:24:00Z"
+      }
+    ]
+  }
+}
+```
+
+设备状态含义：
+
+| 状态 | 含义 |
+| --- | --- |
+| `PENDING` | 已落库，等待 MQTT 发布 |
+| `SENT` | Broker 已接受 QoS 1 发布，等待机器持久化 ACK |
+| `APPLIED` | 机器已原子持久化并启用该版本 |
+| `FAILED` | 机器拒绝或持久化失败，`lastError` 给出原因 |
+| `TIMEOUT` | 在 `MQTT_THRESHOLD_ACK_TIMEOUT` 内未收到有效 ACK |
+
+聚合状态优先级为 `FAILED` → `TIMEOUT` → 全部 `APPLIED` → 存在 `SENT` → `PENDING`。查询接口始终校验当前用户对地块和规则的归属。
+
+阈值更新和同步查询的主要错误语义：
+
+| HTTP | 业务码 | 场景 |
+| --- | --- | --- |
+| `400` | `40001` | 路径 ID 非正整数、请求体格式错误或规则字段越界 |
+| `401` | `40101` | 未登录或访问令牌无效 |
+| `404` | `40401` | 地块不属于当前用户，或阈值规则不存在/不属于该地块 |
+| `500` | `50000` | 数据库事务或同步状态查询失败 |
+
+### 6.4 MQTT 阈值配置与 ACK 契约
+
+服务端异步发布完整快照，Topic 为：
+
+```text
+agri/{ownerId}/{deviceSn}/config/thresholds/v/{configVersion}
+```
+
+发布使用 QoS 1 和 retained 消息。Payload：
+
+```json
+{
+  "messageId": "thr_01K3...",
+  "plotId": 11,
+  "configVersion": 7,
+  "rules": [
+    {
+      "id": 2,
+      "metric": "soilMoisture",
+      "operator": "LT",
+      "value": 28,
+      "hysteresis": 2,
+      "durationSeconds": 300,
+      "level": "MEDIUM",
+      "enabled": true
+    }
+  ],
+  "issuedAt": "2026-08-22T08:22:00Z",
+  "expiresAt": "2026-08-22T08:24:00Z"
+}
+```
+
+机器只应用高于本地版本的完整快照，必须先原子持久化 `configVersion + rules`，成功后再向下列 Topic ACK：
+
+```text
+agri/{ownerId}/{deviceSn}/config/thresholds/ack
+```
+
+成功与失败 Payload：
+
+```json
+{"messageId":"thr_01K3...","configVersion":7,"status":"APPLIED"}
+```
+
+```json
+{"messageId":"thr_01K3...","configVersion":7,"status":"FAILED","reason":"flash write failed"}
+```
+
+ACK 只接受 `APPLIED` 或 `FAILED`；`FAILED` 必须携带 `reason`。服务端同时核对 Topic 中的 owner、设备序列号、`messageId` 和版本。重复的相同终态 ACK 幂等；不同终态、错误版本、错误设备以及终态后的迟到 ACK 不会覆盖已有结果。
+
+告警是否触发由机器根据已持久化规则在本地判定。遥测中的三类 warning 布尔值是机器判定结果，服务端只接收、去重并维护告警生命周期，不再按阈值重新计算。
+
+### 6.5 告警列表
 
 `GET /api/v1/alerts?plotId=11&status=ACTIVE&page=1&pageSize=20`
 
@@ -710,13 +866,13 @@ Idempotency-Key: irrigation-11-20260822-001
 }
 ```
 
-### 6.4 告警日志
+### 6.6 告警日志
 
 `GET /api/v1/alerts/logs?plotId=11&startTime=2026-08-01T00:00:00Z&endTime=2026-08-22T23:59:59Z&page=1&pageSize=20`
 
 响应结构与告警列表一致，可附加时间范围和状态筛选。
 
-### 6.5 确认告警
+### 6.7 确认告警
 
 `POST /api/v1/alerts/{alertId}/confirm`
 

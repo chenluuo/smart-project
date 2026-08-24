@@ -46,8 +46,11 @@ class GoClient:
         self, method: str, path: str, authorization: str = "", internal: bool = False, **kwargs: Any
     ) -> dict[str, Any] | list[Any]:
         url = f"{self.base_url}{path}"
+        # 额外请求头（如 Idempotency-Key）与内部头合并，Authorization 保留
+        extra_headers: dict[str, str] = dict(kwargs.pop("headers", None) or {})
+        merged_headers = {**self._headers(authorization, internal), **extra_headers}
         with httpx.Client(timeout=self._timeout, trust_env=False) as client:
-            resp = client.request(method, url, headers=self._headers(authorization, internal), **kwargs)
+            resp = client.request(method, url, headers=merged_headers, **kwargs)
             resp.raise_for_status()
             body = resp.json()
         # Go 统一响应 {code, message, data}
@@ -80,6 +83,15 @@ class GoClient:
 
     def get_thresholds(self, authorization: str, plot_id: str) -> list[Any]:
         return self._request("GET", f"/plots/{plot_id}/thresholds", authorization=authorization)
+
+    def update_threshold(self, authorization: str, plot_id: str, threshold_id: str,
+                         body: dict[str, Any]) -> dict[str, Any]:
+        """修改地块告警阈值规则（Go PUT /plots/{id}/thresholds/{tid}）。"""
+        data = self._request(
+            "PUT", f"/plots/{plot_id}/thresholds/{threshold_id}",
+            authorization=authorization, json=body,
+        )
+        return data if isinstance(data, dict) else {}
 
     def get_devices(self, authorization: str, **query: Any) -> list[Any]:
         return self._request("GET", "/devices", authorization=authorization, params=query)
@@ -120,16 +132,26 @@ class GoClient:
         )
         return data if isinstance(data, dict) else {}
 
-    def post_irrigation_command(self, authorization: str, plot_id: str,
-                                body: dict[str, Any]) -> dict[str, Any]:
+    def post_irrigation_command(self, authorization: str, plot_id: str, body: dict[str, Any],
+                                headers: dict[str, str] | None = None) -> dict[str, Any]:
+        """下发灌溉命令。幂等键经 Idempotency-Key 头传递（Go §6.2 契约）。"""
         data = self._request(
-            "POST", f"/plots/{plot_id}/irrigation/commands", authorization=authorization, json=body
+            "POST", f"/plots/{plot_id}/irrigation/commands", authorization=authorization,
+            json=body, headers=headers or {},
         )
         return data if isinstance(data, dict) else {}
 
     def get_command_result(self, authorization: str, command_id: str) -> dict[str, Any]:
         data = self._request(
             "GET", f"/commands/{command_id}", authorization=authorization
+        )
+        return data if isinstance(data, dict) else {}
+
+    def update_plot_crop(self, authorization: str, plot_id: str, crop_name: str) -> dict[str, Any]:
+        """设置地块种植作物（Go POST /plots/{id}/crop，cropName 非空且 ≤64 字符）。"""
+        data = self._request(
+            "POST", f"/plots/{plot_id}/crop", authorization=authorization,
+            json={"cropName": crop_name},
         )
         return data if isinstance(data, dict) else {}
 

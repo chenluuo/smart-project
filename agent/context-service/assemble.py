@@ -44,11 +44,13 @@ def assemble(
     memory_chunks: list[str],
     live_data: list[dict[str, Any]],
     question: str,
+    alerts: list[dict[str, Any]] | None = None,
     budget_tokens: int = 4000,
 ) -> dict[str, Any]:
     """组装最终 Prompt，返回 {prompt, used_tokens, trimmed: [被裁剪段]}。
 
     - live_data: [{plot_id, metric, value, unit, sampled_at}]
+    - alerts: Go /alerts?status=ACTIVE 返回的活跃告警条目（LLM 无需调工具即感知）
     - knowledge_chunks: RAG 片段文本列表
     - memory_chunks: 记忆片段文本列表（标注"历史对话参考"）
     - window_turns: 短期窗口 [{role, content}]
@@ -60,6 +62,22 @@ def assemble(
 
     # 2. 现场数据（最高优先，只保留问题相关指标由调用方过滤）
     live_block = _field_block("现场数据", [f"{d['plot_id']} {d['metric']}={d['value']}{d.get('unit','')}（采样 {d['sampled_at']}）" for d in live_data])
+
+    # 2.5 活跃告警（现场状态，紧随现场数据）
+    alert_lines: list[str] = []
+    for a in alerts or []:
+        title = a.get("title") or a.get("content") or ""
+        metric = a.get("metric", "")
+        level = a.get("level", "")
+        cur = a.get("currentValue")
+        thr = a.get("thresholdValue")
+        text = f"{a.get('plotCode', a.get('plotId', ''))} 地块 {metric} {level} 告警：{title}"
+        if cur is not None:
+            text += f"，当前值 {cur}"
+        if thr is not None:
+            text += f"，阈值 {thr}"
+        alert_lines.append(text)
+    alerts_block = _field_block("活跃告警（告警为当前事实，回答时须主动提及）", alert_lines)
 
     # 3. 知识库（第二优先）
     kb_block = _field_block("知识库", knowledge_chunks)
@@ -79,9 +97,10 @@ def assemble(
     # 6. 当前问题
     question_block = f"\n[当前问题]\n{question}\n"
 
-    # 预算裁剪：现场 > 知识 > 短期 > 记忆
+    # 预算裁剪：现场 > 告警 > 知识 > 短期 > 记忆
     parts: list[tuple[str, str]] = [
         ("live", live_block),
+        ("alerts", alerts_block),
         ("knowledge", kb_block),
         ("window", window_block),
         ("memory", memory_block),
