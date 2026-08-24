@@ -68,7 +68,7 @@ def process_doc_event(event: dict) -> dict:
 
     ensure_collections()
 
-    doc_id = event.get("doc_id")
+    doc_id = str(event.get("doc_id") or "")  # Go notify 入队的是数字 docId，Milvus doc_id 为 varchar
     # 服务账号拉可用文档清单，找到目标文档（含 downloadUrl/version）
     docs = get_go_client().get_knowledge_docs(authorization="Bearer " + _service_token())
     doc = next((d for d in docs if str(d.get("id")) == str(doc_id)), None)

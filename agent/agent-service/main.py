@@ -180,7 +180,7 @@ def knowledge_notify(req: NotifyRequest, x_internal_key: str = Header(default=""
     if not expected or (x_internal_key != expected and x_internal_service_key != expected):
         raise HTTPException(status_code=401, detail="内部密钥无效")
     get_redis().xadd("doc.process", {
-        "doc_id": req.doc_id, "event": req.event, "version": req.version,
+        "doc_id": str(req.doc_id), "event": req.event, "version": req.version,
     })
     return {"ok": True}
 
