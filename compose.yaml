@@ -1,0 +1,247 @@
+# ============================================================
+# 智慧农业全栈统一编排（本地测试/单机部署）
+# 一个文件管理：基础设施 + Go 后端 + agent 4 服务 + 前端
+# 用法：
+#   docker compose up -d --build        # 首次构建并启动
+#   docker compose up -d                # 日常启动
+#   docker compose scale agent-service=3  # 平行扩容（见 docs/12_容器化部署与扩容.md）
+# 说明：
+#   - 服务间同网络互连（服务名可达），不再依赖 host.docker.internal
+#   - 数据 volume 复用现有（MySQL/MinIO/Milvus external 引用），TDengine 迁移为命名卷
+#   - 前端 nginx 反代 /api -> go-api、/agent -> agent-service（多副本由 upstream 负载均衡）
+# ============================================================
+name: smart-agriculture
+
+services:
+  # ---------------- 基础设施 ----------------
+  mysql:
+    image: mysql:8.4
+    container_name: smart-agriculture-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: smart_agriculture
+      MYSQL_USER: smart_agriculture
+      MYSQL_PASSWORD: smart_agriculture
+      MYSQL_ROOT_PASSWORD: root
+      TZ: UTC
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+      - --default-time-zone=+00:00
+    ports: ["3307:3306"]
+    volumes: [mysql-data:/var/lib/mysql]
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-usmart_agriculture", "-psmart_agriculture"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 15s
+
+  redis:                     # agent 侧 Redis（原 agent-redis）
+    image: redis:7-alpine
+    container_name: agent-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports: ["6379:6379"]
+    volumes: [redis-data:/data]
+
+  mqtt:
+    image: eclipse-mosquitto:2
+    container_name: mqtt-broker
+    restart: unless-stopped
+    ports: ["1883:1883"]
+    volumes: [mqtt-data:/mosquitto/data, mqtt-log:/mosquitto/log]
+
+  minio:
+    image: minio/minio:latest
+    container_name: smart_agriculture-minio-1
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports: ["9000:9000", "9001:9001"]
+    volumes: [minio-data:/data]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  milvus-etcd:
+    image: quay.io/coreos/etcd:v3.5.5
+    restart: unless-stopped
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+      - ETCD_SNAPSHOT_COUNT=50000
+    command: etcd -advertise-client-urls=http://127.0.0.1:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+    volumes: [milvus-etcd:/etcd]
+
+  milvus-minio:
+    image: minio/minio:RELEASE.2023-03-20T20-16-18Z
+    restart: unless-stopped
+    environment:
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+    command: minio server /minios --console-address ":9001"
+    volumes: [milvus-minio:/minios]
+
+  milvus:
+    image: milvusdb/milvus:v2.4.1
+    restart: unless-stopped
+    command: ["milvus", "run", "standalone"]
+    environment:
+      ETCD_ENDPOINTS: milvus-etcd:2379
+      MINIO_ADDRESS: milvus-minio:9000
+    ports: ["19530:19530", "9091:9091"]
+    depends_on: ["milvus-etcd", "milvus-minio"]
+
+  tdengine:
+    image: tdengine/tdengine:3.3.3.0
+    container_name: tdengine
+    hostname: tdengine-local   # 匹配迁移数据中 dnode 记录的 fqdn，否则 sync addr 解析失败
+    restart: unless-stopped
+    ports: ["6030:6030", "6041:6041", "6043:6043", "6044:6044"]
+    volumes:
+      - tdengine-data:/var/lib/taos
+      - tdengine-log:/var/log/taos
+
+  # ---------------- Go 后端 ----------------
+  go-api:
+    image: golang:1.25
+    container_name: smart-go-api
+    restart: unless-stopped
+    volumes: ["./backend:/app"]
+    working_dir: /go
+    command: /app/out/smart-api
+    environment:
+      GIN_MODE: release
+      DB_DSN: smart_agriculture:smart_agriculture@tcp(mysql:3306)/smart_agriculture?charset=utf8mb4&parseTime=true&loc=UTC&multiStatements=true
+      JWT_SECRET: ${JWT_SECRET:-dev-test-jwt-secret-0123456789abcdef}
+      INTERNAL_SERVICE_KEY: ${INTERNAL_SERVICE_KEY:-dev-test-internal-key-0123456789abcdef}
+      REDIS_ENABLED: "true"
+      REDIS_URL: redis://redis:6379/0
+      MQTT_ENABLED: "true"
+      MQTT_BROKER_URL: tcp://mqtt:1883
+      MQTT_TOPIC_PREFIX: agri
+      OBJECT_STORAGE_ENABLED: "true"
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_BUCKET: knowledge
+      TDENGINE_ENABLED: "true"
+      TDENGINE_REST_URL: http://tdengine:6041
+      TDENGINE_DATABASE: agri_telemetry
+      KNOWLEDGE_NOTIFY_URL: http://agent-service:8000/internal/knowledge/notify
+      AGENT_ALERT_URL: http://agent-service:8000/internal/alerts/notify
+    ports: ["8080:8080"]
+    depends_on: [mysql, redis, mqtt, minio, tdengine]
+
+  # ---------------- agent 4 服务 ----------------
+  agent-service:
+    build: {context: ./agent, dockerfile: Dockerfile}
+    image: smart-project-agent:local
+    restart: unless-stopped
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
+    working_dir: /app/agent-service
+    environment:
+      LLM_API_KEY: ${LLM_API_KEY}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY}
+      JWT_SECRET: ${JWT_SECRET:-dev-test-jwt-secret-0123456789abcdef}
+      GO_INTERNAL_KEY: ${INTERNAL_SERVICE_KEY:-dev-test-internal-key-0123456789abcdef}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      REDIS_HOST: redis
+      MILVUS_HOST: milvus
+      MINIO_ENDPOINT: minio:9000
+      GO_BASE_URL: http://go-api:8080/api/v1
+      CONTEXT_BASE_URL: http://context-service:8001
+      TOOL_BASE_URL: http://tool-service:8002
+    # 不发布宿主端口：流量统一经 frontend nginx 反代 /agent，多副本扩容无端口冲突
+    depends_on: [go-api, redis, minio, milvus]
+
+  context-service:
+    image: smart-project-agent:local
+    restart: unless-stopped
+    command: uvicorn main:app --host 0.0.0.0 --port 8001
+    working_dir: /app/context-service
+    environment:
+      LLM_API_KEY: ${LLM_API_KEY}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY}
+      JWT_SECRET: ${JWT_SECRET:-dev-test-jwt-secret-0123456789abcdef}
+      GO_INTERNAL_KEY: ${INTERNAL_SERVICE_KEY:-dev-test-internal-key-0123456789abcdef}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      REDIS_HOST: redis
+      MILVUS_HOST: milvus
+      MINIO_ENDPOINT: minio:9000
+      GO_BASE_URL: http://go-api:8080/api/v1
+      AGENT_BASE_URL: http://agent-service:8000
+      TOOL_BASE_URL: http://tool-service:8002
+    depends_on: [go-api, redis]
+
+  tool-service:
+    image: smart-project-agent:local
+    restart: unless-stopped
+    command: uvicorn main:app --host 0.0.0.0 --port 8002
+    working_dir: /app/tool-service
+    environment:
+      LLM_API_KEY: ${LLM_API_KEY}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY}
+      JWT_SECRET: ${JWT_SECRET:-dev-test-jwt-secret-0123456789abcdef}
+      GO_INTERNAL_KEY: ${INTERNAL_SERVICE_KEY:-dev-test-internal-key-0123456789abcdef}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      REDIS_HOST: redis
+      MILVUS_HOST: milvus
+      MINIO_ENDPOINT: minio:9000
+      GO_BASE_URL: http://go-api:8080/api/v1
+      AGENT_BASE_URL: http://agent-service:8000
+      CONTEXT_BASE_URL: http://context-service:8001
+    depends_on: [go-api, redis, milvus, minio]
+
+  ingest-service:
+    image: smart-project-agent:local
+    restart: unless-stopped
+    command: python worker.py
+    working_dir: /app/ingest-service
+    environment:
+      LLM_API_KEY: ${LLM_API_KEY}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY}
+      JWT_SECRET: ${JWT_SECRET:-dev-test-jwt-secret-0123456789abcdef}
+      GO_INTERNAL_KEY: ${INTERNAL_SERVICE_KEY:-dev-test-internal-key-0123456789abcdef}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      REDIS_HOST: redis
+      MILVUS_HOST: milvus
+      MINIO_ENDPOINT: minio:9000
+      GO_BASE_URL: http://go-api:8080/api/v1
+    depends_on: [go-api, redis, milvus, minio]
+
+  # ---------------- 前端（nginx 托管 + 反代） ----------------
+  frontend:
+    build: {context: ./frontend, dockerfile: Dockerfile}
+    image: smart-project-frontend:local
+    restart: unless-stopped
+    ports: ["5173:80"]
+    depends_on: [go-api, agent-service]
+
+volumes:
+  mysql-data:
+    external: true
+    name: backend_mysql-data
+  minio-data:
+    external: true
+    name: smart_agriculture_minio-data
+  milvus-etcd:
+    external: true
+    name: smart_agriculture_milvus-etcd
+  milvus-minio:
+    external: true
+    name: smart_agriculture_milvus-minio
+  redis-data:
+  mqtt-data:
+  mqtt-log:
+  tdengine-data:
+    external: true
+    name: smart-agriculture_tdengine-data
+  tdengine-log:
