@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from fastapi import FastAPI, Header, HTTPException, Request  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.responses import StreamingResponse  # noqa: E402
-from pydantic import BaseModel, Field  # noqa: E402
+from pydantic import BaseModel, ConfigDict, Field  # noqa: E402
 
 from orchestrator import handle_question  # noqa: E402
 from session import STATUS_CLOSED, close, get_session  # noqa: E402
@@ -165,8 +165,10 @@ def close_session(session_id: str, request: Request, authorization: str = Header
 
 
 class NotifyRequest(BaseModel):
-    doc_id: str
-    event: str = Field(..., pattern="^(uploaded|updated|archived)$")
+    # Go 端 payload 契约：{"docId": <数字>, "event": "UPLOADED|UPDATED|ARCHIVED", "version": n}
+    model_config = ConfigDict(populate_by_name=True)
+    doc_id: str | int = Field(alias="docId")
+    event: str
     version: int | None = None
 
 
@@ -178,7 +180,7 @@ def knowledge_notify(req: NotifyRequest, x_internal_key: str = Header(default=""
     if not expected or (x_internal_key != expected and x_internal_service_key != expected):
         raise HTTPException(status_code=401, detail="内部密钥无效")
     get_redis().xadd("doc.process", {
-        "doc_id": req.doc_id, "event": req.event, "version": req.version,
+        "doc_id": str(req.doc_id), "event": req.event, "version": req.version,
     })
     return {"ok": True}
 

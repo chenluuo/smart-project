@@ -98,7 +98,7 @@ export function KnowledgePage({ user, knowledge, busy, onUploadKnowledge }: Know
               <span>{formatTime(doc.publishedAt)}</span>
             </div>
             {doc.downloadUrl ? (
-              <a className="download-link" href={doc.downloadUrl} target="_blank" rel="noreferrer">
+              <a className="download-link" href={doc.downloadUrl.replace('http://minio:9000', '/minio-download')} target="_blank" rel="noreferrer">
                 <Download size={17} />
                 下载文档
               </a>

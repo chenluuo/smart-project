@@ -1,19 +1,51 @@
 """ingest-service：文档向量化（消费 queue:doc.process）。
 
 流程：收到通知（Go 文档上传/变更 → agent 入队）
-  → 拉 GET /knowledge/docs（可用文档，Go 保证可用性）
+  → 服务账号登录拿 JWT → 拉 GET /knowledge/docs（可用文档清单，含 downloadUrl）
   → 与 Milvus 已有向量对比（doc_id + version）
-  → 缺失/版本变更 → MinIO 拉原文 → 切片 → embedding → 写知识 collection（幂等）
+  → 缺失/版本变更 → downloadUrl 拉原文 → 切片 → embedding → 写知识 collection（幂等）
 """
 from __future__ import annotations
 
+import threading
+import time
 from typing import Any
 
 from shared.config import get_config
 from shared.embedding import embed
 from shared.go_client import get_go_client
 from shared.milvus_client import ensure_collections, upsert_documents
-from shared.minio_client import get_document
+
+_token_lock = threading.Lock()
+_cached_token: str = ""
+_token_fetched_at = 0.0
+_TOKEN_TTL = 1800  # 服务账号 JWT 缓存时长（秒）
+
+
+def _service_token() -> str:
+    """服务账号登录拿 JWT（缓存 TTL 内复用；Go /knowledge/docs 需要 JWT）。"""
+    global _cached_token, _token_fetched_at
+    now = time.time()
+    with _token_lock:
+        if _cached_token and now - _token_fetched_at < _TOKEN_TTL:
+            return _cached_token
+        cfg = get_config("ingest").get("service_account") or {}
+        username, password = cfg.get("username"), cfg.get("password")
+        if not username or not password:
+            raise RuntimeError("ingest 未配置 service_account（config.yaml ingest.service_account）")
+        _cached_token = get_go_client().login(username, password)
+        _token_fetched_at = now
+        return _cached_token
+
+
+def _fetch(url: str) -> str:
+    """按签名 URL 拉取文档原文（downloadUrl 已带 MinIO 签名）。"""
+    import httpx
+
+    with httpx.Client(timeout=60, trust_env=False) as client:
+        resp = client.get(url)
+        resp.raise_for_status()
+        return resp.text
 
 
 def _chunk_text(text: str, size: int, overlap: int) -> list[str]:
@@ -36,20 +68,28 @@ def process_doc_event(event: dict) -> dict:
 
     ensure_collections()
 
-    doc_id = event.get("doc_id")
-    # 拉可用文档清单，找到目标文档（含 file_url/version）
-    docs = get_go_client().get_knowledge_docs()
+    doc_id = str(event.get("doc_id") or "")  # Go notify 入队的是数字 docId，Milvus doc_id 为 varchar
+    # 服务账号拉可用文档清单，找到目标文档（含 downloadUrl/version）
+    docs = get_go_client().get_knowledge_docs(authorization="Bearer " + _service_token())
     doc = next((d for d in docs if str(d.get("id")) == str(doc_id)), None)
     if doc is None:
-        return {"doc_id": doc_id, "status": "skipped", "reason": "文档不可用或不存在"}
+        # 文档不在可用（ACTIVE）清单：未发布 / 已删除 / 已归档 → 清理该文档历史向量（幂等）。
+        # 同一通道同时服务上传通知与删除通知：上传 DRAFT 时无向量、删除幂等，安全。
+        try:
+            from shared.milvus_client import delete_documents
 
-    file_url = doc.get("file_url")
-    if not file_url:
-        return {"doc_id": doc_id, "status": "skipped", "reason": "缺少 file_url"}
+            delete_documents(doc_id)
+        except Exception as e:
+            return {"doc_id": doc_id, "status": "failed", "reason": f"清理向量失败: {e}"}
+        return {"doc_id": doc_id, "status": "deleted", "reason": "文档不可用或不存在，已清理向量"}
 
-    # 拉原文（MinIO）
+    download_url = doc.get("downloadUrl")
+    if not download_url:
+        return {"doc_id": doc_id, "status": "skipped", "reason": "缺少 downloadUrl"}
+
+    # 拉原文（downloadUrl 为 MinIO 签名 URL，直连拉取）
     try:
-        text = get_document(file_url)
+        text = _fetch(download_url)
     except Exception as e:
         return {"doc_id": doc_id, "status": "failed", "reason": f"拉取原文失败: {e}"}
 
@@ -68,7 +108,7 @@ def process_doc_event(event: dict) -> dict:
             "title": doc.get("title"),
             "version": doc.get("version"),
             "category": doc.get("category"),
-            "source": file_url,
+            "source": doc.get("source") or download_url,
             "content": chunk,
         })
     upsert_documents(rows, kind="knowledge")

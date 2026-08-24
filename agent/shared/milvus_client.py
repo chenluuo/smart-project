@@ -150,3 +150,13 @@ def upsert_documents(rows: list[dict[str, Any]], kind: str = "knowledge") -> Non
     conn = _get_conn()
     col = _collection(kind)
     conn.upsert(collection_name=col, data=rows)
+
+
+def delete_documents(doc_id: str, kind: str = "knowledge") -> None:
+    """按 doc_id 删除该文档的全部向量切片（幂等：无匹配即无操作）。
+
+    文档从可用清单消失（删除/归档/未发布）时调用，保证知识检索不返回悬空引用。
+    """
+    conn = _get_conn()
+    col = _collection(kind)
+    conn.delete(collection_name=col, filter=f'doc_id == "{doc_id}"')

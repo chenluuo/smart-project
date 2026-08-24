@@ -163,6 +163,178 @@ func (r Repositories) FindByIDAndOwner(ctx context.Context, deviceID, ownerID ui
 	return &result, nil
 }
 
+// AdminDeviceItem 管理后台设备列表项（含当前有效绑定的地块与归属用户；未绑定 plotId=0）。
+type AdminDeviceItem struct {
+	Device    Device
+	PlotID    uint64
+	PlotCode  *string
+	PlotName  *string
+	OwnerName *string
+}
+
+type adminDeviceRow struct {
+	Device
+	PlotID    uint64  `gorm:"column:plot_id"`
+	PlotCode  *string `gorm:"column:plot_code"`
+	PlotName  *string `gorm:"column:plot_name"`
+	OwnerName *string `gorm:"column:owner_name"`
+}
+
+// AdminList 管理后台全量设备列表（不做归属过滤，含未绑定设备）。
+func (r Repositories) AdminList(ctx context.Context, filter ListFilter) ([]AdminDeviceItem, int64, error) {
+	if filter.Page == 0 {
+		filter.Page = 1
+	}
+	if filter.PageSize == 0 {
+		filter.PageSize = 20
+	}
+	if filter.Page < 1 || filter.PageSize < 1 || filter.PageSize > 100 || filter.Status != nil && !ValidStatus(*filter.Status) {
+		return nil, 0, ErrInvalidInput
+	}
+	query := r.db.WithContext(ctx).Table("devices AS d").
+		Joins("LEFT JOIN device_bindings AS b ON b.device_id = d.id AND b.unbound_at IS NULL").
+		Joins("LEFT JOIN plots AS p ON p.id = b.plot_id").
+		Joins("LEFT JOIN users AS u ON u.id = p.owner_id")
+	if filter.PlotID != nil {
+		query = query.Where("b.plot_id = ?", *filter.PlotID)
+	}
+	if filter.Status != nil {
+		query = query.Where("d.status = ?", *filter.Status)
+	}
+	if filter.DeviceType != "" {
+		query = query.Where("d.device_type = ?", filter.DeviceType)
+	}
+
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var rows []adminDeviceRow
+	err := query.Select(
+		"d.*, COALESCE(b.plot_id, 0) AS plot_id, p.code AS plot_code, p.name AS plot_name, u.name AS owner_name",
+	).Order("d.id ASC").Limit(filter.PageSize).Offset((filter.Page - 1) * filter.PageSize).Scan(&rows).Error
+	if err != nil {
+		return nil, 0, err
+	}
+	items := make([]AdminDeviceItem, 0, len(rows))
+	for index := range rows {
+		items = append(items, AdminDeviceItem{
+			Device: rows[index].Device, PlotID: rows[index].PlotID,
+			PlotCode: rows[index].PlotCode, PlotName: rows[index].PlotName, OwnerName: rows[index].OwnerName,
+		})
+	}
+	return items, total, nil
+}
+
+// AdminBind 管理后台添加/绑定设备：plotID=0 时只创建（或更新名称）设备记录、不绑定地块；
+// plotID>0 时绑定到任意地块（不做 owner 归属校验；BoundBy 记录操作者）。
+// 序列号不存在时自动创建设备记录（生成 device_code）。
+func (r Repositories) AdminBind(ctx context.Context, actorID uint64, input BindInput) (*Device, error) {
+	var result Device
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var target plot.Plot
+		if input.PlotID > 0 {
+			if err := tx.Select("id").Where("id = ?", input.PlotID).First(&target).Error; err != nil {
+				return err
+			}
+		}
+
+		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("serial_no = ?", input.SerialNo).First(&result).Error
+		switch {
+		case err == nil:
+			if result.DeviceType != input.DeviceType {
+				return ErrDeviceTypeMismatch
+			}
+		case errors.Is(err, gorm.ErrRecordNotFound):
+			code, err := newDeviceCode()
+			if err != nil {
+				return err
+			}
+			result = Device{DeviceCode: code, SerialNo: input.SerialNo, Name: input.Name, DeviceType: input.DeviceType, Status: StatusOffline, CredentialStatus: CredentialPending}
+			if err := tx.Create(&result).Error; err != nil {
+				return err
+			}
+		default:
+			return err
+		}
+
+		if input.PlotID == 0 {
+			// 仅添加/更新设备，不绑定（已存在时保留现有绑定）
+			if err := tx.Model(&result).Update("name", input.Name).Error; err != nil {
+				return err
+			}
+			result.Name = input.Name
+			return nil
+		}
+
+		var active Binding
+		err = tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("device_id = ? AND unbound_at IS NULL", result.ID).First(&active).Error
+		if err == nil {
+			return ErrAlreadyBound
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+
+		updates := map[string]any{"name": input.Name}
+		if result.Status == StatusUnactivated {
+			updates["status"] = StatusOffline
+			result.Status = StatusOffline
+		}
+		if err := tx.Model(&result).Updates(updates).Error; err != nil {
+			return err
+		}
+		result.Name = input.Name
+		return tx.Create(&Binding{DeviceID: result.ID, PlotID: input.PlotID, BoundBy: actorID, BoundAt: time.Now()}).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// AdminUnbind 管理后台解绑任意设备（不做归属校验）。
+func (r Repositories) AdminUnbind(ctx context.Context, deviceID uint64) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var binding Binding
+		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("device_id = ? AND unbound_at IS NULL", deviceID).First(&binding).Error
+		if err != nil {
+			return err
+		}
+		return tx.Model(&Binding{}).Where("id = ? AND unbound_at IS NULL", binding.ID).Update("unbound_at", time.Now()).Error
+	})
+}
+
+// ErrDeviceHasCommands 设备存在命令记录，禁止物理删除（保留操作历史）。
+var ErrDeviceHasCommands = errors.New("device has command records")
+
+// AdminDelete 管理后台物理删除设备：
+// 1) 删除该设备全部绑定记录（含历史）；2) 告警解除设备引用（保留告警历史）；
+// 3) 设备存在命令记录时拒绝删除（保留操作历史）；4) 删除设备行。
+func (r Repositories) AdminDelete(ctx context.Context, deviceID uint64) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var result Device
+		if err := tx.First(&result, deviceID).Error; err != nil {
+			return err
+		}
+		var commandCount int64
+		if err := tx.Raw("SELECT COUNT(*) FROM device_commands WHERE device_id = ?", deviceID).Scan(&commandCount).Error; err != nil {
+			return err
+		}
+		if commandCount > 0 {
+			return ErrDeviceHasCommands
+		}
+		if err := tx.Where("device_id = ?", deviceID).Delete(&Binding{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Exec("UPDATE alerts SET device_id = NULL WHERE device_id = ?", deviceID).Error; err != nil {
+			return err
+		}
+		return tx.Delete(&Device{}, deviceID).Error
+	})
+}
+
 func newDeviceCode() (string, error) {
 	bytes := make([]byte, 8)
 	if _, err := rand.Read(bytes); err != nil {

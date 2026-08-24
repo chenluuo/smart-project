@@ -1282,3 +1282,242 @@ X-Trace-Id: trace-001
   "status": "DOWN"
 }
 ```
+
+## 12. 管理后台接口（SYSTEM_ADMIN）
+
+管理后台路由统一挂 `/api/v1/admin/*`，**全部要求 `SYSTEM_ADMIN` 角色**（复用 `requireSystemAdmin`，非管理员返回 `40301`）。与农户视角接口不同，这些接口不做 JWT 归属过滤，展示全量数据、执行管理动作。配套前端为独立 PC 管理后台（`#/admin`，见 `docs/管理后台接口设计.md`）。
+
+### 12.1 用户列表
+
+`GET /api/v1/admin/users`（SYSTEM_ADMIN）
+
+查询参数：`page`（默认1）、`pageSize`（默认20，上限100）、`keyword`（用户名/手机号模糊）、`role`（FARMER/SYSTEM_ADMIN）、`status`（ACTIVE/DISABLED）
+
+响应 `{code, message, data}`：
+
+```json
+{
+  "code": 0,
+  "message": "OK",
+  "data": {
+    "items": [
+      {
+        "id": 2,
+        "username": "farmer2",
+        "mobile": "13800000002",
+        "role": "FARMER",
+        "status": "ACTIVE",
+        "plotCount": 3,
+        "createdAt": "2026-08-01T08:00:00Z"
+      }
+    ],
+    "page": 1,
+    "pageSize": 20,
+    "total": 4
+  }
+}
+```
+
+- `role` 取该用户主角色（多角色时优先 `SYSTEM_ADMIN`，与登录 JWT 的 `primaryRole` 一致）。
+- `plotCount` 为该用户名下地块数（`count(plots where owner_id = user.id)`）。
+
+### 12.2 地块列表（全量）
+
+`GET /api/v1/admin/plots`（SYSTEM_ADMIN）
+
+查询参数：`page`、`pageSize`（上限100）、`keyword`（编码/名称模糊）、`ownerId`（0=未分配）、`status`（ACTIVE/DISABLED）
+
+响应：
+
+```json
+{
+  "code": 0,
+  "message": "OK",
+  "data": {
+    "items": [
+      {
+        "id": 3,
+        "code": "A3",
+        "name": "A3 番茄试验田",
+        "area": 12.5,
+        "location": "北区",
+        "status": "ACTIVE",
+        "ownerId": 2,
+        "ownerName": "farmer2",
+        "deviceCount": 2,
+        "createdAt": "2026-08-01T08:00:00Z",
+        "updatedAt": "2026-08-02T08:00:00Z"
+      }
+    ],
+    "page": 1,
+    "pageSize": 20,
+    "total": 3
+  }
+}
+```
+
+- `ownerName` 联 `users` 表；`deviceCount` 为有效绑定数（`device_bindings` 中 `unbound_at IS NULL` 计数）。
+
+### 12.3 创建地块
+
+`POST /api/v1/admin/plots`（SYSTEM_ADMIN）
+
+请求体：
+
+```json
+{
+  "code": "B2",
+  "name": "B2 西瓜试验田",
+  "area": 8.6,
+  "location": "南区",
+  "ownerId": 2
+}
+```
+
+- `code`、`name`、`ownerId` 必填；`area` 非负；`location` 可选。
+- **`ownerId` 必填且必须为有效用户**：`plots.owner_id` 有外键 `fk_plots_owner → users(id)`，不存在"未分配"（owner_id 0/NULL）状态，绑定语义即"地块必须归属某用户"。
+- 错误：`40001` 参数不合法或归属用户不存在（外键 1452）；`40904` 该用户下编码重复（唯一索引 `uk_plots_owner_code` 冲突）。
+- 响应 `201`，返回完整地块对象（含 `ownerId`）。
+
+### 12.4 分配/转移地块归属
+
+`PUT /api/v1/admin/plots/{plotId}/owner`（SYSTEM_ADMIN）
+
+请求体：
+
+```json
+{ "ownerId": 4 }
+```
+
+- `ownerId` 必填（>0），将该地块归属转移给指定用户；用户登录后即可见该地块。
+- 错误：`40401` 地块不存在；`40001` 归属用户不存在；`40904` 目标用户下已存在同编码地块。
+
+### 12.5 知识文档全状态列表（含待审批队列）
+
+`GET /api/v1/admin/knowledge/docs`（SYSTEM_ADMIN）
+
+查询参数：`page`、`pageSize`（上限100）、`status`（DRAFT/APPROVED/ACTIVE/ARCHIVED，不传=全部）、`category`、`keyword`（标题模糊）
+
+响应：
+
+```json
+{
+  "code": 0,
+  "message": "OK",
+  "data": {
+    "items": [
+      {
+        "id": 7,
+        "title": "番茄种植手册",
+        "category": "planting",
+        "status": "DRAFT",
+        "version": 4,
+        "source": "农技站",
+        "uploaderName": "codex08231008",
+        "downloadUrl": "http://minio:9000/knowledge/...（预签名）",
+        "createdAt": "2026-08-01T08:00:00Z",
+        "updatedAt": "2026-08-02T08:00:00Z"
+      }
+    ],
+    "page": 1,
+    "pageSize": 20,
+    "total": 12
+  }
+}
+```
+
+- 与农户视角的 `GET /api/v1/knowledge/docs`（仅 ACTIVE）不同，此接口返回**任意状态**文档，供管理员查看 DRAFT/APPROVED 待审批队列；`downloadUrl` 为 MinIO 预签名地址，可直接用于**文本预览**（前端 `fetch` 原文渲染）。
+
+### 12.6 物理删除知识文档
+
+`DELETE /api/v1/admin/knowledge/docs/{docId}`（SYSTEM_ADMIN）
+
+无请求体。任意状态（DRAFT/APPROVED/ACTIVE/ARCHIVED）均可删除；错误：`40405` 文档不存在。
+
+响应：
+
+```json
+{
+  "code": 0,
+  "message": "OK",
+  "data": { "id": 7, "deleted": true, "indexCleanup": "queued" }
+}
+```
+
+**删除链路（物理删除 + 清向量索引）**：
+
+```
+DELETE /api/v1/admin/knowledge/docs/{docId}
+  → 事务：删 knowledge_documents 行 + 审计日志 + outbox KNOWLEDGE_DOCUMENT_DELETED
+  → MinIO Remove(objectKey)（失败仅告警日志，不阻断）
+  → knowledge dispatcher → agent-service /internal/knowledge/notify（event=DELETED）
+  → Redis XADD queue:doc.process {doc_id, event:"DELETED"}
+  → ingest 消费：文档不在 ACTIVE 清单 → Milvus knowledge collection 按 doc_id 删除向量（幂等）
+```
+
+- 审批/发布复用现有接口：`POST /api/v1/knowledge/docs/{docId}/approve`、`/publish`、`/archive`（见 §9.3）。
+- 向量清理为异步最终一致：删除响应返回后极短时间内旧向量可能仍可被检索到。
+
+### 12.7 设备列表（全量，管理后台）
+
+`GET /api/v1/admin/devices`（SYSTEM_ADMIN）
+
+与农户视角的 `GET /api/v1/devices`（按 JWT 归属过滤）不同，此接口返回**全部设备**（含未绑定设备），并附当前有效绑定的地块与归属用户。
+
+查询参数：`page`、`pageSize`（上限100）、`plotId`、`status`、`type`
+
+响应：
+
+```json
+{
+  "code": 0,
+  "message": "OK",
+  "data": {
+    "items": [
+      {
+        "id": 1,
+        "deviceSn": "SN-001",
+        "name": "A1 土壤传感器",
+        "type": "SOIL_SENSOR",
+        "status": "ONLINE",
+        "plotId": 1,
+        "plotCode": "A1",
+        "plotName": "A1 番茄地",
+        "ownerName": "testfarmer",
+        "firmwareVersion": null,
+        "lastSeenAt": null
+      }
+    ],
+    "page": 1,
+    "pageSize": 20,
+    "total": 6
+  }
+}
+```
+
+- `plotId = 0` 表示未绑定（`plotCode`/`plotName`/`ownerName` 为 null）。
+
+### 12.8 绑定设备（任意地块，管理后台）
+
+`POST /api/v1/admin/devices/bind`（SYSTEM_ADMIN）
+
+请求体与农户版 `POST /api/v1/devices/bind` 一致（`deviceSn`/`plotId`/`name`/`type`），但**不做地块归属校验**——管理员可将设备绑定到任意农户的地块（农户版受 JWT 归属限制）。
+
+- **`plotId` 传 0（或缺省）时只添加设备、不绑定地块**：序列号不存在则自动创建设备记录（生成 device_code，status=OFFLINE）；已存在则仅更新名称、保留现有绑定。
+- 错误：`40001` 参数不合法；`40401` 地块不存在；`40901` 设备已绑定到其他地块（提示"请先解绑"）或设备类型与已登记信息不一致。
+- 响应：`{ "id", "deviceSn", "status" }`。
+
+### 12.9 解绑设备（任意，管理后台）
+
+`DELETE /api/v1/admin/devices/{deviceId}/binding`（SYSTEM_ADMIN）
+
+解绑任意设备（农户版受 JWT 归属限制）。错误：`40402` 设备不存在或未绑定。
+
+### 12.10 删除设备（管理后台）
+
+`DELETE /api/v1/admin/devices/{deviceId}`（SYSTEM_ADMIN）
+
+物理删除设备：删除该设备全部绑定记录（含历史）、告警解除设备引用（保留告警历史）、删除设备行。
+
+- **保护**：设备存在命令记录（`device_commands`）时返回 `40901` 拒绝删除（保留操作历史）。
+- 错误：`40402` 设备不存在；`40901` 设备存在命令记录，无法删除。

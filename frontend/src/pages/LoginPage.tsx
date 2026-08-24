@@ -1,5 +1,5 @@
 import { Leaf } from 'lucide-react';
-import type { FormEvent } from 'react';
+import { FormEvent, useRef, useState } from 'react';
 
 export type AuthMode = 'login' | 'register';
 
@@ -14,6 +14,9 @@ export const defaultCredentials: AuthCredentials = {
   password: '',
   mobile: ''
 };
+
+/** 管理后台隐藏入口标记（登录页叶子连点 3 次写入）。 */
+export const ADMIN_ENTRY_KEY = 'smart_admin_entry';
 
 type LoginPageProps = {
   authMode: AuthMode;
@@ -34,6 +37,27 @@ export function LoginPage({
   onCredentialsChange,
   onSubmit
 }: LoginPageProps) {
+  const [leafGone, setLeafGone] = useState(false);
+  const [hint, setHint] = useState('');
+  const leafClicksRef = useRef(0);
+  const leafTimerRef = useRef<number | null>(null);
+
+  function tapLeaf() {
+    leafClicksRef.current += 1;
+    if (leafTimerRef.current) {
+      window.clearTimeout(leafTimerRef.current);
+    }
+    leafTimerRef.current = window.setTimeout(() => {
+      leafClicksRef.current = 0;
+    }, 2000);
+    if (leafClicksRef.current >= 3) {
+      leafClicksRef.current = 0;
+      localStorage.setItem(ADMIN_ENTRY_KEY, '1');
+      setLeafGone(true);
+      setHint('管理入口已开启，登录后将进入管理后台');
+    }
+  }
+
   return (
     <main className="page-shell auth-shell">
       <section className="intro">
@@ -47,7 +71,11 @@ export function LoginPage({
             <strong>智慧农田</strong>
             <span>张家湾温室 A3</span>
           </div>
-          <Leaf className="brand-icon" size={28} />
+          <Leaf
+            className={`brand-icon${leafGone ? ' gone' : ''}`}
+            size={28}
+            onClick={tapLeaf}
+          />
         </div>
         <form className="auth-card" onSubmit={onSubmit}>
           <h2>{authMode === 'login' ? '登录控制台' : '注册农田账号'}</h2>
@@ -79,6 +107,7 @@ export function LoginPage({
             />
           </label>
           {notice && <p className="inline-error">{notice}</p>}
+          {hint && <p className="inline-hint">{hint}</p>}
           <button className="primary-button" disabled={busy}>
             {busy ? '处理中...' : authMode === 'login' ? '进入看板' : '注册并登录'}
           </button>

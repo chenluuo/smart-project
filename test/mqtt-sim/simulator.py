@@ -84,6 +84,9 @@ _client_prefix = None   # 当前 client 订阅命令的 prefix
 _stop_event = threading.Event()
 _tick_thread = None
 
+# 设备端已应用的阈值配置版本（Go 版本化下发：只应用更高版本）
+_LOCAL_CFG_VERSION: dict[str, int] = {}
+
 # ---------------------------------------------------------------- MQTT
 def _on_connect(client, userdata, flags, rc, properties=None):
     if hasattr(rc, "is_failure"):
@@ -97,9 +100,12 @@ def _on_connect(client, userdata, flags, rc, properties=None):
     if ok:
         # 订阅命令下发 topic: {prefix}/+/+/command
         with LOCK:
-            sub = f"{CFG['prefix']}/+/+/command"
-        client.subscribe(sub, 1)
-        print(f"[mqtt] subscribed {sub}", flush=True)
+            sub_cmd = f"{CFG['prefix']}/+/+/command"
+            sub_thr = f"{CFG['prefix']}/+/+/config/thresholds/#"
+        client.subscribe(sub_cmd, 1)
+        client.subscribe(sub_thr, 1)
+        print(f"[mqtt] subscribed {sub_cmd}", flush=True)
+        print(f"[mqtt] subscribed {sub_thr}", flush=True)
     print(f"[mqtt] connected={ok}", flush=True)
 
 def _on_disconnect(client, userdata, rc, properties=None):
@@ -110,11 +116,16 @@ def _on_disconnect(client, userdata, rc, properties=None):
     print(f"[mqtt] disconnected rc={rc}", flush=True)
 
 def _on_message(client, userdata, msg):
-    """收到后端下发的设备命令: {prefix}/{owner}/{deviceSn}/command
-    - OPEN/CLOSE: 控制水泵
-    - SET_THRESHOLD/SYNC_THRESHOLD: 云端改库后同步设备端阈值（更新本地 min/max）"""
+    """收到后端下发的设备消息:
+    - {prefix}/{owner}/{deviceSn}/command                         灌溉 OPEN/CLOSE（兼容 SET_THRESHOLD 旧命令）
+    - {prefix}/{owner}/{deviceSn}/config/thresholds/v/{version}   版本化阈值完整快照（Go 新契约）
+    """
     try:
         parts = msg.topic.split("/")
+        # 版本化阈值配置下发（7 段: prefix/owner/sn/config/thresholds/v/version）
+        if len(parts) == 7 and parts[3] == "config" and parts[4] == "thresholds" and parts[5] == "v":
+            _handle_threshold_config(client, parts, msg.payload or b"{}")
+            return
         if len(parts) != 4 or parts[3] != "command":
             return
         owner_id, device_sn = parts[1], parts[2]
@@ -179,6 +190,82 @@ def _on_message(client, userdata, msg):
         print(f"[cmd] pump {state_str}: {payload.get('commandId')} from {msg.topic}", flush=True)
     except Exception as e:
         print(f"[cmd] error: {e}", flush=True)
+
+def _send_threshold_ack(client, prefix, owner_id, device_sn, message_id, version, status, reason=None):
+    """设备端 ACK: {prefix}/{owner}/{sn}/config/thresholds/ack（Go 契约）。"""
+    try:
+        ack = {"messageId": message_id, "configVersion": version, "status": status}
+        if reason:
+            ack["reason"] = reason
+        client.publish(f"{prefix}/{owner_id}/{device_sn}/config/thresholds/ack",
+                       json.dumps(ack, ensure_ascii=False), qos=1)
+    except Exception as e:
+        print(f"[thr] ack send error: {e}", flush=True)
+
+
+def _handle_threshold_config(client, parts, raw):
+    """处理 Go 版本化阈值配置: {prefix}/{owner}/{sn}/config/thresholds/v/{version}
+    只应用高于本地版本的完整快照，规则映射到传感器 min/max，应用后回 ACK。"""
+    owner_id, device_sn = parts[1], parts[2]
+    try:
+        version = int(parts[6])
+    except ValueError:
+        return
+    with LOCK:
+        if owner_id != CFG["owner_id"]:
+            return
+        is_main = (device_sn == CFG["device_sn"])
+    try:
+        cfg_msg = json.loads(raw)
+        message_id = str(cfg_msg.get("messageId") or "").strip()
+        rules = cfg_msg.get("rules") or []
+        if not message_id or not isinstance(rules, list):
+            raise ValueError("缺少 messageId 或 rules")
+    except Exception as e:
+        # payload 不可解析：无法回有效 ACK（ACK 需 messageId），记录日志
+        print(f"[thr] {device_sn} 配置解析失败: {e}", flush=True)
+        return
+    # 版本单调：只应用高于本地版本的配置（避免 retained 旧消息/乱序回退）
+    with LOCK:
+        prev = _LOCAL_CFG_VERSION.get(device_sn, 0)
+        if version <= prev:
+            return
+    applied = []
+    if is_main:
+        with LOCK:
+            for rule in rules:
+                if not rule.get("enabled", True):
+                    continue
+                sensor = next((s for s in SENSORS if s["id"] == rule.get("metric")), None)
+                if sensor is None:
+                    continue
+                op = str(rule.get("operator", "")).upper()
+                value = rule.get("value")
+                if value is None:
+                    continue
+                if op in ("LT", "LTE"):
+                    sensor["min"] = float(value)
+                elif op in ("GT", "GTE"):
+                    sensor["max"] = float(value)
+                else:
+                    continue
+                applied.append(f"{rule.get('metric')}[{sensor['min']}-{sensor['max']}]")
+    with LOCK:
+        _LOCAL_CFG_VERSION[device_sn] = version
+        COMMANDS.insert(0, {
+            "ts": time.time(),
+            "commandId": message_id,
+            "action": f"THRESHOLD v{version}",
+            "state": "阈值",
+            "mode": "CONFIG",
+            "reason": ", ".join(applied) if applied else ("执行设备(无传感器)已应用" if not is_main else "无有效规则"),
+            "topic": f"{parts[0]}/{owner_id}/{device_sn}/config/thresholds/v/{version}",
+            "deviceSn": device_sn,
+        })
+        del COMMANDS[20:]
+    _send_threshold_ack(client, parts[0], owner_id, device_sn, message_id, version, "APPLIED")
+    print(f"[thr] {device_sn} apply v{version}: {', '.join(applied) if applied else 'ack-only'}", flush=True)
+
 
 def _parse_broker(url):
     """tcp://host:port 或 host:port → (host, port)"""

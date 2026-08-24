@@ -1,12 +1,13 @@
 import { Bell, Bot, Check, Grid2X2, LogOut, Map, MessageSquare, Pencil, Plus, RefreshCw, Send, Settings, Sprout, Square, X } from 'lucide-react';
 import { FormEvent, MouseEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, ApiError, streamAgentChat, streamEvents, tokenStorage } from './api';
+import { AdminPanel } from './pages/admin/AdminPanel';
 import { AlarmCenterPage } from './pages/AlarmCenterPage';
 import { ControlPanelPage } from './pages/ControlPanelPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { DeviceListPage } from './pages/DeviceListPage';
 import { KnowledgePage } from './pages/KnowledgePage';
-import { AuthMode, defaultCredentials, LoginPage } from './pages/LoginPage';
+import { AuthMode, ADMIN_ENTRY_KEY, defaultCredentials, LoginPage } from './pages/LoginPage';
 import type {
   AgentChatMessage,
   AlertItem,
@@ -32,6 +33,7 @@ export default function App() {
   const [credentials, setCredentials] = useState(defaultCredentials);
   const [user, setUser] = useState<User | null>(null);
   const [view, setView] = useState<View>('overview');
+  const [adminMode, setAdminMode] = useState(() => window.location.hash === '#/admin');
   const [initialLoading, setInitialLoading] = useState(() => Boolean(tokenStorage().get()));
   const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -141,6 +143,14 @@ export default function App() {
   }, [loadData]);
 
   useEffect(() => {
+    function onHashChange() {
+      setAdminMode(window.location.hash === '#/admin');
+    }
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, []);
+
+  useEffect(() => {
     if (!user) return;
     const controller = new AbortController();
     streamEvents((event) => {
@@ -165,6 +175,9 @@ export default function App() {
       tokenStorage().set(result.accessToken);
       setUser(result.user);
       await loadData();
+      if (result.user.role === 'SYSTEM_ADMIN' && localStorage.getItem(ADMIN_ENTRY_KEY) === '1') {
+        window.location.hash = '#/admin';
+      }
     } catch (error) {
       setNotice(errorMessage(error));
     } finally {
@@ -244,6 +257,7 @@ export default function App() {
           ? `阈值规则已保存，第 ${update.configVersion} 版正在下发至 ${update.targetCount} 台机器`
           : `阈值规则已保存，第 ${update.configVersion} 版当前无绑定机器需要下发`
       );
+      return true;
     } catch (error) {
       setNotice(errorMessage(error));
       return false;
@@ -254,7 +268,9 @@ export default function App() {
 
   async function uploadKnowledge(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
+    // 在 await 前保存表单引用：React 合成事件的 currentTarget 在异步后失效
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
     setBusy(true);
     try {
       const uploaded = await api.uploadKnowledge(form);
@@ -263,7 +279,7 @@ export default function App() {
         ...current,
         knowledge: [uploaded, ...knowledge.filter((document) => document.id !== uploaded.id)]
       }));
-      event.currentTarget.reset();
+      formElement.reset();
       setNotice('知识文档已上传');
     } catch (error) {
       setNotice(errorMessage(error));
@@ -410,6 +426,20 @@ export default function App() {
           onSubmit={handleAuth}
         />
       </div>
+    );
+  }
+
+  if (user && adminMode && user.role === 'SYSTEM_ADMIN') {
+    return (
+      <AdminPanel
+        user={user}
+        onBack={() => {
+          // 管理员可能同时是农户：返回手机端并清除入口标记，避免刷新后被拉回管理后台
+          localStorage.removeItem(ADMIN_ENTRY_KEY);
+          window.location.hash = '#/';
+        }}
+        onLogout={logout}
+      />
     );
   }
 

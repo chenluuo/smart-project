@@ -228,3 +228,62 @@ export type EventNotice = {
   data: Record<string, unknown>;
   receivedAt: string;
 };
+
+// ---------------- 管理后台（/api/v1/admin/*） ----------------
+
+export type AdminUser = {
+  id: number;
+  username: string;
+  mobile: string;
+  role: string;
+  status: string;
+  plotCount: number;
+  createdAt: string;
+};
+
+export type AdminPlot = {
+  id: number;
+  code: string;
+  name: string;
+  area?: number | null;
+  location?: string | null;
+  status: string;
+  ownerId: number;
+  ownerName?: string | null;
+  deviceCount: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type AdminKnowledgeDoc = {
+  id: number;
+  title: string;
+  category: string;
+  status: string;
+  version: number;
+  source?: string | null;
+  uploaderName: string;
+  downloadUrl?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type AdminDeleteResult = {
+  id: number;
+  deleted: boolean;
+  indexCleanup: string;
+};
+
+export type AdminDevice = {
+  id: number;
+  deviceSn: string;
+  name: string;
+  type: string;
+  status: string;
+  plotId: number;
+  plotCode?: string | null;
+  plotName?: string | null;
+  ownerName?: string | null;
+  firmwareVersion?: string | null;
+  lastSeenAt?: string | null;
+};

@@ -81,7 +81,7 @@ func TestAuthServicePrefersSystemAdminRole(t *testing.T) {
 	if result.Role != "SYSTEM_ADMIN" {
 		t.Fatalf("Login() role = %q, want SYSTEM_ADMIN", result.Role)
 	}
-	claims, err := service.Authenticate(result.AccessToken)
+	claims, err := service.Authenticate(context.Background(), result.AccessToken)
 	if err != nil {
 		t.Fatalf("Authenticate() error = %v", err)
 	}
