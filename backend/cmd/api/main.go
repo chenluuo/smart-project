@@ -25,8 +25,8 @@ import (
 	"github.com/chenluuo/smart-project/backend/internal/platform/database"
 	"github.com/chenluuo/smart-project/backend/internal/platform/objectstore"
 	"github.com/chenluuo/smart-project/backend/internal/platform/redisstore"
-	"github.com/chenluuo/smart-project/backend/internal/plot"
 	"github.com/chenluuo/smart-project/backend/internal/platform/tdengine"
+	"github.com/chenluuo/smart-project/backend/internal/plot"
 	"github.com/chenluuo/smart-project/backend/internal/telemetry"
 )
 
@@ -76,7 +76,8 @@ func main() {
 	authService := identity.NewAuthService(identity.NewRepositories(db), tokenManager)
 	var plotStore plot.Store = plot.NewRepositories(db)
 	var deviceStore device.Store = device.NewRepositories(db)
-	var alertStore alert.Store = alert.NewRepositories(db)
+	alertRepositories := alert.NewRepositories(db)
+	var alertStore alert.Store = alertRepositories
 	if redisClient != nil {
 		plotStore = plot.NewCachedStore(plotStore, redisClient, cfg.Redis.QueryCacheTTL)
 		deviceStore = device.NewCachedStore(deviceStore, redisClient, cfg.Redis.QueryCacheTTL)
@@ -95,6 +96,7 @@ func main() {
 	eventBroker := events.NewBroker(512)
 	controlService := control.NewService(control.NewRepository(db), eventBroker)
 	alertService := alert.NewService(alertStore, eventBroker)
+	alertService.ConfigureThresholdAckTimeout(cfg.MQTT.ThresholdAckTimeout)
 	var latestStore telemetry.LatestStore = telemetry.NullStore{}
 	if redisClient != nil {
 		latestStore = telemetry.NewRedisStore(redisClient.Client, cfg.Redis.TelemetryTTL)
@@ -119,7 +121,12 @@ func main() {
 			mqttclient.NewGormSourceResolver(db),
 			telemetryIngestService,
 		)
-		mqttClient = mqttclient.New(cfg.MQTT, mqttHandler)
+		thresholdAckHandler, err := alert.NewThresholdAckHandler(cfg.MQTT.TopicPrefix, alertRepositories)
+		if err != nil {
+			slog.Error("configure threshold acknowledgement handler", "error", err)
+			os.Exit(1)
+		}
+		mqttClient = mqttclient.New(cfg.MQTT, mqttHandler, thresholdAckHandler)
 		mqttClient.Start()
 		defer mqttClient.Close()
 		controlService.ConfigureCommandPublisher(mqttClient)
@@ -150,6 +157,17 @@ func main() {
 	knowledgeService.ConfigureObjectAccess(cfg.ObjectStorage.MaxUploadBytes, cfg.ObjectStorage.SignedURLTimeout)
 	workerContext, stopWorkers := context.WithCancel(context.Background())
 	defer stopWorkers()
+	go alert.NewThresholdExpiryWorker(alertRepositories).Run(workerContext, cfg.Internal.OutboxDispatchInterval)
+	if mqttClient != nil {
+		dispatcher, err := alert.NewThresholdDispatcher(
+			outbox.NewRepository(db), alertRepositories, mqttClient, cfg.MQTT.TopicPrefix,
+		)
+		if err != nil {
+			slog.Error("configure threshold outbox dispatcher", "error", err)
+			os.Exit(1)
+		}
+		go dispatcher.Run(workerContext, cfg.Internal.OutboxDispatchInterval, cfg.Internal.OutboxBatchSize)
+	}
 	if cfg.Internal.KnowledgeNotifyURL != "" {
 		dispatcher, err := knowledge.NewDispatcher(
 			outbox.NewRepository(db),
