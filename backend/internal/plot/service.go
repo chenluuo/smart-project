@@ -4,15 +4,22 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"time"
+	"unicode/utf8"
 
 	"gorm.io/gorm"
 )
 
-var ErrNotFound = errors.New("plot not found")
+var (
+	ErrNotFound     = errors.New("plot not found")
+	ErrInvalidInput = errors.New("invalid plot input")
+)
 
 type Store interface {
 	FindByOwner(ctx context.Context, ownerID uint64) ([]Plot, error)
 	FindByIDAndOwner(ctx context.Context, plotID, ownerID uint64) (*Plot, error)
+	UpdateCrop(ctx context.Context, plotID, ownerID uint64, cropType string, plantingTime time.Time) error
 }
 
 type Service struct {
@@ -43,4 +50,20 @@ func (s *Service) Get(ctx context.Context, ownerID, plotID uint64) (*Plot, error
 		return nil, ErrNotFound
 	}
 	return result, nil
+}
+
+func (s *Service) UpdateCrop(ctx context.Context, ownerID, plotID uint64, cropName string) (*Plot, error) {
+	cropName = strings.TrimSpace(cropName)
+	if cropName == "" || utf8.RuneCountInString(cropName) > 64 {
+		return nil, ErrInvalidInput
+	}
+
+	plantingTime := time.Now()
+	if err := s.plots.UpdateCrop(ctx, plotID, ownerID, cropName, plantingTime); err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("update plot crop: %w", err)
+	}
+	return &Plot{ID: plotID, CropType: &cropName, PlantingTime: &plantingTime}, nil
 }

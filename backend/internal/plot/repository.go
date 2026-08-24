@@ -2,6 +2,7 @@ package plot
 
 import (
 	"context"
+	"time"
 
 	"github.com/chenluuo/smart-project/backend/internal/shared/persistence"
 	"gorm.io/gorm"
@@ -28,4 +29,21 @@ func (r Repositories) FindByIDAndOwner(ctx context.Context, id, ownerID uint64) 
 		return nil, err
 	}
 	return &result, nil
+}
+
+func (r Repositories) UpdateCrop(ctx context.Context, plotID, ownerID uint64, cropType string, plantingTime time.Time) error {
+	result := r.db.WithContext(ctx).
+		Model(&Plot{}).
+		Where("id = ? AND owner_id = ?", plotID, ownerID).
+		Updates(map[string]interface{}{
+			"crop_type":     cropType,
+			"planting_time": plantingTime,
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }
