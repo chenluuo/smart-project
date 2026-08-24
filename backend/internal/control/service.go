@@ -103,12 +103,13 @@ type Service struct {
 	publisher  events.Publisher
 	snapshots  IrrigationSnapshotStore
 	commandPub CommandPublisher
+	topicPrefix string
 	now        func() time.Time
 }
 
-// CommandPublisher 向设备下发命令(当前由 MQTT 客户端实现)。
+// CommandPublisher 向设备下发 MQTT 消息(当前由 MQTT 客户端实现)。
 type CommandPublisher interface {
-	PublishCommand(ownerID uint64, deviceSN string, payload []byte) error
+	Publish(ctx context.Context, topic string, payload []byte, qos byte, retained bool) error
 }
 
 type IrrigationSnapshotStore interface {
@@ -128,7 +129,8 @@ func (s *Service) ConfigureSnapshotStore(store IrrigationSnapshotStore) {
 	s.snapshots = store
 }
 
-func (s *Service) ConfigureCommandPublisher(pub CommandPublisher) {
+func (s *Service) ConfigureCommandPublisher(topicPrefix string, pub CommandPublisher) {
+	s.topicPrefix = strings.Trim(topicPrefix, "/")
 	s.commandPub = pub
 }
 
@@ -216,10 +218,13 @@ func (s *Service) Issue(ctx context.Context, ownerID, plotID uint64, input Issue
 		cmdJSON, err := json.Marshal(cmdPayload)
 		if err != nil {
 			slog.Warn("encode MQTT command payload", "commandId", command.CommandID, "error", err)
-		} else if err := s.commandPub.PublishCommand(ownerID, irrigationDevice.DeviceSN, cmdJSON); err != nil {
-			slog.Warn("publish MQTT command", "commandId", command.CommandID, "deviceSn", irrigationDevice.DeviceSN, "error", err)
 		} else {
-			slog.Info("MQTT command published", "commandId", command.CommandID, "deviceSn", irrigationDevice.DeviceSN)
+			topic := fmt.Sprintf("%s/%d/%s/command", s.topicPrefix, ownerID, irrigationDevice.DeviceSN)
+			if err := s.commandPub.Publish(ctx, topic, cmdJSON, 1, false); err != nil {
+				slog.Warn("publish MQTT command", "commandId", command.CommandID, "deviceSn", irrigationDevice.DeviceSN, "error", err)
+			} else {
+				slog.Info("MQTT command published", "commandId", command.CommandID, "deviceSn", irrigationDevice.DeviceSN)
+			}
 		}
 	}
 	if s.publisher != nil {
