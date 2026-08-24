@@ -311,14 +311,16 @@ def send_irrigation_command(authorization: str, args: dict) -> dict:
             "plotId": args.get("plot_id"), "action": args.get("action"),
             "status": "PENDING", "createdAt": "2026-08-22T08:21:10+08:00",
         }}
+    # Go §6.2 契约：body 需 action/mode/reason，幂等键经 Idempotency-Key 头传递
     body = {
         "action": args["action"],
+        "mode": "MANUAL",  # agent 人工指令统一 MANUAL（AI_SUGGESTED 留待建议采纳链路）
         "reason": args.get("reason", "agent 建议"),
-        "idempotencyKey": uuid.uuid4().hex,
     }
     if args.get("duration_seconds"):
         body["durationSeconds"] = args["duration_seconds"]
-    data = get_go_client().post_irrigation_command(authorization, args["plot_id"], body)
+    headers = {"Idempotency-Key": uuid.uuid4().hex}
+    data = get_go_client().post_irrigation_command(authorization, args["plot_id"], body, headers=headers)
     return {"ok": True, "data": data}
 
 

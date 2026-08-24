@@ -6,3 +6,4 @@ dist
 *.pid
 vite.config.js
 vite.config.d.ts
+.vite

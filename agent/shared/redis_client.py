@@ -145,6 +145,26 @@ class RedisClient:
             ex=ttl,
         )
 
+    # ---------- 主动通知（告警推送触发 agent 处理的结果） ----------
+    def proactive_push(self, user_id: str, item: dict[str, Any], ttl: int = 86400, cap: int = 5) -> None:
+        """告警主动处理结果入队（agent:proactive:{userId}），保留最近 cap 条。"""
+        key = f"agent:proactive:{user_id}"
+        pipe = self._r.pipeline()
+        pipe.lpush(key, json.dumps(item, ensure_ascii=False))
+        pipe.ltrim(key, 0, cap - 1)
+        pipe.expire(key, ttl)
+        pipe.execute()
+
+    def proactive_get(self, user_id: str) -> list[dict[str, Any]]:
+        raw = self._r.lrange(f"agent:proactive:{user_id}", 0, 9)
+        out: list[dict[str, Any]] = []
+        for item in raw or []:
+            try:
+                out.append(json.loads(item))
+            except json.JSONDecodeError:
+                continue
+        return out
+
 
 _inst: RedisClient | None = None
 

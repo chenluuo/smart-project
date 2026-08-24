@@ -31,6 +31,7 @@ class BuildRequest(BaseModel):
     knowledge_chunks: list[str] = Field(default_factory=list)
     memory_chunks: list[str] = Field(default_factory=list)
     live_data: list[dict] = Field(default_factory=list)
+    alerts: list[dict] = Field(default_factory=list)  # 活跃告警（Go /alerts?status=ACTIVE）
     budget_tokens: int = 4000
 
 
@@ -69,6 +70,7 @@ def build(req: BuildRequest, request: Request, authorization: str = Header(defau
         knowledge_chunks=req.knowledge_chunks,
         memory_chunks=req.memory_chunks,
         live_data=req.live_data,
+        alerts=req.alerts,
         question=req.question,
         budget_tokens=req.budget_tokens,
     )
