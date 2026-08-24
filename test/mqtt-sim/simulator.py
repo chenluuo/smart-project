@@ -62,7 +62,8 @@ CFG = {
     "owner_id": "2",
     "device_sn": "SN-BEARPI-001",
     "heartbeat_sns": "SN-VALVE-CODE-001",  # 心跳设备（灌溉阀门），逗号分隔多个
-    "interval_ms": 1000,
+    "interval_ms": 1000,            # 内部采样频率：1 秒模拟一次传感器读数
+    "publish_interval_ms": 30000,   # 上报频率：30 秒 publish 一次（对齐文档 10 §7）
     "connected": False,
     "running": False,
 }
@@ -219,13 +220,19 @@ def _publish(payload: dict):
         with LOCK:
             STATE["last_error"] = "MQTT 未连接"
         return
-    topics = [f"{prefix}/{owner}/{sn}/telemetry"] + [
-        f"{prefix}/{owner}/{h}/telemetry" for h in heartbeat_sns
-    ]
+    # 主设备：真实遥测（含设备侧阈值判断的 warning）
+    targets = [(f"{prefix}/{owner}/{sn}/telemetry", payload)]
+    # 心跳设备（灌溉阀门等）：无传感器，warning 恒为 false，仅保持在线/上报读数
+    for h in heartbeat_sns:
+        h_payload = {**payload,
+                     "temperatureWarning": False,
+                     "soilMoistureWarning": False,
+                     "lightWarning": False}
+        targets.append((f"{prefix}/{owner}/{h}/telemetry", h_payload))
     try:
         ok_count = 0
-        for topic in topics:
-            info = _client.publish(topic, json.dumps(payload, ensure_ascii=False), qos=1)
+        for topic, p in targets:
+            info = _client.publish(topic, json.dumps(p, ensure_ascii=False), qos=1)
             if info.rc == 0:
                 ok_count += 1
         if ok_count == 0:
@@ -246,6 +253,7 @@ def _clamp(v, lo, hi):
     return max(lo, min(hi, v))
 
 def _step():
+    """内部采样：每 tick 更新传感器读数（高频），返回当前 payload（不发布）。"""
     with LOCK:
         sm = next(s for s in SENSORS if s["id"] == "soilMoisture")
         # 1) 水泵先作用于土壤湿度: 设定增量 + 扰动
@@ -260,7 +268,8 @@ def _step():
             if len(HISTORY[s["id"]]) > HISTORY_LIMIT:
                 HISTORY[s["id"]] = HISTORY[s["id"]][-HISTORY_LIMIT:]
         vals = {s["id"]: s["current"] for s in SENSORS}
-        payload = {
+        # 3) 设备侧阈值判断：超阈值即置 warning（文档 10 §5，固件本地判断）
+        return {
             "temperature": round(vals["temperature"], 2),
             "soilMoisture": round(vals["soilMoisture"], 2),
             "light": round(vals["light"], 1),
@@ -268,16 +277,20 @@ def _step():
             "soilMoistureWarning": bool(vals["soilMoisture"] < SENSORS[0]["min"] or vals["soilMoisture"] > SENSORS[0]["max"]),
             "lightWarning": bool(vals["light"] < SENSORS[2]["min"] or vals["light"] > SENSORS[2]["max"]),
         }
-    _publish(payload)
 
 def _tick_loop():
+    last_publish = 0.0
     while not _stop_event.is_set():
         with LOCK:
             interval = CFG["interval_ms"] / 1000.0
+            publish_interval = CFG["publish_interval_ms"] / 1000.0
             running = CFG["running"]
         if running:
             _ensure_connected()
-            _step()
+            payload = _step()  # 高频采样（1s）
+            if time.time() - last_publish >= publish_interval:  # 低频上报（30s）
+                _publish(payload)
+                last_publish = time.time()
         _stop_event.wait(interval)
 
 def _start():
@@ -295,7 +308,7 @@ def _stop():
 def _state_snapshot():
     with LOCK:
         return {
-            "config": {k: CFG[k] for k in ("broker", "prefix", "owner_id", "device_sn", "heartbeat_sns", "interval_ms", "connected", "running")},
+            "config": {k: CFG[k] for k in ("broker", "prefix", "owner_id", "device_sn", "heartbeat_sns", "interval_ms", "publish_interval_ms", "connected", "running")},
             "sensors": list(SENSORS),
             "pump": dict(PUMP),
             "commands": list(COMMANDS),
@@ -369,6 +382,8 @@ class Handler(BaseHTTPRequestHandler):
                         CFG[k] = str(body[k]).strip()
                 if "interval_ms" in body and body["interval_ms"]:
                     CFG["interval_ms"] = max(50, int(body["interval_ms"]))
+                if "publish_interval_ms" in body and body["publish_interval_ms"]:
+                    CFG["publish_interval_ms"] = max(1000, int(body["publish_interval_ms"]))
             self._send(200, {"ok": True})
         elif path == "/api/sensor":
             ok = _apply_sensor(body)
@@ -436,7 +451,8 @@ _HTML = """<!DOCTYPE html>
   <label>ownerId <input id="cfg-owner" value="2" style="width:60px"></label>
   <label>deviceSn <input id="cfg-sn" value="SN-BEARPI-001" style="width:140px"></label>
   <label>心跳SN(逗号) <input id="cfg-heartbeat" value="SN-VALVE-CODE-001" style="width:150px"></label>
-  <label>间隔ms <input id="cfg-interval" type="number" min="50" value="1000"></label>
+  <label>采样ms <input id="cfg-interval" type="number" min="50" value="1000"></label>
+  <label>上报ms <input id="cfg-publish" type="number" min="1000" value="30000"></label>
   <span id="conn"><span class="dot off"></span>未连接</span>
   <button id="btn-start" class="btn start">▶ 启动</button>
   <button id="btn-stop" class="btn stop" disabled>⏹ 停止</button>
@@ -554,6 +570,9 @@ function bindConfig() {
   $('cfg-interval').addEventListener('change', () => {
     schedulePost('/api/config', { interval_ms: parseInt($('cfg-interval').value) });
   });
+  $('cfg-publish').addEventListener('change', () => {
+    schedulePost('/api/config', { publish_interval_ms: parseInt($('cfg-publish').value) });
+  });
 }
 bindConfig();
 
@@ -592,6 +611,7 @@ function render(s) {
   $('cfg-sn').value = cfg.device_sn;
   $('cfg-heartbeat').value = cfg.heartbeat_sns;
   $('cfg-interval').value = cfg.interval_ms;
+  $('cfg-publish').value = cfg.publish_interval_ms;
   const conn = $('conn');
   conn.innerHTML = cfg.connected
     ? '<span class="dot on"></span>MQTT 已连接'
