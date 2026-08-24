@@ -28,6 +28,7 @@ type alertServiceStub struct {
 	remark        string
 	triggerInput  alert.TriggerInput
 	triggerResult *alert.TriggerResult
+	syncResult    *alert.ThresholdSyncView
 }
 
 func (s *alertServiceStub) ListRules(_ context.Context, ownerID, plotID uint64) ([]alert.RuleView, error) {
@@ -38,6 +39,11 @@ func (s *alertServiceStub) ListRules(_ context.Context, ownerID, plotID uint64) 
 func (s *alertServiceStub) UpsertRule(_ context.Context, ownerID, plotID, thresholdID uint64, input alert.RuleInput) (*alert.RuleUpdateResult, error) {
 	s.ownerID, s.plotID, s.thresholdID, s.ruleInput = ownerID, plotID, thresholdID, input
 	return s.updateResult, s.err
+}
+
+func (s *alertServiceStub) ThresholdSync(_ context.Context, ownerID, plotID, thresholdID uint64) (*alert.ThresholdSyncView, error) {
+	s.ownerID, s.plotID, s.thresholdID = ownerID, plotID, thresholdID
+	return s.syncResult, s.err
 }
 
 func (s *alertServiceStub) List(_ context.Context, ownerID uint64, filter alert.ListFilter) (alert.ListResult, error) {
@@ -69,6 +75,7 @@ func TestAlertEndpointsRequireAuthentication(t *testing.T) {
 	requests := []struct{ method, path string }{
 		{http.MethodGet, "/api/v1/plots/11/thresholds"},
 		{http.MethodPut, "/api/v1/plots/11/thresholds/2"},
+		{http.MethodGet, "/api/v1/plots/11/thresholds/2/sync"},
 		{http.MethodGet, "/api/v1/alerts"},
 		{http.MethodGet, "/api/v1/alerts/logs"},
 		{http.MethodPost, "/api/v1/alerts/3/confirm"},
@@ -80,6 +87,21 @@ func TestAlertEndpointsRequireAuthentication(t *testing.T) {
 		if response.Code != http.StatusUnauthorized || !strings.Contains(response.Body.String(), `"code":40101`) {
 			t.Fatalf("%s %s: status=%d body=%s", requestData.method, requestData.path, response.Code, response.Body.String())
 		}
+	}
+}
+
+func TestThresholdSyncEndpoint(t *testing.T) {
+	service := &alertServiceStub{syncResult: &alert.ThresholdSyncView{
+		RuleID: 2, ConfigVersion: 7, Status: alert.ThresholdSyncSent, TargetCount: 1,
+		Devices: []alert.ThresholdDeviceSyncView{{DeviceID: 3, DeviceSN: "BEARPI-001", MessageID: "thr_1", Status: alert.ThresholdSyncSent}},
+	}}
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/plots/11/thresholds/2/sync", nil)
+	request.Header.Set("Authorization", "Bearer signed-token")
+	response := httptest.NewRecorder()
+	newAlertTestRouter(service).ServeHTTP(response, request)
+	if response.Code != http.StatusOK || service.ownerID != 7 || service.plotID != 11 || service.thresholdID != 2 ||
+		!strings.Contains(response.Body.String(), `"configVersion":7`) || !strings.Contains(response.Body.String(), `"status":"SENT"`) {
+		t.Fatalf("GET threshold sync: status=%d body=%s service=%+v", response.Code, response.Body.String(), service)
 	}
 }
 

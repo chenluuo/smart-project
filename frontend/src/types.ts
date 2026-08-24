@@ -111,10 +111,38 @@ export type ThresholdRule = {
   metric: string;
   operator: string;
   value: number;
+  hysteresis: number;
   unit: string;
   durationSeconds: number;
   enabled: boolean;
   level: string;
+};
+
+export type ThresholdSyncStatus = 'PENDING' | 'SENT' | 'APPLIED' | 'FAILED' | 'TIMEOUT';
+
+export type ThresholdUpdateResult = {
+  id: number;
+  updatedAt: string;
+  configVersion: number;
+  syncStatus: ThresholdSyncStatus;
+  targetCount: number;
+};
+
+export type ThresholdSync = {
+  ruleId: number;
+  configVersion: number;
+  status: ThresholdSyncStatus;
+  targetCount: number;
+  devices: Array<{
+    deviceId: number;
+    deviceSn: string;
+    messageId: string;
+    status: ThresholdSyncStatus;
+    sentAt?: string | null;
+    acknowledgedAt?: string | null;
+    expiresAt: string;
+    lastError?: string | null;
+  }>;
 };
 
 export type AlertItem = {

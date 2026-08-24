@@ -131,6 +131,7 @@ type controlService interface {
 type alertService interface {
 	ListRules(context.Context, uint64, uint64) ([]alert.RuleView, error)
 	UpsertRule(context.Context, uint64, uint64, uint64, alert.RuleInput) (*alert.RuleUpdateResult, error)
+	ThresholdSync(context.Context, uint64, uint64, uint64) (*alert.ThresholdSyncView, error)
 	List(context.Context, uint64, alert.ListFilter) (alert.ListResult, error)
 	Confirm(context.Context, uint64, uint64, string) (*alert.ConfirmResult, error)
 	Trigger(context.Context, alert.TriggerInput) (*alert.TriggerResult, error)

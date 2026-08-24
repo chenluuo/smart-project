@@ -3,6 +3,7 @@ package alert
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"strconv"
 	"testing"
@@ -62,6 +63,17 @@ func TestCreateTriggeredAlertPersistsOwnerNotificationAndOriginalAgentRequest(t 
 	if err := db.Create(&rule).Error; err != nil {
 		t.Fatalf("insert rule: %v", err)
 	}
+	deviceCode, serial := "threshold-device-"+suffix, "threshold-serial-"+suffix
+	if err := db.Exec("INSERT INTO devices(device_code, serial_no, name, device_type, status, credential_status, created_at, updated_at) VALUES (?, ?, 'threshold sensor', 'SOIL', 'OFFLINE', 'ACTIVE', ?, ?)", deviceCode, serial, now, now).Error; err != nil {
+		t.Fatalf("insert threshold device: %v", err)
+	}
+	var device struct{ ID uint64 }
+	if err := db.Table("devices").Select("id").Where("device_code = ?", deviceCode).Take(&device).Error; err != nil {
+		t.Fatalf("read threshold device: %v", err)
+	}
+	if err := db.Exec("INSERT INTO device_bindings(device_id, plot_id, bound_by, bound_at) VALUES (?, ?, ?, ?)", device.ID, plot.ID, owner.ID, now).Error; err != nil {
+		t.Fatalf("bind threshold device: %v", err)
+	}
 	var createdAlertID uint64
 	t.Cleanup(func() {
 		if createdAlertID != 0 {
@@ -69,7 +81,13 @@ func TestCreateTriggeredAlertPersistsOwnerNotificationAndOriginalAgentRequest(t 
 		}
 		db.Exec("DELETE FROM notifications WHERE alert_id IN (SELECT id FROM alerts WHERE rule_id = ?)", rule.ID)
 		db.Exec("DELETE FROM alerts WHERE rule_id = ?", rule.ID)
+		db.Exec("DELETE FROM outbox_events WHERE aggregate_type = ? AND aggregate_id IN (SELECT message_id FROM threshold_config_deliveries WHERE plot_id = ?)", "threshold_config_delivery", plot.ID)
+		db.Exec("DELETE FROM threshold_config_deliveries WHERE plot_id = ?", plot.ID)
+		db.Exec("DELETE FROM audit_logs WHERE action = ? AND resource_id = ?", "THRESHOLD_RULE_UPDATE", strconv.FormatUint(rule.ID, 10))
+		db.Exec("DELETE FROM plot_threshold_configs WHERE plot_id = ?", plot.ID)
 		db.Exec("DELETE FROM alert_rules WHERE id = ?", rule.ID)
+		db.Exec("DELETE FROM device_bindings WHERE device_id = ?", device.ID)
+		db.Exec("DELETE FROM devices WHERE id = ?", device.ID)
 		db.Exec("DELETE FROM plots WHERE id = ?", plot.ID)
 		db.Exec("DELETE FROM users WHERE id = ?", owner.ID)
 	})
@@ -77,8 +95,13 @@ func TestCreateTriggeredAlertPersistsOwnerNotificationAndOriginalAgentRequest(t 
 	updatedRule := rule
 	updatedRule.Threshold = decimal.NewFromInt(29)
 	updatedRule.Hysteresis = decimal.Zero
-	if err := repository.UpsertRuleByOwner(context.Background(), owner.ID, &updatedRule, nil); err != nil {
+	persistenceResult, err := repository.UpsertRuleByOwner(context.Background(), owner.ID, &updatedRule, nil, now.Add(2*time.Minute))
+	if err != nil {
 		t.Fatalf("update rule without hysteresis: %v", err)
+	}
+	if persistenceResult.ConfigVersion != 1 || len(persistenceResult.Deliveries) != 1 ||
+		persistenceResult.Deliveries[0].DeviceID != device.ID || persistenceResult.Deliveries[0].Status != ThresholdSyncPending {
+		t.Fatalf("threshold persistence result = %+v", persistenceResult)
 	}
 	var storedRule Rule
 	if err := db.First(&storedRule, rule.ID).Error; err != nil {
@@ -86,6 +109,52 @@ func TestCreateTriggeredAlertPersistsOwnerNotificationAndOriginalAgentRequest(t 
 	}
 	if !storedRule.Threshold.Equal(decimal.NewFromInt(29)) || !storedRule.Hysteresis.Equal(decimal.NewFromInt(2)) {
 		t.Fatalf("updated rule threshold=%s hysteresis=%s", storedRule.Threshold, storedRule.Hysteresis)
+	}
+	var thresholdOutboxCount, thresholdAuditCount int64
+	db.Table("outbox_events").Where("aggregate_type = ? AND aggregate_id = ? AND event_type = ?",
+		"threshold_config_delivery", persistenceResult.Deliveries[0].MessageID, "THRESHOLD_CONFIG_REQUESTED").Count(&thresholdOutboxCount)
+	db.Table("audit_logs").Where("action = ? AND resource_id = ?", "THRESHOLD_RULE_UPDATE", strconv.FormatUint(rule.ID, 10)).Count(&thresholdAuditCount)
+	if thresholdOutboxCount != 1 || thresholdAuditCount != 1 {
+		t.Fatalf("threshold side effects outbox=%d audit=%d", thresholdOutboxCount, thresholdAuditCount)
+	}
+	sentAt := now.Add(5 * time.Second)
+	if err := repository.MarkThresholdSent(context.Background(), persistenceResult.Deliveries[0].MessageID, sentAt); err != nil {
+		t.Fatalf("mark threshold sent: %v", err)
+	}
+	ack := ThresholdAckInput{
+		MessageID: persistenceResult.Deliveries[0].MessageID, ConfigVersion: 1, Status: ThresholdSyncApplied,
+	}
+	if err := repository.ApplyThresholdAck(context.Background(), owner.ID, serial, ack, sentAt.Add(time.Second)); err != nil {
+		t.Fatalf("apply simulated machine ACK: %v", err)
+	}
+	if err := repository.ApplyThresholdAck(context.Background(), owner.ID, serial, ack, sentAt.Add(2*time.Second)); err != nil {
+		t.Fatalf("apply duplicate machine ACK: %v", err)
+	}
+	ack.Status = ThresholdSyncFailed
+	ack.Reason = "late failure"
+	if err := repository.ApplyThresholdAck(context.Background(), owner.ID, serial, ack, sentAt.Add(3*time.Second)); !errors.Is(err, ErrConflict) {
+		t.Fatalf("conflicting terminal ACK error = %v", err)
+	}
+	syncState, err := repository.ThresholdSyncByOwner(context.Background(), owner.ID, plot.ID, rule.ID)
+	if err != nil || syncState.Status != ThresholdSyncApplied || syncState.TargetCount != 1 {
+		t.Fatalf("applied sync state = (%+v, %v)", syncState, err)
+	}
+
+	timedOutRule := updatedRule
+	timedOutRule.Threshold = decimal.NewFromInt(27)
+	timedOutRule.UpdatedAt = now.Add(10 * time.Second)
+	timedOutResult, err := repository.UpsertRuleByOwner(context.Background(), owner.ID, &timedOutRule, nil, now.Add(11*time.Second))
+	if err != nil || timedOutResult.ConfigVersion != 2 || len(timedOutResult.Deliveries) != 1 {
+		t.Fatalf("second threshold version = (%+v, %v)", timedOutResult, err)
+	}
+	if count, err := repository.ExpireThresholdDeliveries(context.Background(), now.Add(12*time.Second)); err != nil || count != 1 {
+		t.Fatalf("expire threshold delivery = (%d, %v)", count, err)
+	}
+	lateAck := ThresholdAckInput{
+		MessageID: timedOutResult.Deliveries[0].MessageID, ConfigVersion: 2, Status: ThresholdSyncApplied,
+	}
+	if err := repository.ApplyThresholdAck(context.Background(), owner.ID, serial, lateAck, now.Add(13*time.Second)); !errors.Is(err, ErrConflict) {
+		t.Fatalf("late ACK after timeout error = %v", err)
 	}
 
 	original := json.RawMessage(`{"ruleId":1,"triggerValue":28.6,"extra":{"source":"telemetry"}}`)

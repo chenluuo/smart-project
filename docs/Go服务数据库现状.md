@@ -46,6 +46,8 @@
 | 表 | 用途 | 关键字段 | 主要关系或约束 |
 | --- | --- | --- | --- |
 | `alert_rules` | 地块告警规则 | `id`、`plot_id`、`metric`、`comparison_operator`、`threshold`、`duration_seconds`、`hysteresis`、`level`、`enabled` | `plot_id -> plots.id` |
+| `plot_threshold_configs` | 地块阈值配置版本 | `plot_id`、`config_version` | 每个地块一行；版本单调递增 |
+| `threshold_config_deliveries` | 阈值快照逐设备投递状态 | `message_id`、`plot_id`、`changed_rule_id`、`device_id`、`config_version`、`status`、发送/ACK/超时时间和错误 | 消息 ID 唯一；同一地块、设备、版本唯一 |
 | `alerts` | 规则或设备警告产生的告警记录 | `id`、`rule_id`、`plot_id`、`device_id`、`source`、`warning_type`、`active_dedup_key`、`level`、`status`、触发/确认/恢复时间 | `plot_id` 必填；`rule_id`、`device_id` 可空；活动去重键唯一；确认用户关联 `users` |
 | `notifications` | 面向用户的告警通知 | `id`、`alert_id`、`user_id`、`channel`、`content`、`status`、`retry_count`、`sent_at` | 关联 `alerts` 和 `users` |
 | `audit_logs` | 重要操作的审计记录 | `id`、`actor_id`、`action`、`resource_type`、`resource_id`、`result`、`request_id`、`trace_id` | `actor_id` 可空并关联 `users`；支持按 `trace_id` 追踪 |
@@ -66,7 +68,7 @@
 
 | 表 | 用途 |
 | --- | --- |
-| `schema_migrations` | 当前 Go 内嵌迁移器记录已应用的 SQL 文件，现有版本为 001 至 012 |
+| `schema_migrations` | 当前 Go 内嵌迁移器记录已应用的 SQL 文件，现有版本为 001 至 013 |
 | `flyway_schema_history` | 兼容旧 Flyway 数据库的历史记录；Go 迁移器会导入成功版本，避免重复执行 |
 
 ## 4. MySQL 字段明细
@@ -190,6 +192,35 @@
 | `enabled` | `TINYINT(1)` | 否 | `1` | — | 是否启用；1 为启用，0 为停用 |
 | `created_at` | `DATETIME(6)` | 否 | `CURRENT_TIMESTAMP(6)` | — | 创建时间 |
 | `updated_at` | `DATETIME(6)` | 否 | `CURRENT_TIMESTAMP(6)` | `ON UPDATE CURRENT_TIMESTAMP(6)` | 最后更新时间 |
+
+### 4.8.1 `plot_threshold_configs`：地块阈值配置版本
+
+| 字段 | 类型 | 可空 | 默认值 | 键与约束 | 业务含义 |
+| --- | --- | --- | --- | --- | --- |
+| `plot_id` | `BIGINT` | 否 | — | 主键；外键 `plots.id` | 地块 ID，每个地块最多一行 |
+| `config_version` | `BIGINT UNSIGNED` | 否 | — | — | 地块阈值完整快照的单调版本 |
+| `created_at` | `DATETIME(6)` | 否 | `CURRENT_TIMESTAMP(6)` | — | 首次生成版本的时间 |
+| `updated_at` | `DATETIME(6)` | 否 | `CURRENT_TIMESTAMP(6)` | `ON UPDATE CURRENT_TIMESTAMP(6)` | 最近一次版本递增时间 |
+
+### 4.8.2 `threshold_config_deliveries`：阈值配置投递
+
+| 字段 | 类型 | 可空 | 默认值 | 键与约束 | 业务含义 |
+| --- | --- | --- | --- | --- | --- |
+| `id` | `BIGINT` | 否 | 自增 | 主键 | 投递内部 ID |
+| `message_id` | `VARCHAR(64)` | 否 | — | 唯一键 | MQTT 配置消息和 ACK 的关联 ID |
+| `plot_id` | `BIGINT` | 否 | — | 外键 `plots.id`；与设备、版本组成唯一键 | 配置所属地块 |
+| `changed_rule_id` | `BIGINT` | 否 | — | 外键 `alert_rules.id`；查询索引的一部分 | 本次更新触发下发的规则 |
+| `device_id` | `BIGINT` | 否 | — | 外键 `devices.id`；与地块、版本组成唯一键 | 目标机器 |
+| `config_version` | `BIGINT UNSIGNED` | 否 | — | 与地块、设备组成唯一键 | 下发的完整快照版本 |
+| `status` | `VARCHAR(16)` | 否 | — | 与到期时间组成索引 | `PENDING`、`SENT`、`APPLIED`、`FAILED` 或 `TIMEOUT` |
+| `expires_at` | `DATETIME(6)` | 否 | — | 与状态组成索引 | ACK 最后期限 |
+| `sent_at` | `DATETIME(6)` | 是 | `NULL` | — | MQTT 发布成功时间 |
+| `acknowledged_at` | `DATETIME(6)` | 是 | `NULL` | — | 合法设备 ACK 时间 |
+| `last_error` | `VARCHAR(500)` | 是 | `NULL` | — | 设备失败原因、发布错误或超时说明 |
+| `created_at` | `DATETIME(6)` | 否 | `CURRENT_TIMESTAMP(6)` | — | 创建时间 |
+| `updated_at` | `DATETIME(6)` | 否 | `CURRENT_TIMESTAMP(6)` | `ON UPDATE CURRENT_TIMESTAMP(6)` | 最近状态更新时间 |
+
+规则、审计、地块版本、逐设备投递与阈值 Outbox 在同一事务中写入。`outbox_events.PUBLISHED` 只表示消息已发布到 MQTT；设备是否真正持久化，以本表终态为准。
 
 ### 4.9 `alerts`：告警记录
 
@@ -358,6 +389,10 @@ erDiagram
     DEVICES ||--o{ DEVICE_BINDINGS : assigned
     USERS ||--o{ DEVICE_BINDINGS : operates
     PLOTS ||--o{ ALERT_RULES : configures
+    PLOTS ||--|| PLOT_THRESHOLD_CONFIGS : versions
+    PLOTS ||--o{ THRESHOLD_CONFIG_DELIVERIES : dispatches
+    ALERT_RULES ||--o{ THRESHOLD_CONFIG_DELIVERIES : changes
+    DEVICES ||--o{ THRESHOLD_CONFIG_DELIVERIES : receives
     ALERT_RULES o|--o{ ALERTS : triggers
     PLOTS ||--o{ ALERTS : receives
     DEVICES o|--o{ ALERTS : reports

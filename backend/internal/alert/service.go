@@ -45,8 +45,11 @@ type RuleView struct {
 }
 
 type RuleUpdateResult struct {
-	ID        uint64    `json:"id"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	ID            uint64              `json:"id"`
+	UpdatedAt     time.Time           `json:"updatedAt"`
+	ConfigVersion uint64              `json:"configVersion"`
+	SyncStatus    ThresholdSyncStatus `json:"syncStatus"`
+	TargetCount   int                 `json:"targetCount"`
 }
 
 type ListFilter struct {
@@ -157,7 +160,8 @@ type WarningTransition struct {
 
 type Store interface {
 	ListRulesByOwner(context.Context, uint64, uint64) ([]Rule, error)
-	UpsertRuleByOwner(context.Context, uint64, *Rule, *decimal.Decimal) error
+	UpsertRuleByOwner(context.Context, uint64, *Rule, *decimal.Decimal, time.Time) (RulePersistenceResult, error)
+	ThresholdSyncByOwner(context.Context, uint64, uint64, uint64) (*ThresholdSyncView, error)
 	ListAlertsByOwner(context.Context, uint64, ListFilter) ([]AlertListRow, int64, error)
 	ConfirmAlertByOwner(context.Context, uint64, uint64, string, time.Time) (*Alert, error)
 	CreateTriggeredAlert(context.Context, TriggerInput, time.Time) (*TriggerRecord, error)
@@ -165,17 +169,24 @@ type Store interface {
 }
 
 type Service struct {
-	store     Store
-	publisher events.Publisher
-	now       func() time.Time
+	store               Store
+	publisher           events.Publisher
+	thresholdAckTimeout time.Duration
+	now                 func() time.Time
 }
 
 func NewService(store Store, publishers ...events.Publisher) *Service {
-	service := &Service{store: store, now: time.Now}
+	service := &Service{store: store, thresholdAckTimeout: defaultThresholdAckTimeout, now: time.Now}
 	if len(publishers) > 0 {
 		service.publisher = publishers[0]
 	}
 	return service
+}
+
+func (s *Service) ConfigureThresholdAckTimeout(value time.Duration) {
+	if value > 0 {
+		s.thresholdAckTimeout = value
+	}
 }
 
 func (s *Service) ListRules(ctx context.Context, ownerID, plotID uint64) ([]RuleView, error) {
@@ -203,7 +214,7 @@ func (s *Service) ListRules(ctx context.Context, ownerID, plotID uint64) ([]Rule
 }
 
 func (s *Service) UpsertRule(ctx context.Context, ownerID, plotID, thresholdID uint64, input RuleInput) (*RuleUpdateResult, error) {
-	input.Metric = strings.TrimSpace(input.Metric)
+	input.Metric = normalizeRuleMetric(input.Metric)
 	input.Operator = ComparisonOperator(strings.ToUpper(strings.TrimSpace(string(input.Operator))))
 	input.Level = Level(strings.ToUpper(strings.TrimSpace(string(input.Level))))
 	if ownerID == 0 || plotID == 0 || thresholdID == 0 || !validRuleInput(input) {
@@ -225,12 +236,34 @@ func (s *Service) UpsertRule(ctx context.Context, ownerID, plotID, thresholdID u
 	if hysteresis != nil {
 		rule.Hysteresis = *hysteresis
 	}
-	if err := s.store.UpsertRuleByOwner(ctx, ownerID, rule, hysteresis); errors.Is(err, gorm.ErrRecordNotFound) {
+	persistenceResult, err := s.store.UpsertRuleByOwner(ctx, ownerID, rule, hysteresis, now.Add(s.thresholdAckTimeout))
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, ErrNotFound
 	} else if err != nil {
 		return nil, fmt.Errorf("upsert threshold rule: %w", err)
 	}
-	return &RuleUpdateResult{ID: rule.ID, UpdatedAt: rule.UpdatedAt}, nil
+	devices := make([]ThresholdDeviceSyncView, 0, len(persistenceResult.Deliveries))
+	for _, delivery := range persistenceResult.Deliveries {
+		devices = append(devices, ThresholdDeviceSyncView{Status: delivery.Status})
+	}
+	return &RuleUpdateResult{
+		ID: rule.ID, UpdatedAt: rule.UpdatedAt, ConfigVersion: persistenceResult.ConfigVersion,
+		SyncStatus: aggregateThresholdStatus(devices), TargetCount: len(persistenceResult.Deliveries),
+	}, nil
+}
+
+func (s *Service) ThresholdSync(ctx context.Context, ownerID, plotID, thresholdID uint64) (*ThresholdSyncView, error) {
+	if ownerID == 0 || plotID == 0 || thresholdID == 0 {
+		return nil, ErrInvalidInput
+	}
+	result, err := s.store.ThresholdSyncByOwner(ctx, ownerID, plotID, thresholdID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get threshold sync state: %w", err)
+	}
+	return result, nil
 }
 
 func (s *Service) List(ctx context.Context, ownerID uint64, filter ListFilter) (ListResult, error) {
@@ -377,10 +410,38 @@ func (s *Service) Trigger(ctx context.Context, input TriggerInput) (*TriggerResu
 
 func validRuleInput(input RuleInput) bool {
 	return input.Metric != "" && len(input.Metric) <= 64 &&
+		validMetricThreshold(input.Metric, input.Value) &&
 		(input.Operator == OperatorLT || input.Operator == OperatorLTE || input.Operator == OperatorGT || input.Operator == OperatorGTE) &&
 		!math.IsNaN(input.Value) && !math.IsInf(input.Value, 0) &&
 		(input.Hysteresis == nil || *input.Hysteresis >= 0 && !math.IsNaN(*input.Hysteresis) && !math.IsInf(*input.Hysteresis, 0)) &&
 		input.DurationSeconds >= 0 && input.DurationSeconds <= 86400 && validLevel(input.Level)
+}
+
+func validMetricThreshold(metric string, value float64) bool {
+	switch strings.ToLower(metric) {
+	case "temperature":
+		return value >= -50 && value <= 100
+	case "soilmoisture":
+		return value >= 0 && value <= 100
+	case "light":
+		return value >= 0 && value <= 200000
+	default:
+		return false
+	}
+}
+
+func normalizeRuleMetric(metric string) string {
+	metric = strings.TrimSpace(metric)
+	switch strings.ToLower(metric) {
+	case "temperature":
+		return "temperature"
+	case "soilmoisture":
+		return "soilMoisture"
+	case "light":
+		return "light"
+	default:
+		return metric
+	}
 }
 
 func validLevel(level Level) bool {
