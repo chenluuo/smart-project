@@ -1,5 +1,5 @@
-import { Bell, Bot, Grid2X2, LogOut, Map, MessageSquare, Plus, RefreshCw, Send, Settings, Sprout, Square } from 'lucide-react';
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Bell, Bot, Check, Grid2X2, LogOut, Map, MessageSquare, Pencil, Plus, RefreshCw, Send, Settings, Sprout, Square, X } from 'lucide-react';
+import { FormEvent, MouseEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, ApiError, streamAgentChat, streamEvents, tokenStorage } from './api';
 import { AlarmCenterPage } from './pages/AlarmCenterPage';
 import { ControlPanelPage } from './pages/ControlPanelPage';
@@ -32,17 +32,32 @@ export default function App() {
   const [credentials, setCredentials] = useState(defaultCredentials);
   const [user, setUser] = useState<User | null>(null);
   const [view, setView] = useState<View>('overview');
-  const [loading, setLoading] = useState(true);
+  const [initialLoading, setInitialLoading] = useState(() => Boolean(tokenStorage().get()));
+  const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
   const [data, setData] = useState<AppData>(emptyData);
   const [selectedPlotId, setSelectedPlotId] = useState<number | null>(null);
   const [events, setEvents] = useState<EventNotice[]>([]);
   const agentControllerRef = useRef<AbortController | null>(null);
+  const refreshRequestRef = useRef(0);
   const [agentSessionId, setAgentSessionId] = useState<string | null>(null);
   const [agentMessages, setAgentMessages] = useState<AgentChatMessage[]>([]);
   const [agentStreaming, setAgentStreaming] = useState(false);
   const [agentError, setAgentError] = useState('');
+
+  const pulseButton = useCallback((button: HTMLButtonElement | null) => {
+    if (!button || !button.isConnected) return;
+    button.classList.remove('button-feedback');
+    void button.offsetWidth;
+    button.classList.add('button-feedback');
+  }, []);
+
+  const handleButtonInteraction = useCallback((event: MouseEvent<HTMLElement>) => {
+    const button = (event.target as HTMLElement).closest('button') as HTMLButtonElement | null;
+    if (!button || button.disabled) return;
+    pulseButton(button);
+  }, [pulseButton]);
 
   const selectedPlot = useMemo(
     () => data.plots.find((plot) => plot.id === selectedPlotId) ?? data.plots[0],
@@ -54,20 +69,22 @@ export default function App() {
   const selectedRules = selectedPlot ? data.thresholds[selectedPlot.id] ?? [] : [];
 
   const loadData = useCallback(async () => {
+    const requestId = refreshRequestRef.current + 1;
+    refreshRequestRef.current = requestId;
     if (!tokenStorage().get()) {
-      setLoading(false);
+      setInitialLoading(false);
       return;
     }
-    setLoading(true);
+    setRefreshing(true);
     try {
       const profile = await api.me();
       const [dashboard, plots, devices, alerts, commands, knowledge] = await Promise.all([
         api.dashboard().catch(() => null),
         api.plots(),
-        api.devices().catch(() => emptyPage<Device>()),
-        api.alerts().catch(() => emptyPage<AlertItem>()),
-        api.commands().catch(() => emptyPage<CommandItem>()),
-        api.knowledge().catch(() => [])
+        api.devices().catch(() => null),
+        api.alerts().catch(() => null),
+        api.commands().catch(() => null),
+        api.knowledge().catch(() => null)
       ]);
 
       const nextTelemetry: Record<number, TelemetryLatest> = {};
@@ -78,29 +95,32 @@ export default function App() {
           const [telemetry, irrigation, thresholds] = await Promise.all([
             api.telemetry(plot.id).catch(() => undefined),
             api.irrigationStatus(plot.id).catch(() => undefined),
-            api.thresholds(plot.id).catch(() => [])
+            api.thresholds(plot.id).catch(() => undefined)
           ]);
           if (telemetry) nextTelemetry[plot.id] = telemetry;
           if (irrigation) nextIrrigation[plot.id] = irrigation;
-          nextThresholds[plot.id] = thresholds;
+          if (thresholds) nextThresholds[plot.id] = thresholds;
         })
       );
 
-      setUser(profile);
-      setData({
-        dashboard,
+      if (requestId !== refreshRequestRef.current) return;
+
+      setUser((current) => (current?.id === profile.id ? current : profile));
+      setData((current) => ({
+        dashboard: dashboard ?? current.dashboard,
         plots,
-        devices: devices.items,
-        alerts: alerts.items,
-        commands: commands.items,
-        knowledge,
-        telemetry: nextTelemetry,
-        irrigation: nextIrrigation,
-        thresholds: nextThresholds
-      });
+        devices: devices?.items ?? current.devices,
+        alerts: alerts?.items ?? current.alerts,
+        commands: commands?.items ?? current.commands,
+        knowledge: knowledge ?? current.knowledge,
+        telemetry: { ...current.telemetry, ...nextTelemetry },
+        irrigation: { ...current.irrigation, ...nextIrrigation },
+        thresholds: { ...current.thresholds, ...nextThresholds }
+      }));
       setSelectedPlotId((current) => current ?? plots[0]?.id ?? null);
       setNotice('');
     } catch (error) {
+      if (requestId !== refreshRequestRef.current) return;
       if (error instanceof ApiError && error.status === 401) {
         tokenStorage().clear();
         setUser(null);
@@ -109,7 +129,10 @@ export default function App() {
         setNotice(errorMessage(error));
       }
     } finally {
-      setLoading(false);
+      if (requestId === refreshRequestRef.current) {
+        setInitialLoading(false);
+        setRefreshing(false);
+      }
     }
   }, []);
 
@@ -206,8 +229,8 @@ export default function App() {
     }
   }
 
-  async function toggleRule(rule: ThresholdRule) {
-    if (!selectedPlot) return;
+  async function saveThresholdRule(rule: ThresholdRule) {
+    if (!selectedPlot) return false;
     setBusy(true);
     try {
       const update = await api.updateThreshold(selectedPlot.id, { ...rule, enabled: !rule.enabled });
@@ -223,6 +246,7 @@ export default function App() {
       );
     } catch (error) {
       setNotice(errorMessage(error));
+      return false;
     } finally {
       setBusy(false);
     }
@@ -373,42 +397,48 @@ export default function App() {
     agentControllerRef.current?.abort();
   }
 
-  if (!user && !loading) {
+  if (!user && !initialLoading) {
     return (
-      <LoginPage
-        authMode={authMode}
-        credentials={credentials}
-        busy={busy}
-        notice={notice}
-        onAuthModeChange={setAuthMode}
-        onCredentialsChange={setCredentials}
-        onSubmit={handleAuth}
-      />
+      <div onClickCapture={handleButtonInteraction}>
+        <LoginPage
+          authMode={authMode}
+          credentials={credentials}
+          busy={busy}
+          notice={notice}
+          onAuthModeChange={setAuthMode}
+          onCredentialsChange={setCredentials}
+          onSubmit={handleAuth}
+        />
+      </div>
     );
   }
 
   return (
-    <main className="page-shell">
+    <main className="page-shell" onClickCapture={handleButtonInteraction}>
       <section className="intro">
         <p className="eyebrow">Smart Agriculture</p>
         <h1>移动端 A3 实时看板</h1>
         <p>偏白背景、高对比、扁平化、适老化</p>
       </section>
 
-      <section className="phone">
+      <section className="phone" aria-busy={refreshing || busy}>
         <header className="app-header">
           <div>
             <strong>智慧农田</strong>
-            <span>{user?.name ?? '农户'} · {selectedPlot?.name ?? 'A3 地块'}</span>
+            <span>{user?.name ?? '农户'} · {selectedPlot?.name ?? '未绑定地块'}</span>
           </div>
           <div className="icon-actions">
-            <button title="刷新" onClick={() => void loadData()} disabled={loading || busy}>
+            <button
+              title="刷新"
+              aria-label="刷新数据"
+              className={refreshing ? 'is-refreshing' : undefined}
+              onClick={() => void loadData()}
+              disabled={refreshing || busy}
+            >
               <RefreshCw size={20} />
             </button>
-            <button title="搜索">
-            <button title="退出登录" onClick={logout}>
-             <LogOut size={20} />
-           </button>
+            <button title="退出登录" aria-label="退出登录" onClick={logout}>
+              <LogOut size={20} />
             </button>
           </div>
         </header>
@@ -436,8 +466,9 @@ export default function App() {
             telemetry={selectedTelemetry}
             devices={data.devices}
             rules={selectedRules}
+            busy={busy}
             onSelect={setSelectedPlotId}
-            onToggleRule={toggleRule}
+            onSaveRule={saveThresholdRule}
           />
         )}
 
@@ -494,9 +525,12 @@ function PlotsView(props: {
   telemetry?: TelemetryLatest;
   devices: Device[];
   rules: ThresholdRule[];
+  busy: boolean;
   onSelect: (plotId: number) => void;
-  onToggleRule: (rule: ThresholdRule) => Promise<void>;
+  onSaveRule: (rule: ThresholdRule) => Promise<boolean>;
 }) {
+  const [editingRuleId, setEditingRuleId] = useState<number | null>(null);
+
   return (
     <div className="screen-content">
       <section className="section-head">
@@ -535,19 +569,100 @@ function PlotsView(props: {
       <section className="list-card">
         <h3>阈值规则</h3>
         {props.rules.length === 0 && <EmptyState text="当前地块暂无阈值规则。" />}
-        {props.rules.map((rule) => (
-          <div className="rule-row" key={rule.id}>
-            <span>
-              <strong>{metricName(rule.metric)} {rule.operator} {rule.value}{rule.unit}</strong>
-              <small>{rule.durationSeconds}s · {levelName(rule.level)}</small>
-            </span>
-            <button className={rule.enabled ? 'switch on' : 'switch'} onClick={() => void props.onToggleRule(rule)}>
-              {rule.enabled ? '启用' : '停用'}
-            </button>
-          </div>
-        ))}
+        {props.rules.map((rule) => {
+          const editing = editingRuleId === rule.id;
+          return (
+            <div className={`rule-row ${editing ? 'editing' : ''}`} key={rule.id}>
+              <span>
+                <strong>{metricName(rule.metric)} {rule.operator} {rule.value}{rule.unit}</strong>
+                <small>{rule.durationSeconds}s · {levelName(rule.level)}</small>
+              </span>
+              <div className="rule-actions">
+                <button
+                  type="button"
+                  className="rule-edit-button"
+                  title="编辑阈值"
+                  aria-label={`编辑${metricName(rule.metric)}阈值`}
+                  onClick={() => setEditingRuleId(editing ? null : rule.id)}
+                  disabled={props.busy}
+                >
+                  <Pencil size={17} />
+                </button>
+              </div>
+              {editing && (
+                <ThresholdRuleEditor
+                  rule={rule}
+                  busy={props.busy}
+                  onCancel={() => setEditingRuleId(null)}
+                  onSave={props.onSaveRule}
+                />
+              )}
+            </div>
+          );
+        })}
       </section>
     </div>
+  );
+}
+
+function ThresholdRuleEditor(props: {
+  rule: ThresholdRule;
+  busy: boolean;
+  onCancel: () => void;
+  onSave: (rule: ThresholdRule) => Promise<boolean>;
+}) {
+  const [value, setValue] = useState(String(props.rule.value));
+  const [operator, setOperator] = useState(props.rule.operator);
+  const [error, setError] = useState('');
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const nextValue = Number(value);
+    if (!Number.isFinite(nextValue)) {
+      setError('请输入有效阈值。');
+      return;
+    }
+
+    setError('');
+    const saved = await props.onSave({
+      ...props.rule,
+      value: nextValue,
+      operator
+    });
+    if (saved) {
+      props.onCancel();
+    } else {
+      setError('保存失败，请检查后重试。');
+    }
+  }
+
+  return (
+    <form className="rule-editor" onSubmit={(event) => void submit(event)}>
+      <label>
+        阈值 ({props.rule.unit})
+        <input type="number" inputMode="decimal" step="any" value={value} onChange={(event) => setValue(event.target.value)} required />
+      </label>
+      <label>
+        触发条件
+        <select value={operator} onChange={(event) => setOperator(event.target.value)}>
+          <option value="LT">低于 (&lt;)</option>
+          <option value="LTE">低于等于 (&le;)</option>
+          <option value="GT">高于 (&gt;)</option>
+          <option value="GTE">高于等于 (&ge;)</option>
+        </select>
+      </label>
+      {error && <p className="rule-editor-error">{error}</p>}
+      <div className="rule-editor-actions">
+        <button type="submit" className="rule-save-button" disabled={props.busy}>
+          <Check size={17} />
+          保存
+        </button>
+        <button type="button" className="rule-cancel-button" onClick={props.onCancel} disabled={props.busy}>
+          <X size={17} />
+          取消
+        </button>
+      </div>
+    </form>
   );
 }
 
@@ -868,10 +983,6 @@ function eventTime(event: EventNotice) {
 function isOlderSample(incoming: string | null, current?: string | null) {
   if (!incoming || !current) return false;
   return new Date(incoming).getTime() < new Date(current).getTime();
-}
-
-function emptyPage<T>() {
-  return { items: [] as T[], page: 1, pageSize: 20, total: 0 };
 }
 
 function errorMessage(error: unknown) {

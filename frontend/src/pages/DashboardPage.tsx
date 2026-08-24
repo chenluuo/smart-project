@@ -1,4 +1,4 @@
-import { AlertTriangle, Droplets, Power, Thermometer, Wifi } from 'lucide-react';
+import { AlertTriangle, Droplets, Map, Power, Thermometer, Wifi } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { AlertItem, DashboardOverview, Device, IrrigationStatus, Plot, TelemetryLatest } from '../types';
 
@@ -40,10 +40,14 @@ export function DashboardPage({
       <section className="hero-card">
         <div className="hero-head">
           <div>
-            <h2>{selectedPlot?.name || 'A3 地块实时看板'}</h2>
-            <p>采样时间 {formatTime(dashboard?.sampleTime)} · 设备在线 {online}/{Math.max(total, online)}</p>
+            <h2>{selectedPlot?.name ?? '未绑定地块'}</h2>
+            <p>
+              {selectedPlot
+                ? `采样时间 ${formatTime(dashboard?.sampleTime)} · 设备在线 ${online}/${Math.max(total, online)}`
+                : '当前账号尚未绑定地块'}
+            </p>
           </div>
-          <span className="status-pill">{selectedPlot ? '在线' : '待接入'}</span>
+          <span className={`status-pill ${selectedPlot ? '' : 'unbound'}`}>{selectedPlot ? '在线' : '未绑定'}</span>
         </div>
         <FieldMap plots={plots} dashboard={dashboard} />
       </section>
@@ -106,7 +110,17 @@ export function DashboardPage({
 }
 
 function FieldMap(props: { plots: Plot[]; dashboard: DashboardOverview | null }) {
-  const visible = props.plots.length ? props.plots.slice(0, 4) : fallbackPlots;
+  if (props.plots.length === 0) {
+    return (
+      <div className="field-map field-map-empty">
+        <Map size={28} />
+        <strong>未绑定地块</strong>
+        <span>请先绑定所属地块</span>
+      </div>
+    );
+  }
+
+  const visible = props.plots.slice(0, 4);
   return (
     <div className="field-map">
       <div className="map-grid-lines" />
@@ -116,7 +130,7 @@ function FieldMap(props: { plots: Plot[]; dashboard: DashboardOverview | null })
       </div>
       {visible.map((plot, index) => {
         const dashboardPlot = props.dashboard?.plots.find((item) => item.id === plot.id);
-        const moisture = plot.soilMoisture ?? dashboardPlot?.soilMoisture ?? fallbackMoisture[index];
+        const moisture = plot.soilMoisture ?? dashboardPlot?.soilMoisture;
         return (
           <div className={`plot-chip p${index + 1}`} key={plot.id}>
             <strong>{plot.code || `A${index + 1}`}</strong>
@@ -140,15 +154,6 @@ function MetricCard(props: { icon: ReactNode; label: string; value: string; help
     </article>
   );
 }
-
-const fallbackPlots: Plot[] = [
-  { id: 1, code: 'A1', name: 'A1', status: 'ACTIVE' },
-  { id: 2, code: 'A2', name: 'A2', status: 'ACTIVE' },
-  { id: 3, code: 'A3', name: 'A3', status: 'ACTIVE' },
-  { id: 4, code: 'A4', name: 'A4', status: 'ACTIVE' }
-];
-
-const fallbackMoisture = [29.1, 28.4, 27.8, 30.2];
 
 function metricValue(...values: Array<number | undefined | null>) {
   return values.find((value): value is number => typeof value === 'number') ?? null;

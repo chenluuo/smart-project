@@ -17,6 +17,8 @@ const statusOptions = [
   { value: 'CLOSED', label: '已关闭' }
 ];
 
+const maxVisibleAlerts = 5;
+
 export function AlarmCenterPage({ plots, alerts, busy, onConfirmAlert }: AlarmCenterPageProps) {
   const [plotId, setPlotId] = useState('');
   const [status, setStatus] = useState('');
@@ -28,6 +30,13 @@ export function AlarmCenterPage({ plots, alerts, busy, onConfirmAlert }: AlarmCe
       return true;
     });
   }, [alerts, plotId, status]);
+
+  const visibleAlerts = useMemo(() => {
+    const activeAlerts = filteredAlerts.filter((alert) => alert.status === 'ACTIVE');
+    const remainingSlots = Math.max(0, maxVisibleAlerts - activeAlerts.length);
+    const historicalAlerts = filteredAlerts.filter((alert) => alert.status !== 'ACTIVE').slice(0, remainingSlots);
+    return [...activeAlerts, ...historicalAlerts];
+  }, [filteredAlerts]);
 
   const activeCount = alerts.filter((alert) => alert.status === 'ACTIVE').length;
   const highCount = alerts.filter((alert) => alert.level === 'HIGH').length;
@@ -70,7 +79,7 @@ export function AlarmCenterPage({ plots, alerts, busy, onConfirmAlert }: AlarmCe
         <h3>告警列表</h3>
         {alerts.length === 0 && <AlarmEmptyState text="暂无告警，后端产生告警后会显示在这里。" />}
         {alerts.length > 0 && filteredAlerts.length === 0 && <AlarmEmptyState text="没有符合筛选条件的告警。" />}
-        {filteredAlerts.map((alert) => (
+        {visibleAlerts.map((alert) => (
           <article className="alarm-card" key={alert.id}>
             <div className="alarm-main">
               <span className={`alarm-icon ${alert.level.toLowerCase()}`}>
