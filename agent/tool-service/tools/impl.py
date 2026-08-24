@@ -1,4 +1,4 @@
-"""tool-service：9 个工具实现（集中管理）+ JSON Schema 定义。
+"""tool-service：14 个工具实现（集中管理）+ JSON Schema 定义。
 
 工具清单：
   1. get_user_plots        田块查询入口（Go /plots，JWT 权限）
@@ -10,6 +10,13 @@
   7. get_device_status     设备状态（Go /devices）
   8. search_knowledge      知识检索（Milvus 直连，ACTIVE 由 Go 保证）
   9. get_document_content  文档原文（MinIO 直连）
+ 10. get_irrigation_status 灌溉状态（Go /plots/{id}/irrigation/status）
+ 11. get_command_result    命令执行结果（Go /commands/{id}）
+ 12. set_crop              设置地块种植作物（Go POST /plots/{id}/crop，"未种植"=清除）
+ 13. irrigate_to_target_humidity 目标湿度灌溉（阈值闭环，内部经 Go 灌溉命令）
+
+注：按时间控泵的 send_irrigation_command 已不对 LLM 暴露（保留函数仅供
+irrigate_to_target_humidity 内部发 OPEN/CLOSE 使用），灌溉统一按阈值驱动。
 
 mock_go=true 时（config.yaml tool.mock_go），现场/排查工具返回契约示例数据，
 便于 Go 未就绪时本地联调。
@@ -289,7 +296,8 @@ def get_irrigation_status(authorization: str, args: dict) -> dict:
 
 
 # ============================================================
-# 11. send_irrigation_command：下发灌溉命令（控制类，复用 Go §6.2）
+# 11. send_irrigation_command：下发灌溉命令（内部函数，不对 LLM 暴露；
+#     仅 irrigate_to_target_humidity 闭环内部发 OPEN/CLOSE 使用，复用 Go §6.2）
 # ============================================================
 
 SEND_IRRIGATION_COMMAND_SCHEMA = {
@@ -344,7 +352,33 @@ def get_command_result(authorization: str, args: dict) -> dict:
 
 
 # ============================================================
-# 13. irrigate_to_target_humidity：目标湿度灌溉（闭环，无新增 Go 接口）
+# 13. set_crop：设置地块种植作物（复用 Go POST /plots/{id}/crop）
+# "未种植" 表示清除作物（Go 要求 cropName 非空，未种植 作为显式占位）。
+# ============================================================
+
+SET_CROP_SCHEMA = {
+    "plot_id": {"type": "string", "description": "地块 ID（必填）"},
+    "crop_name": {"type": "string",
+                  "description": "种植作物名（如 番茄/小麦/玉米），传\"未种植\"表示清除作物"},
+}
+
+
+def set_crop(authorization: str, args: dict) -> dict:
+    """设置地块种植作物（JWT 权限由 Go 校验；成功后返回作物名与种植时间）。"""
+    if _mock_enabled():
+        return {"ok": True, "data": {
+            "id": args.get("plot_id"), "cropName": args.get("crop_name"),
+            "plantingTime": "2026-08-22T08:21:00+08:00",
+        }}
+    crop_name = str(args["crop_name"]).strip()
+    if not crop_name or len(crop_name) > 64:
+        return {"ok": False, "error": "作物名不能为空且长度不能超过 64 个字符"}
+    data = get_go_client().update_plot_crop(authorization, args["plot_id"], crop_name)
+    return {"ok": True, "data": data}
+
+
+# ============================================================
+# 14. irrigate_to_target_humidity：目标湿度灌溉（闭环，无新增 Go 接口）
 # 用户说"把湿度浇到 X%"时调用。执行内闭环：
 #   当前湿度 >= 目标 → 跳过；
 #   否则 OPEN 水泵 → 每 _POLL_SECONDS 轮询 Go telemetry/latest →
@@ -471,6 +505,7 @@ def register_all() -> None:
     reg.register("get_document_content", "1.0", "获取知识文档原文片段", GET_DOCUMENT_CONTENT_SCHEMA, [], get_document_content)
     # 控制类（组内已允许 agent 直接发送命令；复用 Go 已有控制接口）
     reg.register("get_irrigation_status", "1.0", "查询地块灌溉状态（ON/OFF、剩余时长）", GET_IRRIGATION_STATUS_SCHEMA, ["plot_id"], get_irrigation_status)
-    reg.register("send_irrigation_command", "1.0", "下发灌溉命令（OPEN/CLOSE，需用户明确意图）", SEND_IRRIGATION_COMMAND_SCHEMA, ["plot_id", "action"], send_irrigation_command)
     reg.register("get_command_result", "1.0", "查询命令执行结果（SUCCEEDED/FAILED/TIMEOUT）", GET_COMMAND_RESULT_SCHEMA, ["command_id"], get_command_result)
+    # 注：按时间控泵的 send_irrigation_command 已从工具列表移除，灌溉统一走目标湿度闭环
     reg.register("irrigate_to_target_humidity", "1.0", "目标湿度灌溉：开启水泵并自动监测，达到目标湿度或超时后自动关闭", IRRIGATE_TO_TARGET_SCHEMA, ["plot_id", "target_humidity"], irrigate_to_target_humidity)
+    reg.register("set_crop", "1.0", "设置地块种植作物（传\"未种植\"表示清除作物）", SET_CROP_SCHEMA, ["plot_id", "crop_name"], set_crop)

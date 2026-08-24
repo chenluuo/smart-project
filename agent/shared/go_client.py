@@ -138,6 +138,14 @@ class GoClient:
         )
         return data if isinstance(data, dict) else {}
 
+    def update_plot_crop(self, authorization: str, plot_id: str, crop_name: str) -> dict[str, Any]:
+        """设置地块种植作物（Go POST /plots/{id}/crop，cropName 非空且 ≤64 字符）。"""
+        data = self._request(
+            "POST", f"/plots/{plot_id}/crop", authorization=authorization,
+            json={"cropName": crop_name},
+        )
+        return data if isinstance(data, dict) else {}
+
     # ---------- 知识库（JWT） ----------
     def get_knowledge_docs(self, authorization: str = "", **query: Any) -> list[Any]:
         return self._request("GET", "/knowledge/docs", authorization=authorization, params=query)
