@@ -110,7 +110,9 @@ def _on_disconnect(client, userdata, rc, properties=None):
     print(f"[mqtt] disconnected rc={rc}", flush=True)
 
 def _on_message(client, userdata, msg):
-    """收到后端下发的控制命令: {prefix}/{owner}/{deviceSn}/command → 控制水泵"""
+    """收到后端下发的设备命令: {prefix}/{owner}/{deviceSn}/command
+    - OPEN/CLOSE: 控制水泵
+    - SET_THRESHOLD/SYNC_THRESHOLD: 云端改库后同步设备端阈值（更新本地 min/max）"""
     try:
         parts = msg.topic.split("/")
         if len(parts) != 4 or parts[3] != "command":
@@ -131,6 +133,25 @@ def _on_message(client, userdata, msg):
             with LOCK:
                 PUMP["enabled"] = False
             state_str = "关"
+        elif action in ("SET_THRESHOLD", "SYNC_THRESHOLD"):
+            # 云端改库后同步设备端阈值：更新本地传感器 min/max，告警判断立即用新阈值
+            thresholds = payload.get("thresholds") or {}
+            with LOCK:
+                applied = []
+                for s in SENSORS:
+                    t = thresholds.get(s["id"])
+                    if not isinstance(t, dict):
+                        continue
+                    if t.get("min") is not None:
+                        s["min"] = float(t["min"])
+                    if t.get("max") is not None:
+                        s["max"] = float(t["max"])
+                    applied.append(f"{s['id']}({s['min']}-{s['max']})")
+            state_str = "阈值"
+            if not applied:
+                print(f"[cmd] SET_THRESHOLD 无有效字段: {msg.topic}", flush=True)
+                return
+            print(f"[cmd] 阈值同步: {', '.join(applied)} ({payload.get('commandId')})", flush=True)
         else:
             print(f"[cmd] unknown action: {action}", flush=True)
             return

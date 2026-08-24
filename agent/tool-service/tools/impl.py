@@ -1,4 +1,4 @@
-"""tool-service：14 个工具实现（集中管理）+ JSON Schema 定义。
+"""tool-service：15 个工具实现（集中管理）+ JSON Schema 定义。
 
 工具清单：
   1. get_user_plots        田块查询入口（Go /plots，JWT 权限）
@@ -13,7 +13,8 @@
  10. get_irrigation_status 灌溉状态（Go /plots/{id}/irrigation/status）
  11. get_command_result    命令执行结果（Go /commands/{id}）
  12. set_crop              设置地块种植作物（Go POST /plots/{id}/crop，"未种植"=清除）
- 13. irrigate_to_target_humidity 目标湿度灌溉（阈值闭环，内部经 Go 灌溉命令）
+ 13. update_alert_rule     修改告警阈值规则（Go PUT /plots/{id}/thresholds/{tid}）
+ 14. irrigate_to_target_humidity 目标湿度灌溉（阈值闭环，内部经 Go 灌溉命令）
 
 注：按时间控泵的 send_irrigation_command 已不对 LLM 暴露（保留函数仅供
 irrigate_to_target_humidity 内部发 OPEN/CLOSE 使用），灌溉统一按阈值驱动。
@@ -378,7 +379,47 @@ def set_crop(authorization: str, args: dict) -> dict:
 
 
 # ============================================================
-# 14. irrigate_to_target_humidity：目标湿度灌溉（闭环，无新增 Go 接口）
+# 14. update_alert_rule：修改地块告警阈值规则（复用 Go PUT /plots/{id}/thresholds/{tid}）
+# 规则 ID 来自 get_alert_rules；可改 metric/operator/value/hysteresis/
+# durationSeconds/level/enabled。
+# ============================================================
+
+UPDATE_ALERT_RULE_SCHEMA = {
+    "plot_id": {"type": "string", "description": "地块 ID（必填）"},
+    "threshold_id": {"type": "string", "description": "阈值规则 ID（来自 get_alert_rules，必填）"},
+    "metric": {"type": "string", "description": "指标（soilMoisture/temperature/light）"},
+    "operator": {"type": "string", "enum": ["LT", "LTE", "GT", "GTE"],
+                 "description": "比较符：LT 低于 / GT 高于 / LTE 不高于 / GTE 不低于"},
+    "value": {"type": "number", "description": "阈值数值（如土壤湿度 30）"},
+    "hysteresis": {"type": "number", "description": "回差（可选，≥0）"},
+    "duration_seconds": {"type": "integer", "minimum": 0, "maximum": 86400,
+                         "description": "持续时长秒（可选，默认 0）"},
+    "level": {"type": "string", "enum": ["LOW", "MEDIUM", "HIGH"], "description": "告警级别"},
+    "enabled": {"type": "boolean", "description": "是否启用该规则"},
+}
+
+
+def update_alert_rule(authorization: str, args: dict) -> dict:
+    """修改地块告警阈值规则（JWT 权限由 Go 校验；返回规则 ID 与更新时间）。"""
+    if _mock_enabled():
+        return {"ok": True, "data": {"id": args.get("threshold_id"),
+                                     "updatedAt": "2026-08-22T08:21:10+08:00"}}
+    body = {
+        "metric": args["metric"],
+        "operator": args["operator"],
+        "value": args["value"],
+        "durationSeconds": int(args.get("duration_seconds", 0)),
+        "level": args["level"],
+        "enabled": args["enabled"],
+    }
+    if args.get("hysteresis") is not None:
+        body["hysteresis"] = args["hysteresis"]
+    data = get_go_client().update_threshold(authorization, args["plot_id"], args["threshold_id"], body)
+    return {"ok": True, "data": data}
+
+
+# ============================================================
+# 15. irrigate_to_target_humidity：目标湿度灌溉（闭环，无新增 Go 接口）
 # 用户说"把湿度浇到 X%"时调用。执行内闭环：
 #   当前湿度 >= 目标 → 跳过；
 #   否则 OPEN 水泵 → 每 _POLL_SECONDS 轮询 Go telemetry/latest →
@@ -509,3 +550,4 @@ def register_all() -> None:
     # 注：按时间控泵的 send_irrigation_command 已从工具列表移除，灌溉统一走目标湿度闭环
     reg.register("irrigate_to_target_humidity", "1.0", "目标湿度灌溉：开启水泵并自动监测，达到目标湿度或超时后自动关闭", IRRIGATE_TO_TARGET_SCHEMA, ["plot_id", "target_humidity"], irrigate_to_target_humidity)
     reg.register("set_crop", "1.0", "设置地块种植作物（传\"未种植\"表示清除作物）", SET_CROP_SCHEMA, ["plot_id", "crop_name"], set_crop)
+    reg.register("update_alert_rule", "1.0", "修改地块告警阈值规则（指标/比较符/阈值/回差/级别/启停）", UPDATE_ALERT_RULE_SCHEMA, ["plot_id", "threshold_id", "metric", "operator", "value", "level", "enabled"], update_alert_rule)

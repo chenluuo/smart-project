@@ -84,6 +84,15 @@ class GoClient:
     def get_thresholds(self, authorization: str, plot_id: str) -> list[Any]:
         return self._request("GET", f"/plots/{plot_id}/thresholds", authorization=authorization)
 
+    def update_threshold(self, authorization: str, plot_id: str, threshold_id: str,
+                         body: dict[str, Any]) -> dict[str, Any]:
+        """修改地块告警阈值规则（Go PUT /plots/{id}/thresholds/{tid}）。"""
+        data = self._request(
+            "PUT", f"/plots/{plot_id}/thresholds/{threshold_id}",
+            authorization=authorization, json=body,
+        )
+        return data if isinstance(data, dict) else {}
+
     def get_devices(self, authorization: str, **query: Any) -> list[Any]:
         return self._request("GET", "/devices", authorization=authorization, params=query)
 
