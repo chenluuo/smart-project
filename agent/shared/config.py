@@ -16,7 +16,7 @@ from typing import Any
 
 import yaml
 
-_ENV_PATTERN = re.compile(r"\$\{([A-Z0-9_]+)\}")
+_ENV_PATTERN = re.compile(r"\$\{([A-Z0-9_]+)(?::-([^}]*))?\}")
 
 
 class ConfigError(RuntimeError):
@@ -32,8 +32,11 @@ def _resolve(value: Any, base_dir: Path) -> Any:
     if isinstance(value, str):
         def repl(m: re.Match) -> str:
             name = m.group(1)
+            default = m.group(2)
             val = os.environ.get(name)
             if val is None:
+                if default is not None:
+                    return default
                 raise ConfigError(
                     f"缺少环境变量 {name}（在 {base_dir.name}/config.yaml 中声明），"
                     "请在 .env 或系统环境变量中配置"
