@@ -1,6 +1,7 @@
 import type {
   AgentMessage,
   AgentSession,
+  AgentStreamEvent,
   AlertItem,
   ApiResponse,
   CommandItem,
@@ -18,6 +19,7 @@ import type {
 } from './types';
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '');
+const AGENT_BASE = (import.meta.env.VITE_AGENT_BASE_URL ?? '').replace(/\/$/, '');
 
 export class ApiError extends Error {
   status: number;
@@ -141,8 +143,109 @@ export const api = {
   messages: (sessionId: string) =>
     request<PageResult<AgentMessage>>(`/api/v1/ai/sessions/${sessionId}/messages?page=1&pageSize=50`),
   closeSession: (sessionId: string) =>
-    request<{ sessionId: string; status: string }>(`/api/v1/ai/sessions/${sessionId}/close`, { method: 'POST' })
+    request<{ sessionId: string; status: string }>(`/api/v1/ai/sessions/${sessionId}/close`, { method: 'POST' }),
+  closeAgentChat: (sessionId: string) => closeAgentChat(sessionId)
 };
+
+export async function streamAgentChat(
+  payload: { sessionId?: string; plotId?: number; question: string },
+  onEvent: (event: AgentStreamEvent) => void,
+  signal: AbortSignal
+) {
+  const headers = new Headers({ 'Content-Type': 'application/json' });
+  const token = tokenStorage().get();
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(`${AGENT_BASE}/agent/chat`, {
+      method: 'POST',
+      headers,
+      signal,
+      body: JSON.stringify({
+        session_id: payload.sessionId,
+        plot_id: payload.plotId == null ? undefined : String(payload.plotId),
+        question: payload.question
+      })
+    });
+  } catch (error) {
+    if (isAbortError(error)) throw error;
+    throw new ApiError(0, 'AI 服务不可达，请确认 agent-service 已启动。');
+  }
+  if (!response.ok || !response.body) {
+    throw new ApiError(response.status, await agentErrorMessage(response));
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let eventType = 'message';
+  let data = '';
+
+  const flush = () => {
+    if (!data) {
+      eventType = 'message';
+      return;
+    }
+    try {
+      const event = JSON.parse(data) as AgentStreamEvent;
+      onEvent({ ...event, type: typeof event.type === 'string' ? event.type : eventType });
+    } catch {
+      onEvent({ type: 'error', message: 'AI 返回的数据格式无效。' });
+    }
+    eventType = 'message';
+    data = '';
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split(/\r?\n/);
+    buffer = lines.pop() ?? '';
+    for (const line of lines) {
+      if (line === '') {
+        flush();
+      } else if (line.startsWith('event:')) {
+        eventType = line.slice(6).trim();
+      } else if (line.startsWith('data:')) {
+        data += line.slice(5).trim();
+      }
+    }
+  }
+}
+
+async function closeAgentChat(sessionId: string) {
+  const headers = new Headers();
+  const token = tokenStorage().get();
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+  let response: Response;
+  try {
+    response = await fetch(`${AGENT_BASE}/agent/chat/sessions/${encodeURIComponent(sessionId)}/close`, {
+      method: 'POST',
+      headers
+    });
+  } catch (error) {
+    if (isAbortError(error)) throw error;
+    throw new ApiError(0, 'AI 服务不可达，请确认 agent-service 已启动。');
+  }
+  if (!response.ok) {
+    throw new ApiError(response.status, await agentErrorMessage(response));
+  }
+}
+
+async function agentErrorMessage(response: Response) {
+  const payload = (await response.json().catch(() => null)) as { detail?: unknown } | null;
+  return typeof payload?.detail === 'string' ? payload.detail : 'AI 对话请求失败。';
+}
+
+function isAbortError(error: unknown) {
+  return error instanceof DOMException && error.name === 'AbortError';
+}
 
 export async function streamEvents(onEvent: (event: EventNotice) => void, signal: AbortSignal) {
   const headers = new Headers();

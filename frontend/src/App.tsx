@@ -1,6 +1,6 @@
-import { Bell, Bot, Grid2X2, LogOut, Map, MessageSquare, RefreshCw, Settings, Sprout } from 'lucide-react';
-import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
-import { api, ApiError, streamEvents, tokenStorage } from './api';
+import { Bell, Bot, Check, Grid2X2, LogOut, Map, MessageSquare, Pencil, Plus, RefreshCw, Send, Settings, Sprout, Square, X } from 'lucide-react';
+import { FormEvent, MouseEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { api, ApiError, streamAgentChat, streamEvents, tokenStorage } from './api';
 import { AlarmCenterPage } from './pages/AlarmCenterPage';
 import { ControlPanelPage } from './pages/ControlPanelPage';
 import { DashboardPage } from './pages/DashboardPage';
@@ -8,8 +8,7 @@ import { DeviceListPage } from './pages/DeviceListPage';
 import { KnowledgePage } from './pages/KnowledgePage';
 import { AuthMode, defaultCredentials, LoginPage } from './pages/LoginPage';
 import type {
-  AgentMessage,
-  AgentSession,
+  AgentChatMessage,
   AlertItem,
   CommandItem,
   DashboardOverview,
@@ -33,12 +32,32 @@ export default function App() {
   const [credentials, setCredentials] = useState(defaultCredentials);
   const [user, setUser] = useState<User | null>(null);
   const [view, setView] = useState<View>('overview');
-  const [loading, setLoading] = useState(true);
+  const [initialLoading, setInitialLoading] = useState(() => Boolean(tokenStorage().get()));
+  const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
   const [data, setData] = useState<AppData>(emptyData);
   const [selectedPlotId, setSelectedPlotId] = useState<number | null>(null);
   const [events, setEvents] = useState<EventNotice[]>([]);
+  const agentControllerRef = useRef<AbortController | null>(null);
+  const refreshRequestRef = useRef(0);
+  const [agentSessionId, setAgentSessionId] = useState<string | null>(null);
+  const [agentMessages, setAgentMessages] = useState<AgentChatMessage[]>([]);
+  const [agentStreaming, setAgentStreaming] = useState(false);
+  const [agentError, setAgentError] = useState('');
+
+  const pulseButton = useCallback((button: HTMLButtonElement | null) => {
+    if (!button || !button.isConnected) return;
+    button.classList.remove('button-feedback');
+    void button.offsetWidth;
+    button.classList.add('button-feedback');
+  }, []);
+
+  const handleButtonInteraction = useCallback((event: MouseEvent<HTMLElement>) => {
+    const button = (event.target as HTMLElement).closest('button') as HTMLButtonElement | null;
+    if (!button || button.disabled) return;
+    pulseButton(button);
+  }, [pulseButton]);
 
   const selectedPlot = useMemo(
     () => data.plots.find((plot) => plot.id === selectedPlotId) ?? data.plots[0],
@@ -50,20 +69,22 @@ export default function App() {
   const selectedRules = selectedPlot ? data.thresholds[selectedPlot.id] ?? [] : [];
 
   const loadData = useCallback(async () => {
+    const requestId = refreshRequestRef.current + 1;
+    refreshRequestRef.current = requestId;
     if (!tokenStorage().get()) {
-      setLoading(false);
+      setInitialLoading(false);
       return;
     }
-    setLoading(true);
+    setRefreshing(true);
     try {
       const profile = await api.me();
       const [dashboard, plots, devices, alerts, commands, knowledge] = await Promise.all([
         api.dashboard().catch(() => null),
         api.plots(),
-        api.devices().catch(() => emptyPage<Device>()),
-        api.alerts().catch(() => emptyPage<AlertItem>()),
-        api.commands().catch(() => emptyPage<CommandItem>()),
-        api.knowledge().catch(() => [])
+        api.devices().catch(() => null),
+        api.alerts().catch(() => null),
+        api.commands().catch(() => null),
+        api.knowledge().catch(() => null)
       ]);
 
       const nextTelemetry: Record<number, TelemetryLatest> = {};
@@ -74,31 +95,32 @@ export default function App() {
           const [telemetry, irrigation, thresholds] = await Promise.all([
             api.telemetry(plot.id).catch(() => undefined),
             api.irrigationStatus(plot.id).catch(() => undefined),
-            api.thresholds(plot.id).catch(() => [])
+            api.thresholds(plot.id).catch(() => undefined)
           ]);
           if (telemetry) nextTelemetry[plot.id] = telemetry;
           if (irrigation) nextIrrigation[plot.id] = irrigation;
-          nextThresholds[plot.id] = thresholds;
+          if (thresholds) nextThresholds[plot.id] = thresholds;
         })
       );
 
-      setUser(profile);
-      setData({
-        dashboard,
+      if (requestId !== refreshRequestRef.current) return;
+
+      setUser((current) => (current?.id === profile.id ? current : profile));
+      setData((current) => ({
+        dashboard: dashboard ?? current.dashboard,
         plots,
-        devices: devices.items,
-        alerts: alerts.items,
-        commands: commands.items,
-        knowledge,
-        telemetry: nextTelemetry,
-        irrigation: nextIrrigation,
-        thresholds: nextThresholds,
-        sessions: [],
-        messages: []
-      });
+        devices: devices?.items ?? current.devices,
+        alerts: alerts?.items ?? current.alerts,
+        commands: commands?.items ?? current.commands,
+        knowledge: knowledge ?? current.knowledge,
+        telemetry: { ...current.telemetry, ...nextTelemetry },
+        irrigation: { ...current.irrigation, ...nextIrrigation },
+        thresholds: { ...current.thresholds, ...nextThresholds }
+      }));
       setSelectedPlotId((current) => current ?? plots[0]?.id ?? null);
       setNotice('');
     } catch (error) {
+      if (requestId !== refreshRequestRef.current) return;
       if (error instanceof ApiError && error.status === 401) {
         tokenStorage().clear();
         setUser(null);
@@ -107,7 +129,10 @@ export default function App() {
         setNotice(errorMessage(error));
       }
     } finally {
-      setLoading(false);
+      if (requestId === refreshRequestRef.current) {
+        setInitialLoading(false);
+        setRefreshing(false);
+      }
     }
   }, []);
 
@@ -148,11 +173,16 @@ export default function App() {
   }
 
   function logout() {
+    agentControllerRef.current?.abort();
     tokenStorage().clear();
     setUser(null);
     setData(emptyData);
     setSelectedPlotId(null);
     setEvents([]);
+    setAgentSessionId(null);
+    setAgentMessages([]);
+    setAgentStreaming(false);
+    setAgentError('');
   }
 
   async function issueIrrigation(action: 'OPEN' | 'CLOSE', durationSeconds = 600) {
@@ -199,19 +229,21 @@ export default function App() {
     }
   }
 
-  async function toggleRule(rule: ThresholdRule) {
-    if (!selectedPlot) return;
+  async function saveThresholdRule(rule: ThresholdRule) {
+    if (!selectedPlot) return false;
     setBusy(true);
     try {
-      await api.updateThreshold(selectedPlot.id, { ...rule, enabled: !rule.enabled });
+      await api.updateThreshold(selectedPlot.id, rule);
       const thresholds = await api.thresholds(selectedPlot.id);
       setData((current) => ({
         ...current,
         thresholds: { ...current.thresholds, [selectedPlot.id]: thresholds }
       }));
-      setNotice('阈值规则已更新');
+      setNotice('阈值规则已保存');
+      return true;
     } catch (error) {
       setNotice(errorMessage(error));
+      return false;
     } finally {
       setBusy(false);
     }
@@ -237,56 +269,173 @@ export default function App() {
     }
   }
 
-  async function createSession() {
-    setBusy(true);
+  async function sendAgentQuestion(question: string) {
+    const content = question.trim();
+    if (!content || agentStreaming) return;
+
+    const userMessage: AgentChatMessage = {
+      id: newChatMessageId('user'),
+      role: 'USER',
+      content,
+      status: 'COMPLETE'
+    };
+    const assistantMessageId = newChatMessageId('assistant');
+    setAgentMessages((current) => [
+      ...current,
+      userMessage,
+      { id: assistantMessageId, role: 'ASSISTANT', content: '', status: 'STREAMING' }
+    ]);
+    setAgentError('');
+    setAgentStreaming(true);
+
+    const controller = new AbortController();
+    agentControllerRef.current = controller;
+    let completed = false;
+    let failed = false;
     try {
-      const session = await api.createSession(selectedPlot?.id);
-      const messages = await api.messages(session.id).catch(() => emptyPage<AgentMessage>());
-      setData((current) => ({ ...current, sessions: [session], messages: messages.items }));
-      setNotice('AI 会话已创建');
+      await streamAgentChat(
+        { sessionId: agentSessionId ?? undefined, plotId: selectedPlot?.id, question: content },
+        (event) => {
+          if (event.type === 'answer' && event.delta) {
+            setAgentMessages((current) =>
+              current.map((message) =>
+                message.id === assistantMessageId
+                  ? { ...message, content: `${message.content}${event.delta}` }
+                  : message
+              )
+            );
+            return;
+          }
+          if (event.type === 'done') {
+            completed = true;
+            if (event.sessionId) setAgentSessionId(event.sessionId);
+            setAgentMessages((current) =>
+              current.map((message) =>
+                message.id === assistantMessageId
+                  ? {
+                      ...message,
+                      content: message.content || event.message || 'AI 未返回内容，请重试。',
+                      status: 'COMPLETE',
+                      sources: event.sources
+                    }
+                  : message
+              )
+            );
+            return;
+          }
+          if (event.type === 'error') {
+            failed = true;
+            const message = event.message || 'AI 响应失败，请稍后重试。';
+            setAgentError(message);
+            setAgentMessages((current) =>
+              current.map((item) =>
+                item.id === assistantMessageId
+                  ? { ...item, content: item.content || message, status: 'ERROR' }
+                  : item
+              )
+            );
+          }
+        },
+        controller.signal
+      );
+      if (!completed && !failed) {
+        setAgentMessages((current) =>
+          current.map((message) =>
+            message.id === assistantMessageId
+              ? { ...message, content: message.content || 'AI 未返回内容，请重试。', status: 'COMPLETE' }
+              : message
+          )
+        );
+      }
     } catch (error) {
-      setNotice(errorMessage(error));
+      if (isAbortError(error)) {
+        setAgentMessages((current) =>
+          current.map((message) =>
+            message.id === assistantMessageId
+              ? { ...message, content: message.content || '已停止生成。', status: 'COMPLETE' }
+              : message
+          )
+        );
+      } else {
+        const message = errorMessage(error);
+        setAgentError(message);
+        setAgentMessages((current) =>
+          current.map((item) =>
+            item.id === assistantMessageId
+              ? { ...item, content: item.content || message, status: 'ERROR' }
+              : item
+          )
+        );
+      }
     } finally {
-      setBusy(false);
+      if (agentControllerRef.current === controller) {
+        agentControllerRef.current = null;
+      }
+      setAgentStreaming(false);
     }
   }
 
-  if (!user && !loading) {
+  async function startNewAgentSession() {
+    agentControllerRef.current?.abort();
+    const previousSessionId = agentSessionId;
+    setAgentSessionId(null);
+    setAgentMessages([]);
+    setAgentError('');
+    setAgentStreaming(false);
+    if (!previousSessionId) return;
+    try {
+      await api.closeAgentChat(previousSessionId);
+    } catch (error) {
+      setAgentError(errorMessage(error));
+    }
+  }
+
+  function stopAgentResponse() {
+    agentControllerRef.current?.abort();
+  }
+
+  if (!user && !initialLoading) {
     return (
-      <LoginPage
-        authMode={authMode}
-        credentials={credentials}
-        busy={busy}
-        notice={notice}
-        onAuthModeChange={setAuthMode}
-        onCredentialsChange={setCredentials}
-        onSubmit={handleAuth}
-      />
+      <div onClickCapture={handleButtonInteraction}>
+        <LoginPage
+          authMode={authMode}
+          credentials={credentials}
+          busy={busy}
+          notice={notice}
+          onAuthModeChange={setAuthMode}
+          onCredentialsChange={setCredentials}
+          onSubmit={handleAuth}
+        />
+      </div>
     );
   }
 
   return (
-    <main className="page-shell">
+    <main className="page-shell" onClickCapture={handleButtonInteraction}>
       <section className="intro">
         <p className="eyebrow">Smart Agriculture</p>
         <h1>移动端 A3 实时看板</h1>
         <p>偏白背景、高对比、扁平化、适老化</p>
       </section>
 
-      <section className="phone">
+      <section className="phone" aria-busy={refreshing || busy}>
         <header className="app-header">
           <div>
             <strong>智慧农田</strong>
-            <span>{user?.name ?? '农户'} · {selectedPlot?.name ?? 'A3 地块'}</span>
+            <span>{user?.name ?? '农户'} · {selectedPlot?.name ?? '未绑定地块'}</span>
           </div>
           <div className="icon-actions">
-            <button title="刷新" onClick={() => void loadData()} disabled={loading || busy}>
+            <button
+              title="刷新"
+              aria-label="刷新数据"
+              className={refreshing ? 'is-refreshing' : undefined}
+              onClick={() => void loadData()}
+              disabled={refreshing || busy}
+            >
               <RefreshCw size={20} />
             </button>
-            <button title="搜索">
-            <button title="退出登录" onClick={logout}>
-             <LogOut size={20} />
-           </button>
+            <button title="退出登录" aria-label="退出登录" onClick={logout}>
+              <LogOut size={20} />
             </button>
           </div>
         </header>
@@ -314,18 +463,23 @@ export default function App() {
             telemetry={selectedTelemetry}
             devices={data.devices}
             rules={selectedRules}
+            busy={busy}
             onSelect={setSelectedPlotId}
-            onToggleRule={toggleRule}
+            onSaveRule={saveThresholdRule}
           />
         )}
 
         {view === 'ask' && (
           <AskView
             selectedPlot={selectedPlot}
-            sessions={data.sessions}
-            messages={data.messages}
             events={events}
-            onCreateSession={createSession}
+            sessionId={agentSessionId}
+            messages={agentMessages}
+            streaming={agentStreaming}
+            error={agentError}
+            onSend={sendAgentQuestion}
+            onNewSession={startNewAgentSession}
+            onStop={stopAgentResponse}
           />
         )}
 
@@ -368,9 +522,12 @@ function PlotsView(props: {
   telemetry?: TelemetryLatest;
   devices: Device[];
   rules: ThresholdRule[];
+  busy: boolean;
   onSelect: (plotId: number) => void;
-  onToggleRule: (rule: ThresholdRule) => Promise<void>;
+  onSaveRule: (rule: ThresholdRule) => Promise<boolean>;
 }) {
+  const [editingRuleId, setEditingRuleId] = useState<number | null>(null);
+
   return (
     <div className="screen-content">
       <section className="section-head">
@@ -409,66 +566,225 @@ function PlotsView(props: {
       <section className="list-card">
         <h3>阈值规则</h3>
         {props.rules.length === 0 && <EmptyState text="当前地块暂无阈值规则。" />}
-        {props.rules.map((rule) => (
-          <div className="rule-row" key={rule.id}>
-            <span>
-              <strong>{metricName(rule.metric)} {rule.operator} {rule.value}{rule.unit}</strong>
-              <small>{rule.durationSeconds}s · {levelName(rule.level)}</small>
-            </span>
-            <button className={rule.enabled ? 'switch on' : 'switch'} onClick={() => void props.onToggleRule(rule)}>
-              {rule.enabled ? '启用' : '停用'}
-            </button>
-          </div>
-        ))}
+        {props.rules.map((rule) => {
+          const editing = editingRuleId === rule.id;
+          return (
+            <div className={`rule-row ${editing ? 'editing' : ''}`} key={rule.id}>
+              <span>
+                <strong>{metricName(rule.metric)} {rule.operator} {rule.value}{rule.unit}</strong>
+                <small>{rule.durationSeconds}s · {levelName(rule.level)}</small>
+              </span>
+              <div className="rule-actions">
+                <button
+                  type="button"
+                  className="rule-edit-button"
+                  title="编辑阈值"
+                  aria-label={`编辑${metricName(rule.metric)}阈值`}
+                  onClick={() => setEditingRuleId(editing ? null : rule.id)}
+                  disabled={props.busy}
+                >
+                  <Pencil size={17} />
+                </button>
+              </div>
+              {editing && (
+                <ThresholdRuleEditor
+                  rule={rule}
+                  busy={props.busy}
+                  onCancel={() => setEditingRuleId(null)}
+                  onSave={props.onSaveRule}
+                />
+              )}
+            </div>
+          );
+        })}
       </section>
     </div>
   );
 }
 
+function ThresholdRuleEditor(props: {
+  rule: ThresholdRule;
+  busy: boolean;
+  onCancel: () => void;
+  onSave: (rule: ThresholdRule) => Promise<boolean>;
+}) {
+  const [value, setValue] = useState(String(props.rule.value));
+  const [operator, setOperator] = useState(props.rule.operator);
+  const [error, setError] = useState('');
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const nextValue = Number(value);
+    if (!Number.isFinite(nextValue)) {
+      setError('请输入有效阈值。');
+      return;
+    }
+
+    setError('');
+    const saved = await props.onSave({
+      ...props.rule,
+      value: nextValue,
+      operator
+    });
+    if (saved) {
+      props.onCancel();
+    } else {
+      setError('保存失败，请检查后重试。');
+    }
+  }
+
+  return (
+    <form className="rule-editor" onSubmit={(event) => void submit(event)}>
+      <label>
+        阈值 ({props.rule.unit})
+        <input type="number" inputMode="decimal" step="any" value={value} onChange={(event) => setValue(event.target.value)} required />
+      </label>
+      <label>
+        触发条件
+        <select value={operator} onChange={(event) => setOperator(event.target.value)}>
+          <option value="LT">低于 (&lt;)</option>
+          <option value="LTE">低于等于 (&le;)</option>
+          <option value="GT">高于 (&gt;)</option>
+          <option value="GTE">高于等于 (&ge;)</option>
+        </select>
+      </label>
+      {error && <p className="rule-editor-error">{error}</p>}
+      <div className="rule-editor-actions">
+        <button type="submit" className="rule-save-button" disabled={props.busy}>
+          <Check size={17} />
+          保存
+        </button>
+        <button type="button" className="rule-cancel-button" onClick={props.onCancel} disabled={props.busy}>
+          <X size={17} />
+          取消
+        </button>
+      </div>
+    </form>
+  );
+}
+
 function AskView(props: {
   selectedPlot?: Plot;
-  sessions: AgentSession[];
-  messages: AgentMessage[];
   events: EventNotice[];
-  onCreateSession: () => Promise<void>;
+  sessionId: string | null;
+  messages: AgentChatMessage[];
+  streaming: boolean;
+  error: string;
+  onSend: (question: string) => Promise<void>;
+  onNewSession: () => Promise<void>;
+  onStop: () => void;
 }) {
+  const [draft, setDraft] = useState('');
+
+  function submitQuestion(question = draft) {
+    const content = question.trim();
+    if (!content || props.streaming) return;
+    setDraft('');
+    void props.onSend(content);
+  }
+
   return (
     <div className="screen-content">
-      <section className="section-head">
+      <section className="section-head ai-chat-page-head">
         <div>
-          <h2>问答</h2>
-          <p>{props.selectedPlot?.name ?? '当前地块'} 智能体会话</p>
+          <h2>AI 农事助手</h2>
+          <p>{props.selectedPlot?.name ?? '当前地块'} · 在线问答</p>
         </div>
         <Bot size={25} />
       </section>
-      <section className="ai-card">
-        <MessageSquare size={28} />
-        <h3>创建当前地块会话</h3>
-        <p>Go 侧已提供会话创建和消息历史查询；完整流式问答可继续接入 agent-service。</p>
-        <button className="primary-button" onClick={() => void props.onCreateSession()}>
-          新建会话
-        </button>
+      <section className="ai-chat">
+        <header className="chat-header">
+          <div>
+            <strong>农事对话</strong>
+            <span>{props.sessionId ? '当前会话已连接' : '发起问题即可开始新会话'}</span>
+          </div>
+          {props.messages.length > 0 && (
+            <button
+              type="button"
+              className="chat-header-action"
+              title="新建会话"
+              aria-label="新建会话"
+              onClick={() => void props.onNewSession()}
+              disabled={props.streaming}
+            >
+              <Plus size={19} />
+            </button>
+          )}
+        </header>
+        <div className="chat-transcript" aria-live="polite">
+          {props.messages.length === 0 && (
+            <div className="chat-welcome">
+              <Bot size={28} />
+              <strong>你好，我是农事助手。</strong>
+              <span>想了解当前地块的什么情况？</span>
+              <div className="chat-suggestions">
+                {['现在需要灌溉吗？', '查看当前告警', '给出今日巡检建议'].map((question) => (
+                  <button type="button" key={question} onClick={() => submitQuestion(question)}>
+                    {question}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          {props.messages.map((message) => (
+            <article className={`chat-message ${message.role === 'USER' ? 'user' : 'assistant'}`} key={message.id}>
+              <span className="chat-message-role">{message.role === 'USER' ? '我' : '农事助手'}</span>
+              <div className="chat-bubble">
+                {message.content || <span className="chat-typing">正在思考</span>}
+              </div>
+              {message.sources && message.sources.length > 0 && (
+                <div className="chat-sources">
+                  {message.sources.map((source, index) => (
+                    <span key={`${source.docId ?? source.title ?? 'source'}-${index}`}>
+                      {source.title || '知识库参考'}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </article>
+          ))}
+        </div>
+        <form
+          className="chat-composer"
+          onSubmit={(event) => {
+            event.preventDefault();
+            submitQuestion();
+          }}
+        >
+          <textarea
+            value={draft}
+            maxLength={2000}
+            placeholder="输入农事问题"
+            aria-label="输入农事问题"
+            disabled={props.streaming}
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+                event.preventDefault();
+                submitQuestion();
+              }
+            }}
+          />
+          {props.streaming ? (
+            <button type="button" className="chat-send-button stop" title="停止生成" aria-label="停止生成" onClick={props.onStop}>
+              <Square size={18} fill="currentColor" />
+            </button>
+          ) : (
+            <button
+              type="submit"
+              className="chat-send-button"
+              title="发送"
+              aria-label="发送"
+              disabled={!draft.trim()}
+            >
+              <Send size={19} />
+            </button>
+          )}
+        </form>
+        {props.error && <p className="chat-error">{props.error}</p>}
       </section>
       <section className="list-card">
-        <h3>会话记录</h3>
-        {props.sessions.length === 0 && <EmptyState text="还没有会话。" />}
-        {props.sessions.map((session) => (
-          <div className="plain-row" key={session.id}>
-            <span>
-              <strong>{session.id}</strong>
-              <small>{session.status} · {formatTime(session.lastMessageAt)}</small>
-            </span>
-          </div>
-        ))}
-        {props.messages.map((message) => (
-          <div className="message-row" key={message.id}>
-            <strong>{roleName(message.role)}</strong>
-            <p>{message.content}</p>
-          </div>
-        ))}
-      </section>
-      <section className="list-card">
-        <h3>实时事件</h3>
+        <h3>系统实时事件</h3>
         {props.events.length === 0 && <EmptyState text="事件流连接后，告警与命令结果会出现在这里。" />}
         {props.events.map((event) => (
           <div className="plain-row" key={`${event.id}-${event.receivedAt}`}>
@@ -526,8 +842,6 @@ type AppData = {
   telemetry: Record<number, TelemetryLatest>;
   irrigation: Record<number, IrrigationStatus>;
   thresholds: Record<number, ThresholdRule[]>;
-  sessions: AgentSession[];
-  messages: AgentMessage[];
 };
 
 const emptyData: AppData = {
@@ -539,10 +853,19 @@ const emptyData: AppData = {
   knowledge: [],
   telemetry: {},
   irrigation: {},
-  thresholds: {},
-  sessions: [],
-  messages: []
+  thresholds: {}
 };
+
+function newChatMessageId(prefix: string) {
+  if ('randomUUID' in crypto) {
+    return `${prefix}-${crypto.randomUUID()}`;
+  }
+  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function isAbortError(error: unknown) {
+  return error instanceof DOMException && error.name === 'AbortError';
+}
 
 function applyTelemetryEvent(current: AppData, event: EventNotice): AppData {
   const plotId = eventNumber(event.data.plotId);
@@ -659,10 +982,6 @@ function isOlderSample(incoming: string | null, current?: string | null) {
   return new Date(incoming).getTime() < new Date(current).getTime();
 }
 
-function emptyPage<T>() {
-  return { items: [] as T[], page: 1, pageSize: 20, total: 0 };
-}
-
 function errorMessage(error: unknown) {
   if (error instanceof Error) return error.message;
   return '操作失败，请稍后重试';
@@ -689,9 +1008,4 @@ function metricName(metric: string) {
 function levelName(level: string) {
   const names: Record<string, string> = { LOW: '低', MEDIUM: '中', HIGH: '高' };
   return names[level] ?? level;
-}
-
-function roleName(role: string) {
-  const names: Record<string, string> = { USER: '用户', ASSISTANT: '智能体', SYSTEM: '系统', TOOL: '工具' };
-  return names[role] ?? role;
 }
