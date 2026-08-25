@@ -294,6 +294,9 @@
 
 关键逻辑：先校验地块归属，再返回最新指标及该地块绑定的来源设备。暂无指标时 `metrics` 为空对象。
 
+> **单参数传感器**：一台设备可只上报自己的参数（如土壤传感器只报 `soilMoisture`），`metrics` 只包含实际上报的指标；同一地块多台不同参数设备上报时，latest 自动合并（未上报的指标沿用最近一次值）。缺失指标前端显示 `--`，不参与告警同步。
+> **执行器心跳**：水泵/阀门等无传感器参数的设备可发送全空 payload（`{}`）仅用于保活，服务端只标记设备在线、不写 latest/告警/历史（详见 `10_BearPi-HM-Nano_MQTT硬件接入说明.md` §5）。
+
 响应：
 
 ```json
@@ -538,6 +541,9 @@ Idempotency-Key: irrigation-11-20260822-001
 - `CLOSE` 的 `durationSeconds` 必须为 0 或省略。
 - 地块必须绑定在线的灌溉阀门。
 
+**权限校验（后端 SQL 查归属，不依赖请求/设备 owner）**：
+服务端按 `FindIrrigationDevice(请求者JWT, plotId)` 校验——SQL 从 `plots`（`p.owner_id = 请求者`）→ `device_bindings` → `devices`（类型 `IRRIGATION_VALVE`）查出阀门设备。请求者必须是**该地块的当前归属用户**；校验通过后，MQTT 命令发布到 `{prefix}/{该地块ownerId}/{deviceSn}/command`（topic 的 ownerId 为 SQL 验证过的地块归属，而非请求体或设备上报中的 ownerId）。地块转移归属后，只有新归属用户能下发命令。
+
 请求：
 
 ```json
@@ -666,7 +672,29 @@ Idempotency-Key: irrigation-11-20260822-001
 }
 ```
 
-### 6.2 新增或更新阈值规则并下发配置
+### 6.2 阈值规则：新建与更新并下发配置
+
+#### 新建规则（POST）
+
+`POST /api/v1/plots/{plotId}/thresholds`
+
+无 thresholdId，服务端自动创建规则并触发版本化下发。请求体：
+
+```json
+{
+  "metric": "soilMoisture",
+  "operator": "LT",
+  "value": 28,
+  "hysteresis": 2,
+  "enabled": true
+}
+```
+
+- `level` 不传，服务端默认 `MEDIUM`；`durationSeconds` 不传，服务端默认 `60`（这两个字段对硬件判断不参与——设备端只按 `min/max` 判定告警，系统保留字段用于告警记录与配置快照）。
+- 响应 `201`，返回体与 PUT 相同（`id`/`configVersion`/`syncStatus`/`targetCount`）。
+- 错误：`40001` 字段不合法（**逐字段返回可选项提示**，如 `metric 必须为 soilMoisture、temperature 或 light`、`operator 必须为 LT、LTE、GT 或 GTE`、`value 超出该指标允许范围`）；`40401` 地块不存在。
+
+#### 更新规则（PUT）
 
 `PUT /api/v1/plots/{plotId}/thresholds/{thresholdId}`
 

@@ -105,13 +105,20 @@ func (w *TDengineWriter) flush(ctx context.Context) {
 		fmt.Fprintf(&sb, "agri_telemetry.t_%d_%d USING agri_telemetry.readings TAGS (%d, %d, %d) VALUES ('%s', %s, %s, %s)",
 			ins.plotID, ins.device, ins.ownerID, ins.plotID, ins.device,
 			ins.at.UTC().Format("2006-01-02 15:04:05.000"),
-			formatFloat(ins.payload.Temperature), formatFloat(ins.payload.SoilMoisture), formatFloat(ins.payload.Light),
+			formatNullableFloat(ins.payload.Temperature), formatNullableFloat(ins.payload.SoilMoisture), formatNullableFloat(ins.payload.Light),
 		)
 	}
 	if _, err := w.client.Exec(ctx, sb.String()); err != nil {
 		// 落库失败记录日志但不上抛（遥测高频，失败不阻塞 ingest 主链路）
 		_ = err
 	}
+}
+
+func formatNullableFloat(value *float64) string {
+	if value == nil {
+		return "NULL"
+	}
+	return fmt.Sprintf("%g", *value)
 }
 
 func formatFloat(v float64) string {

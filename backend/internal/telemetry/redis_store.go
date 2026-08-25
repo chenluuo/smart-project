@@ -87,6 +87,20 @@ func (s *RedisStore) PutLatest(ctx context.Context, latest Latest) error {
 				if !latest.SampleTime.After(existing.SampleTime) {
 					return nil
 				}
+				// 合并：单参数设备上报时，未上报的指标沿用旧快照值与其告警状态
+				// （一个地块常有多台不同参数的传感器，各自上报互补，latest 汇总展示）
+				if latest.Temperature == nil {
+					latest.Temperature = existing.Temperature
+					latest.Warnings.Temperature = existing.Warnings.Temperature
+				}
+				if latest.SoilMoisture == nil {
+					latest.SoilMoisture = existing.SoilMoisture
+					latest.Warnings.SoilMoisture = existing.Warnings.SoilMoisture
+				}
+				if latest.Light == nil {
+					latest.Light = existing.Light
+					latest.Warnings.Light = existing.Warnings.Light
+				}
 			} else if !errors.Is(err, redis.Nil) {
 				return err
 			}
@@ -123,9 +137,17 @@ func decodeLatest(raw []byte) (*Latest, error) {
 }
 
 func validateLatest(value Latest) error {
-	if value.PlotID == 0 || value.SampleTime.IsZero() || value.SoilMoisture == nil || value.Temperature == nil || value.Light == nil ||
-		value.SoilMoisture.Unit != "%" || value.Temperature.Unit != "°C" || value.Light.Unit != "lx" ||
-		invalidMetric(value.SoilMoisture.Value) || invalidMetric(value.Temperature.Value) || invalidMetric(value.Light.Value) {
+	if value.PlotID == 0 || value.SampleTime.IsZero() ||
+		value.SoilMoisture == nil && value.Temperature == nil && value.Light == nil {
+		return ErrInvalidInput
+	}
+	if value.SoilMoisture != nil && (value.SoilMoisture.Unit != "%" || invalidMetric(value.SoilMoisture.Value)) {
+		return ErrInvalidInput
+	}
+	if value.Temperature != nil && (value.Temperature.Unit != "°C" || invalidMetric(value.Temperature.Value)) {
+		return ErrInvalidInput
+	}
+	if value.Light != nil && (value.Light.Unit != "lx" || invalidMetric(value.Light.Value)) {
 		return ErrInvalidInput
 	}
 	return nil

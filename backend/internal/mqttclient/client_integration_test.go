@@ -72,7 +72,7 @@ func TestMQTTClientReceivesSimulatedMachineTelemetryAndThresholdAck(t *testing.T
 	}
 	select {
 	case payload := <-telemetryIngestor.payloads:
-		if payload.SoilMoisture != 24 || !payload.SoilMoistureWarning || payload.TemperatureWarning {
+		if payload.SoilMoisture == nil || *payload.SoilMoisture != 24 || !*payload.SoilMoistureWarning || payload.TemperatureWarning != nil && *payload.TemperatureWarning {
 			t.Fatalf("received simulated telemetry = %+v", payload)
 		}
 	case <-time.After(3 * time.Second):

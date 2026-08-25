@@ -41,6 +41,7 @@ func registerAlertRoutes(router *gin.Engine, auth authService, service alertServ
 	handler := alertHandler{service: service}
 	api := router.Group("/api/v1", jwtAuthentication(auth))
 	api.GET("/plots/:plotId/thresholds", handler.listRules)
+	api.POST("/plots/:plotId/thresholds", handler.createRule)
 	api.PUT("/plots/:plotId/thresholds/:thresholdId", handler.upsertRule)
 	api.GET("/plots/:plotId/thresholds/:thresholdId/sync", handler.thresholdSync)
 	api.GET("/alerts", handler.list)
@@ -103,6 +104,44 @@ func (h alertHandler) listRules(c *gin.Context) {
 	}
 }
 
+func (h alertHandler) createRule(c *gin.Context) {
+	claims, ok := authenticatedClaims(c)
+	if !ok {
+		respondError(c, http.StatusUnauthorized, 40101, "未登录或访问令牌无效")
+		return
+	}
+	plotID, err := positivePathID(c, "plotId")
+	if err != nil {
+		respondError(c, http.StatusBadRequest, 40001, "参数错误：plotId 必须为正整数")
+		return
+	}
+	var request thresholdRuleRequest
+	if err := c.ShouldBindJSON(&request); err != nil || request.Value == nil || request.Enabled == nil {
+		respondError(c, http.StatusBadRequest, 40001, "参数错误：请求体格式不正确")
+		return
+	}
+	// thresholdID=0：新建规则（upsert 语义自动创建）。
+	// level 默认 MEDIUM、durationSeconds 默认 60：这两个字段对硬件判断不参与（设备端只判 min/max），
+	// 创建时不要求传入，由服务端给默认值；系统保留字段用于告警记录与配置快照。
+	result, err := h.service.UpsertRule(c.Request.Context(), claims.UserID, plotID, 0, alert.RuleInput{
+		Metric: request.Metric, Operator: request.Operator, Value: *request.Value, Hysteresis: request.Hysteresis,
+		DurationSeconds: 60, Level: alert.LevelMedium, Enabled: *request.Enabled,
+	})
+	var ruleErr *alert.RuleValidationError
+	switch {
+	case errors.As(err, &ruleErr):
+		respondError(c, http.StatusBadRequest, 40001, err.Error())
+	case errors.Is(err, alert.ErrInvalidInput):
+		respondError(c, http.StatusBadRequest, 40001, "参数错误：阈值规则字段不合法")
+	case errors.Is(err, alert.ErrNotFound):
+		respondError(c, http.StatusNotFound, 40401, "地块不存在")
+	case err != nil:
+		respondError(c, http.StatusInternalServerError, 50000, "服务器内部错误")
+	default:
+		respondSuccess(c, http.StatusCreated, result)
+	}
+}
+
 func (h alertHandler) upsertRule(c *gin.Context) {
 	claims, ok := authenticatedClaims(c)
 	if !ok {
@@ -124,7 +163,10 @@ func (h alertHandler) upsertRule(c *gin.Context) {
 		Metric: request.Metric, Operator: request.Operator, Value: *request.Value, Hysteresis: request.Hysteresis,
 		DurationSeconds: request.DurationSeconds, Level: request.Level, Enabled: *request.Enabled,
 	})
+	var ruleErr *alert.RuleValidationError
 	switch {
+	case errors.As(err, &ruleErr):
+		respondError(c, http.StatusBadRequest, 40001, err.Error())
 	case errors.Is(err, alert.ErrInvalidInput):
 		respondError(c, http.StatusBadRequest, 40001, "参数错误：阈值规则字段不合法")
 	case errors.Is(err, alert.ErrNotFound):

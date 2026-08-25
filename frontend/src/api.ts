@@ -96,6 +96,18 @@ export const api = {
   plot: (plotId: number) => request<Plot>(`/api/v1/plots/${plotId}`),
   telemetry: (plotId: number) => request<TelemetryLatest>(`/api/v1/plots/${plotId}/telemetry/latest`),
   thresholds: (plotId: number) => request<ThresholdRule[]>(`/api/v1/plots/${plotId}/thresholds`),
+  // 新建阈值规则：level/durationSeconds 服务端默认（MEDIUM / 60），不传入
+  createThreshold: (plotId: number, rule: { metric: string; operator: string; value: number; hysteresis?: number; enabled: boolean }) =>
+    request<ThresholdUpdateResult>(`/api/v1/plots/${plotId}/thresholds`, {
+      method: 'POST',
+      body: JSON.stringify({
+        metric: rule.metric,
+        operator: rule.operator,
+        value: rule.value,
+        hysteresis: rule.hysteresis,
+        enabled: rule.enabled
+      })
+    }),
   updateThreshold: (plotId: number, rule: ThresholdRule) =>
     request<ThresholdUpdateResult>(`/api/v1/plots/${plotId}/thresholds/${rule.id}`, {
       method: 'PUT',

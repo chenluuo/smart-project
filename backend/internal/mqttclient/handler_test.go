@@ -44,7 +44,7 @@ func TestHandlerRoutesBearPiTelemetry(t *testing.T) {
 	if resolver.ownerID != 7 || resolver.deviceSN != "BEARPI-HM-NANO-001" {
 		t.Fatalf("resolver route = (%d, %q)", resolver.ownerID, resolver.deviceSN)
 	}
-	if !ingestor.called || ingestor.source != source || ingestor.payload.Temperature != 26.5 {
+	if !ingestor.called || ingestor.source != source || ingestor.payload.Temperature == nil || *ingestor.payload.Temperature != 26.5 {
 		t.Fatalf("unexpected ingest call: %+v %+v", ingestor.source, ingestor.payload)
 	}
 }

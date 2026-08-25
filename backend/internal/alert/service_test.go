@@ -109,7 +109,7 @@ func TestUpsertRuleNormalizesAndValidatesInput(t *testing.T) {
 		t.Fatalf("stored rule = %+v", store.rule)
 	}
 	_, err = service.UpsertRule(context.Background(), 7, 11, 2, RuleInput{Metric: "soilMoisture", Operator: OperatorLT, Level: "urgent"})
-	if !errors.Is(err, ErrInvalidInput) {
+	if !isRuleValidationError(err) {
 		t.Fatalf("invalid UpsertRule() error = %v", err)
 	}
 	negativeHysteresis := -1.0
@@ -117,18 +117,23 @@ func TestUpsertRuleNormalizesAndValidatesInput(t *testing.T) {
 		Metric: "soilMoisture", Operator: OperatorLT, Value: 28, Hysteresis: &negativeHysteresis,
 		DurationSeconds: 300, Level: LevelMedium, Enabled: true,
 	})
-	if !errors.Is(err, ErrInvalidInput) {
-		t.Fatalf("negative hysteresis error = %v, want ErrInvalidInput", err)
+	if !isRuleValidationError(err) {
+		t.Fatalf("negative hysteresis error = %v", err)
 	}
 	for _, input := range []RuleInput{
 		{Metric: "unknown", Operator: OperatorLT, Value: 1, DurationSeconds: 1, Level: LevelLow},
 		{Metric: "soilMoisture", Operator: OperatorLT, Value: 101, DurationSeconds: 1, Level: LevelLow},
 		{Metric: "temperature", Operator: OperatorGT, Value: -51, DurationSeconds: 1, Level: LevelLow},
 	} {
-		if _, err := service.UpsertRule(context.Background(), 7, 11, 2, input); !errors.Is(err, ErrInvalidInput) {
+		if _, err := service.UpsertRule(context.Background(), 7, 11, 2, input); !isRuleValidationError(err) {
 			t.Fatalf("invalid metric threshold %+v error = %v", input, err)
 		}
 	}
+}
+
+func isRuleValidationError(err error) bool {
+	var ruleErr *RuleValidationError
+	return errors.As(err, &ruleErr)
 }
 
 func TestThresholdSyncMapsStoreErrors(t *testing.T) {
@@ -243,7 +248,9 @@ func TestSyncDeviceWarningsPublishesCreateAndRecoveryWithoutRule(t *testing.T) {
 	defer subscription.Close()
 	service := NewService(store, broker)
 	service.now = func() time.Time { return now }
-	input := DeviceWarningInput{OwnerID: 7, PlotID: 11, DeviceID: 31, Temperature: 26, SoilMoisture: 30, Light: 1000, LightWarning: true, OccurredAt: now}
+	input := DeviceWarningInput{OwnerID: 7, PlotID: 11, DeviceID: 31,
+		Temperature: float64PtrTest(26), SoilMoisture: float64PtrTest(30), Light: float64PtrTest(1000),
+		LightWarning: boolPtrTest(true), OccurredAt: now}
 	result, err := service.SyncDeviceWarnings(context.Background(), input)
 	if err != nil || len(result) != 2 || store.warningInput.DeviceID != 31 {
 		t.Fatalf("SyncDeviceWarnings() = (%+v, %v), stored=%+v", result, err, store.warningInput)
@@ -261,6 +268,9 @@ func TestSyncDeviceWarningsPublishesCreateAndRecoveryWithoutRule(t *testing.T) {
 		t.Fatalf("events = %v", eventsSeen)
 	}
 }
+
+func float64PtrTest(value float64) *float64 { return &value }
+func boolPtrTest(value bool) *bool          { return &value }
 
 func TestListMapsDeviceWarningWithoutThreshold(t *testing.T) {
 	kind := WarningTemperature
