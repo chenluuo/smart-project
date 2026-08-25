@@ -139,12 +139,12 @@ type DeviceWarningInput struct {
 	OwnerID             uint64
 	PlotID              uint64
 	DeviceID            uint64
-	Temperature         float64
-	SoilMoisture        float64
-	Light               float64
-	TemperatureWarning  bool
-	SoilMoistureWarning bool
-	LightWarning        bool
+	Temperature         *float64
+	SoilMoisture        *float64
+	Light               *float64
+	TemperatureWarning  *bool
+	SoilMoistureWarning *bool
+	LightWarning        *bool
 	OccurredAt          time.Time
 }
 
@@ -310,9 +310,7 @@ func (s *Service) List(ctx context.Context, ownerID uint64, filter ListFilter) (
 
 func (s *Service) SyncDeviceWarnings(ctx context.Context, input DeviceWarningInput) ([]WarningTransition, error) {
 	if input.OwnerID == 0 || input.PlotID == 0 || input.DeviceID == 0 || input.OccurredAt.IsZero() ||
-		math.IsNaN(input.Temperature) || math.IsInf(input.Temperature, 0) ||
-		math.IsNaN(input.SoilMoisture) || math.IsInf(input.SoilMoisture, 0) ||
-		math.IsNaN(input.Light) || math.IsInf(input.Light, 0) {
+		invalidWarningNumber(input.Temperature) || invalidWarningNumber(input.SoilMoisture) || invalidWarningNumber(input.Light) {
 		return nil, ErrInvalidInput
 	}
 	transitions, err := s.store.SyncDeviceWarnings(ctx, input, s.now().UTC())
@@ -343,8 +341,11 @@ func (s *Service) SyncDeviceWarnings(ctx context.Context, input DeviceWarningInp
 	return transitions, nil
 }
 
-func (s *Service) Confirm(ctx context.Context, ownerID, alertID uint64, remark string) (*ConfirmResult, error) {
-	remark = strings.TrimSpace(remark)
+func invalidWarningNumber(value *float64) bool {
+	return value != nil && (math.IsNaN(*value) || math.IsInf(*value, 0))
+}
+
+func (s *Service) Confirm(ctx context.Context, ownerID, alertID uint64, remark string) (*ConfirmResult, error) {	remark = strings.TrimSpace(remark)
 	if ownerID == 0 || alertID == 0 || remark == "" || len([]rune(remark)) > 500 {
 		return nil, ErrInvalidInput
 	}

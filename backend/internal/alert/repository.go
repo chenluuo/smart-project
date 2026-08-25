@@ -449,10 +449,17 @@ type warningSpec struct {
 }
 
 func (r Repositories) SyncDeviceWarnings(ctx context.Context, input DeviceWarningInput, now time.Time) ([]WarningTransition, error) {
-	specs := []warningSpec{
-		{kind: WarningTemperature, metric: "temperature", active: input.TemperatureWarning, value: input.Temperature},
-		{kind: WarningSoilMoisture, metric: "soilMoisture", active: input.SoilMoistureWarning, value: input.SoilMoisture},
-		{kind: WarningLight, metric: "light", active: input.LightWarning, value: input.Light},
+	// 仅处理设备实际上报的指标（nil = 设备无此参数，不参与告警同步；
+	// 告警状态由设备端判定后经 warning 字段上报，云端只同步）
+	specs := make([]warningSpec, 0, 3)
+	if input.Temperature != nil {
+		specs = append(specs, warningSpec{kind: WarningTemperature, metric: "temperature", active: boolValue(input.TemperatureWarning), value: *input.Temperature})
+	}
+	if input.SoilMoisture != nil {
+		specs = append(specs, warningSpec{kind: WarningSoilMoisture, metric: "soilMoisture", active: boolValue(input.SoilMoistureWarning), value: *input.SoilMoisture})
+	}
+	if input.Light != nil {
+		specs = append(specs, warningSpec{kind: WarningLight, metric: "light", active: boolValue(input.LightWarning), value: *input.Light})
 	}
 	transitions := make([]WarningTransition, 0, len(specs))
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -531,6 +538,10 @@ func (r Repositories) SyncDeviceWarnings(ctx context.Context, input DeviceWarnin
 		return nil
 	})
 	return transitions, err
+}
+
+func boolValue(value *bool) bool {
+	return value != nil && *value
 }
 
 func decimalFromFloat(value float64) decimal.Decimal {

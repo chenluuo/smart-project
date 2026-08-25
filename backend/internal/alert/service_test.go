@@ -243,7 +243,9 @@ func TestSyncDeviceWarningsPublishesCreateAndRecoveryWithoutRule(t *testing.T) {
 	defer subscription.Close()
 	service := NewService(store, broker)
 	service.now = func() time.Time { return now }
-	input := DeviceWarningInput{OwnerID: 7, PlotID: 11, DeviceID: 31, Temperature: 26, SoilMoisture: 30, Light: 1000, LightWarning: true, OccurredAt: now}
+	input := DeviceWarningInput{OwnerID: 7, PlotID: 11, DeviceID: 31,
+		Temperature: float64PtrTest(26), SoilMoisture: float64PtrTest(30), Light: float64PtrTest(1000),
+		LightWarning: boolPtrTest(true), OccurredAt: now}
 	result, err := service.SyncDeviceWarnings(context.Background(), input)
 	if err != nil || len(result) != 2 || store.warningInput.DeviceID != 31 {
 		t.Fatalf("SyncDeviceWarnings() = (%+v, %v), stored=%+v", result, err, store.warningInput)
@@ -261,6 +263,9 @@ func TestSyncDeviceWarningsPublishesCreateAndRecoveryWithoutRule(t *testing.T) {
 		t.Fatalf("events = %v", eventsSeen)
 	}
 }
+
+func float64PtrTest(value float64) *float64 { return &value }
+func boolPtrTest(value bool) *bool          { return &value }
 
 func TestListMapsDeviceWarningWithoutThreshold(t *testing.T) {
 	kind := WarningTemperature

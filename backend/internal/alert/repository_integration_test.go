@@ -251,9 +251,12 @@ func TestSyncDeviceWarningsCreatesRecoversAndRetriggers(t *testing.T) {
 		db.Exec("DELETE FROM users WHERE id = ?", owner.ID)
 	})
 	repository := NewRepositories(db)
+	trueValue := true
+	falseValue := false
 	input := DeviceWarningInput{
 		OwnerID: owner.ID, PlotID: plot.ID, DeviceID: device.ID,
-		Temperature: 36.5, SoilMoisture: 25, Light: 1000, TemperatureWarning: true, OccurredAt: now,
+		Temperature: float64Ptr36(36.5), SoilMoisture: float64Ptr36(25), Light: float64Ptr36(1000),
+		TemperatureWarning: &trueValue, OccurredAt: now,
 	}
 	first, err := repository.SyncDeviceWarnings(context.Background(), input, now)
 	if err != nil || len(first) != 1 || !first[0].Created || first[0].Alert.RuleID != nil {
@@ -263,14 +266,16 @@ func TestSyncDeviceWarningsCreatesRecoversAndRetriggers(t *testing.T) {
 	if err != nil || len(duplicate) != 0 {
 		t.Fatalf("duplicate SyncDeviceWarnings() = (%+v, %v)", duplicate, err)
 	}
-	input.TemperatureWarning = false
+	input.TemperatureWarning = &falseValue
 	resolved, err := repository.SyncDeviceWarnings(context.Background(), input, now.Add(2*time.Second))
 	if err != nil || len(resolved) != 1 || !resolved[0].Recovered {
 		t.Fatalf("resolved SyncDeviceWarnings() = (%+v, %v)", resolved, err)
 	}
-	input.TemperatureWarning = true
+	input.TemperatureWarning = &trueValue
 	retriggered, err := repository.SyncDeviceWarnings(context.Background(), input, now.Add(3*time.Second))
 	if err != nil || len(retriggered) != 1 || !retriggered[0].Created || retriggered[0].Alert.ID == first[0].Alert.ID {
 		t.Fatalf("retriggered SyncDeviceWarnings() = (%+v, %v)", retriggered, err)
 	}
 }
+
+func float64Ptr36(value float64) *float64 { return &value }

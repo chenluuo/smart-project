@@ -75,7 +75,7 @@ agri/7/BEARPI-HM-NANO-001/telemetry
 
 ## 5. Payload 字段
 
-Payload 必须是一个 JSON 对象，且以下六个字段全部必填：
+Payload 必须是一个 JSON 对象，字段**可选**（单参数传感器可只上报自己的参数，如土壤传感器只带 `soilMoisture`）：
 
 | 字段 | JSON 类型 | 单位 | 服务端约束 | 说明 |
 | --- | --- | --- | --- | --- |
@@ -86,9 +86,27 @@ Payload 必须是一个 JSON 对象，且以下六个字段全部必填：
 | `soilMoistureWarning` | boolean | 无 | 只能为 `true` 或 `false` | 设备侧是否检测到土壤湿度告警 |
 | `lightWarning` | boolean | 无 | 只能为 `true` 或 `false` | 设备侧是否检测到光照告警 |
 
-如果固件暂未实现本地阈值判断，三个 Warning 字段统一发送 `false`，但不能省略。
+- 未上报的指标视为该设备无此参数：前端显示 `--`、不参与告警同步、不写入历史。
+- 同一地块多台不同参数设备上报时，服务端自动合并 latest（未上报的指标沿用最近一次值）。
+- **全空 payload（`{}`）视为执行器心跳**：水泵/阀门等无传感器参数的设备可发送空 payload 仅用于保活，服务端只标记设备在线、不写数据。
+- 如果固件暂未实现本地阈值判断，上报指标的 Warning 字段统一发送 `false`，但不能省略对应指标。
 
-正确示例：
+心跳示例（执行器，如水泵）：
+
+```json
+{}
+```
+
+正确示例（单参数土壤传感器）：
+
+```json
+{
+  "soilMoisture": 48.0,
+  "soilMoistureWarning": false
+}
+```
+
+完整示例（三参数）：
 
 ```json
 {
@@ -118,10 +136,10 @@ Payload 必须是一个 JSON 对象，且以下六个字段全部必填：
 
 服务端采用严格 JSON 校验。以下情况会被拒绝：
 
-- 缺少任意一个必填字段；
 - 字段名称大小写错误；
 - 数值字段使用字符串，例如 `"temperature": "26.5"`；
 - 布尔字段使用 `0`、`1` 或字符串，例如 `"lightWarning": "false"`；
+- payload 中不含任何指标字段（`temperature`/`soilMoisture`/`light` 全缺）；
 - 土壤湿度小于 0 或大于 100；
 - 光照值小于 0；
 - JSON 后面拼接额外内容；
