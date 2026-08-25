@@ -678,7 +678,7 @@ Idempotency-Key: irrigation-11-20260822-001
 
 `POST /api/v1/plots/{plotId}/thresholds`
 
-无 thresholdId，服务端自动创建规则并触发版本化下发。请求体与更新一致（字段规则见下方 PUT 说明）：
+无 thresholdId，服务端自动创建规则并触发版本化下发。请求体：
 
 ```json
 {
@@ -686,14 +686,13 @@ Idempotency-Key: irrigation-11-20260822-001
   "operator": "LT",
   "value": 28,
   "hysteresis": 2,
-  "durationSeconds": 300,
-  "level": "MEDIUM",
   "enabled": true
 }
 ```
 
+- `level` 不传，服务端默认 `MEDIUM`；`durationSeconds` 不传，服务端默认 `60`（这两个字段对硬件判断不参与——设备端只按 `min/max` 判定告警，系统保留字段用于告警记录与配置快照）。
 - 响应 `201`，返回体与 PUT 相同（`id`/`configVersion`/`syncStatus`/`targetCount`）。
-- 错误：`40001` 字段不合法（**逐字段返回可选项提示**，如 `metric 必须为 soilMoisture、temperature 或 light`、`operator 必须为 LT、LTE、GT 或 GTE`、`value 超出该指标允许范围`、`level 必须为 LOW、MEDIUM 或 HIGH`、`durationSeconds 必须在 0~86400 之间`、`hysteresis 必须大于等于 0`）；`40401` 地块不存在。
+- 错误：`40001` 字段不合法（**逐字段返回可选项提示**，如 `metric 必须为 soilMoisture、temperature 或 light`、`operator 必须为 LT、LTE、GT 或 GTE`、`value 超出该指标允许范围`）；`40401` 地块不存在。
 
 #### 更新规则（PUT）
 

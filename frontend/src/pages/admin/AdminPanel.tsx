@@ -10,22 +10,20 @@ import {
   Plus,
   RefreshCw,
   Search,
-  SlidersHorizontal,
   Trash2,
   Users,
   X
 } from 'lucide-react';
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { api, ApiError } from '../../api';
-import type { AdminDevice, AdminKnowledgeDoc, AdminPlot, AdminUser, ThresholdRule } from '../../types';
+import type { AdminDevice, AdminKnowledgeDoc, AdminPlot, AdminUser } from '../../types';
 
-type AdminSection = 'overview' | 'users' | 'plots' | 'knowledge' | 'devices' | 'thresholds';
+type AdminSection = 'overview' | 'users' | 'plots' | 'knowledge' | 'devices';
 
 const ADMIN_SECTIONS: Array<{ key: AdminSection; label: string; icon: React.ReactNode }> = [
   { key: 'overview', label: '总览', icon: <LayoutDashboard size={17} /> },
   { key: 'users', label: '用户管理', icon: <Users size={17} /> },
   { key: 'plots', label: '地块管理', icon: <Map size={17} /> },
-  { key: 'thresholds', label: '阈值规则', icon: <SlidersHorizontal size={17} /> },
   { key: 'knowledge', label: '文件审批', icon: <BookOpen size={17} /> },
   { key: 'devices', label: '设备管理', icon: <FileText size={17} /> }
 ];
@@ -78,7 +76,6 @@ export function AdminPanel(props: { user: { id: number; name: string } | null; o
           {section === 'plots' && <AdminPlots />}
           {section === 'knowledge' && <AdminKnowledge />}
           {section === 'devices' && <AdminDevices />}
-          {section === 'thresholds' && <AdminThresholds />}
         </div>
       </main>
     </div>
@@ -882,198 +879,6 @@ function AdminDevices() {
       </AdminState>
     </div>
   );
-}
-
-// ---------------- 阈值规则 ----------------
-
-function AdminThresholds() {
-  const plots = useAdminLoader(() => api.adminPlots({ pageSize: 100 }), []);
-  const [plotId, setPlotId] = useState('');
-  const [rules, setRules] = useState<ThresholdRule[]>([]);
-  const [loadingRules, setLoadingRules] = useState(false);
-  const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
-  const [busy, setBusy] = useState(false);
-  // 新建表单
-  const [metric, setMetric] = useState('soilMoisture');
-  const [operator, setOperator] = useState('LT');
-  const [value, setValue] = useState('');
-  const [hysteresis, setHysteresis] = useState('');
-  const [duration, setDuration] = useState('60');
-  const [level, setLevel] = useState('MEDIUM');
-  const [enabled, setEnabled] = useState(true);
-
-  async function loadRules(pid: number) {
-    setLoadingRules(true);
-    setError('');
-    try {
-      const items = await api.thresholds(pid);
-      setRules(items);
-    } catch (err) {
-      setError(errorMessage(err));
-      setRules([]);
-    } finally {
-      setLoadingRules(false);
-    }
-  }
-
-  function selectPlot(pid: string) {
-    setPlotId(pid);
-    if (pid) void loadRules(Number(pid));
-    else setRules([]);
-  }
-
-  async function createRule(event: FormEvent) {
-    event.preventDefault();
-    if (!plotId) return;
-    const valueNum = Number(value);
-    if (Number.isNaN(valueNum)) {
-      setNotice('阈值必须是数字');
-      return;
-    }
-    setBusy(true);
-    setNotice('');
-    try {
-      const result = await api.createThreshold(Number(plotId), {
-        metric, operator, value: valueNum,
-        hysteresis: hysteresis ? Number(hysteresis) : 0,
-        durationSeconds: Number(duration) || 60,
-        level, enabled
-      });
-      setNotice(
-        result.targetCount > 0
-          ? `规则已创建，第 ${result.configVersion} 版正在下发至 ${result.targetCount} 台机器`
-          : `规则已创建，第 ${result.configVersion} 版当前无绑定机器需要下发`
-      );
-      setValue('');
-      void loadRules(Number(plotId));
-    } catch (err) {
-      setNotice(errorMessage(err));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function toggleRule(rule: ThresholdRule) {
-    if (!plotId) return;
-    setBusy(true);
-    setNotice('');
-    try {
-      const result = await api.updateThreshold(Number(plotId), { ...rule, enabled: !rule.enabled });
-      setNotice(`已${rule.enabled ? '停用' : '启用'}，第 ${result.configVersion} 版下发中`);
-      void loadRules(Number(plotId));
-    } catch (err) {
-      setNotice(errorMessage(err));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="admin-stack">
-      {notice && <div className={`admin-notice ${notice.includes('已') ? '' : 'error'}`}>{notice}</div>}
-      <div className="admin-filter-bar">
-        <label className="admin-modal-hint" style={{ margin: 0 }}>选择地块：</label>
-        <select value={plotId} onChange={(event) => selectPlot(event.target.value)}>
-          <option value="">请选择地块</option>
-          {(plots.data?.items ?? []).map((plot) => (
-            <option value={plot.id} key={plot.id}>
-              {plot.code} {plot.name}（{plot.ownerName || `#${plot.ownerId}`}）
-            </option>
-          ))}
-        </select>
-      </div>
-
-      {plotId && (
-        <section className="admin-card">
-          <h3>新建阈值规则</h3>
-          <form className="admin-bind-form" onSubmit={createRule}>
-            <select value={metric} onChange={(event) => setMetric(event.target.value)}>
-              <option value="soilMoisture">土壤湿度</option>
-              <option value="temperature">温度</option>
-              <option value="light">光照</option>
-            </select>
-            <select value={operator} onChange={(event) => setOperator(event.target.value)}>
-              <option value="LT">&lt;（低于）</option>
-              <option value="GT">&gt;（高于）</option>
-            </select>
-            <input value={value} onChange={(event) => setValue(event.target.value)} placeholder="阈值" type="number" step="any" required />
-            <input value={hysteresis} onChange={(event) => setHysteresis(event.target.value)} placeholder="回差(可选)" type="number" step="any" />
-            <input value={duration} onChange={(event) => setDuration(event.target.value)} placeholder="持续秒数" type="number" min={1} />
-            <select value={level} onChange={(event) => setLevel(event.target.value)}>
-              <option value="LOW">低</option>
-              <option value="MEDIUM">中</option>
-              <option value="HIGH">高</option>
-            </select>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
-              <input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />
-              启用
-            </label>
-            <button type="submit" className="primary" disabled={busy || !value}>
-              {busy ? '创建中…' : '创建规则'}
-            </button>
-          </form>
-        </section>
-      )}
-
-      <AdminState loading={loadingRules} error={error}>
-        <section className="admin-card">
-          <h3>规则列表（{rules.length}）</h3>
-          {rules.length === 0 && <div className="admin-empty">该地块暂无阈值规则。</div>}
-          <div className="admin-table-wrap">
-            <table className="admin-table">
-              <thead>
-                <tr>
-                  <th>ID</th>
-                  <th>指标</th>
-                  <th>条件</th>
-                  <th>阈值</th>
-                  <th>回差</th>
-                  <th>持续</th>
-                  <th>级别</th>
-                  <th>状态</th>
-                  <th>操作</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rules.map((rule) => (
-                  <tr key={rule.id}>
-                    <td>{rule.id}</td>
-                    <td>{metricName(rule.metric)}</td>
-                    <td>{rule.operator === 'LT' ? '低于' : '高于'}</td>
-                    <td>{rule.value}{rule.unit}</td>
-                    <td>{rule.hysteresis}</td>
-                    <td>{rule.durationSeconds}s</td>
-                    <td>{levelName(rule.level)}</td>
-                    <td>
-                      <span className={`admin-badge ${rule.enabled ? 'ok' : 'off'}`}>
-                        {rule.enabled ? '启用' : '停用'}
-                      </span>
-                    </td>
-                    <td>
-                      <button className="admin-link-btn" disabled={busy} onClick={() => void toggleRule(rule)}>
-                        {rule.enabled ? '停用' : '启用'}
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      </AdminState>
-    </div>
-  );
-}
-
-function metricName(metric: string) {
-  const names: Record<string, string> = { soilMoisture: '土壤湿度', temperature: '温度', light: '光照' };
-  return names[metric] ?? metric;
-}
-
-function levelName(level: string) {
-  const names: Record<string, string> = { LOW: '低', MEDIUM: '中', HIGH: '高' };
-  return names[level] ?? level;
 }
 
 // ---------------- 工具函数 ----------------

@@ -435,17 +435,14 @@ CREATE_ALERT_RULE_SCHEMA = {
                  "description": "比较符（必填）：LT 低于 / GT 高于 / LTE 不高于 / GTE 不低于"},
     "value": {"type": "number",
               "description": "阈值数值（必填）：soilMoisture 0~100 / temperature -50~100 / light 0~200000"},
-    "duration_seconds": {"type": "integer", "minimum": 0, "maximum": 86400,
-                         "description": "持续时长秒（可选，默认 0）"},
-    "level": {"type": "string", "enum": ["LOW", "MEDIUM", "HIGH"],
-              "description": "告警级别（可选，默认 MEDIUM）"},
     "hysteresis": {"type": "number", "minimum": 0, "description": "回差（可选，≥0，防抖）"},
     "enabled": {"type": "boolean", "description": "是否启用（可选，默认 true）"},
 }
 
 
 def create_alert_rule(authorization: str, args: dict) -> dict:
-    """新建地块告警阈值规则（JWT 权限由 Go 校验；创建即触发版本化下发到地块设备）。"""
+    """新建地块告警阈值规则（JWT 权限由 Go 校验；创建即触发版本化下发到地块设备）。
+    level 默认 MEDIUM、durationSeconds 默认 60（服务端默认，硬件判断不参与）。"""
     if _mock_enabled():
         return {"ok": True, "data": {"id": 99, "configVersion": 1,
                                      "syncStatus": "PENDING", "targetCount": 0}}
@@ -453,8 +450,6 @@ def create_alert_rule(authorization: str, args: dict) -> dict:
         "metric": args["metric"],
         "operator": args["operator"],
         "value": args["value"],
-        "durationSeconds": int(args.get("duration_seconds", 0)),
-        "level": args.get("level", "MEDIUM"),
         "enabled": bool(args.get("enabled", True)),
     }
     if args.get("hysteresis") is not None:
