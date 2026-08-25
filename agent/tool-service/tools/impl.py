@@ -137,7 +137,13 @@ def get_telemetry_history(authorization: str, args: dict) -> dict:
             "plotId": args.get("plot_id"), "metric": args.get("metric"), "unit": "%",
             "points": [{"time": "2026-08-16T00:00:00+08:00", "avg": 34.2, "min": 28.5, "max": 39.1}],
         }}
-    data = get_go_client().get_telemetry_history(authorization, **args)
+    # agent 参数 snake_case → Go 接口 camelCase（plot_id → plotId 等），否则 Go 读不到参数报 400
+    query = dict(args)
+    key_map = {"plot_id": "plotId", "start_time": "startTime", "end_time": "endTime"}
+    for k, v in key_map.items():
+        if k in query:
+            query[v] = query.pop(k)
+    data = get_go_client().get_telemetry_history(authorization, **query)
     return {"ok": True, "data": data}
 
 
@@ -180,7 +186,11 @@ def get_active_alerts(authorization: str, args: dict) -> dict:
             "title": "A3 地块湿度偏低", "currentValue": 28.6, "thresholdValue": 30,
             "startedAt": "2026-08-22T08:20:00+08:00",
         }]}
-    data = get_go_client().get_alerts(authorization, **{k: v for k, v in args.items() if v})
+    query = dict(args)
+    # plot_id(snake_case) → plotId(camelCase)，否则 Go 的 plotId 过滤读不到，静默返回全部告警
+    if "plot_id" in query:
+        query["plotId"] = query.pop("plot_id")
+    data = get_go_client().get_alerts(authorization, **{k: v for k, v in query.items() if v})
     return {"ok": True, "data": data}
 
 
