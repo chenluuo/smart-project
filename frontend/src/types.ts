@@ -17,6 +17,7 @@ export type Plot = {
   code: string;
   name: string;
   cropName?: string | null;
+  plantingTime?: string | null;
   area?: number | null;
   status: 'ACTIVE' | 'DISABLED' | string;
   soilMoisture?: number | null;
@@ -55,6 +56,22 @@ export type TelemetryLatest = {
     status: string;
     battery?: number | null;
   }>;
+};
+
+export type TelemetryHistoryMetric = 'soilMoisture' | 'temperature';
+
+export type TelemetryHistoryPoint = {
+  time: string;
+  avg: number;
+  min: number;
+  max: number;
+};
+
+export type TelemetryHistory = {
+  plotId: number;
+  metric: TelemetryHistoryMetric;
+  unit: string;
+  points: TelemetryHistoryPoint[];
 };
 
 export type Device = {
@@ -103,6 +120,14 @@ export type CommandItem = {
   status: string;
   operatorName: string;
   createdAt: string;
+};
+
+export type ThresholdRuleCreateInput = {
+  metric: 'soilMoisture' | 'temperature' | 'light';
+  operator: 'LT' | 'LTE' | 'GT' | 'GTE';
+  value: number;
+  hysteresis?: number;
+  enabled: boolean;
 };
 
 export type ThresholdRule = {

@@ -74,6 +74,7 @@ func TestAlertEndpointsRequireAuthentication(t *testing.T) {
 	router := newAlertTestRouter(&alertServiceStub{})
 	requests := []struct{ method, path string }{
 		{http.MethodGet, "/api/v1/plots/11/thresholds"},
+		{http.MethodPost, "/api/v1/plots/11/thresholds"},
 		{http.MethodPut, "/api/v1/plots/11/thresholds/2"},
 		{http.MethodGet, "/api/v1/plots/11/thresholds/2/sync"},
 		{http.MethodGet, "/api/v1/alerts"},
@@ -118,6 +119,15 @@ func TestThresholdEndpointsFollowContract(t *testing.T) {
 	newAlertTestRouter(service).ServeHTTP(response, request)
 	if response.Code != http.StatusOK || service.ownerID != 7 || service.plotID != 11 || !strings.Contains(response.Body.String(), `"operator":"LT"`) || !strings.Contains(response.Body.String(), `"hysteresis":2`) {
 		t.Fatalf("GET thresholds: status=%d body=%s service=%+v", response.Code, response.Body.String(), service)
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/plots/11/thresholds", strings.NewReader(`{"metric":"soilMoisture","operator":"LT","value":28,"hysteresis":2.5,"enabled":true}`))
+	request.Header.Set("Authorization", "Bearer signed-token")
+	request.Header.Set("Content-Type", "application/json")
+	response = httptest.NewRecorder()
+	newAlertTestRouter(service).ServeHTTP(response, request)
+	if response.Code != http.StatusCreated || service.thresholdID != 0 || service.ruleInput.DurationSeconds != 60 || service.ruleInput.Level != alert.LevelMedium || !service.ruleInput.Enabled {
+		t.Fatalf("POST threshold: status=%d body=%s service=%+v", response.Code, response.Body.String(), service)
 	}
 
 	request = httptest.NewRequest(http.MethodPut, "/api/v1/plots/11/thresholds/2", strings.NewReader(`{"metric":"soilMoisture","operator":"LT","value":28,"hysteresis":2.5,"durationSeconds":300,"level":"MEDIUM","enabled":false}`))

@@ -18,7 +18,10 @@ import type {
   IrrigationStatus,
   KnowledgeDocument,
   Plot,
+  TelemetryHistory,
+  TelemetryHistoryMetric,
   TelemetryLatest,
+  ThresholdRuleCreateInput,
   ThresholdRule,
   User
 } from './types';
@@ -40,9 +43,16 @@ export default function App() {
   const [notice, setNotice] = useState('');
   const [data, setData] = useState<AppData>(emptyData);
   const [selectedPlotId, setSelectedPlotId] = useState<number | null>(null);
+  const [overviewPlotId, setOverviewPlotId] = useState<number | null>(null);
+  const [trendMetric, setTrendMetric] = useState<TelemetryHistoryMetric>('soilMoisture');
+  const [trendHistory, setTrendHistory] = useState<TelemetryHistory | null>(null);
+  const [trendLoading, setTrendLoading] = useState(false);
+  const [plotDetailLoading, setPlotDetailLoading] = useState(false);
   const [events, setEvents] = useState<EventNotice[]>([]);
   const agentControllerRef = useRef<AbortController | null>(null);
   const refreshRequestRef = useRef(0);
+  const trendRequestRef = useRef(0);
+  const plotDetailRequestRef = useRef(0);
   const [agentSessionId, setAgentSessionId] = useState<string | null>(null);
   const [agentMessages, setAgentMessages] = useState<AgentChatMessage[]>([]);
   const [agentStreaming, setAgentStreaming] = useState(false);
@@ -65,10 +75,25 @@ export default function App() {
     () => data.plots.find((plot) => plot.id === selectedPlotId) ?? data.plots[0],
     [data.plots, selectedPlotId]
   );
+  const overviewSelectedPlot = useMemo(
+    () => data.plots.find((plot) => plot.id === overviewPlotId),
+    [data.plots, overviewPlotId]
+  );
 
   const selectedTelemetry = selectedPlot ? data.telemetry[selectedPlot.id] : undefined;
   const selectedIrrigation = selectedPlot ? data.irrigation[selectedPlot.id] : undefined;
   const selectedRules = selectedPlot ? data.thresholds[selectedPlot.id] ?? [] : [];
+  const overviewSelectedIrrigation = overviewSelectedPlot ? data.irrigation[overviewSelectedPlot.id] : undefined;
+  const headerPlot = view === 'overview' ? overviewSelectedPlot : selectedPlot;
+
+  const selectPlot = useCallback((plotId: number) => {
+    setSelectedPlotId(plotId);
+    setOverviewPlotId(plotId);
+  }, []);
+
+  const selectTrendMetric = useCallback((metric: TelemetryHistoryMetric) => {
+    setTrendMetric(metric);
+  }, []);
 
   const loadData = useCallback(async () => {
     const requestId = refreshRequestRef.current + 1;
@@ -120,6 +145,7 @@ export default function App() {
         thresholds: { ...current.thresholds, ...nextThresholds }
       }));
       setSelectedPlotId((current) => current ?? plots[0]?.id ?? null);
+      setOverviewPlotId((current) => current && plots.some((plot) => plot.id === current) ? current : null);
       setNotice('');
     } catch (error) {
       if (requestId !== refreshRequestRef.current) return;
@@ -149,6 +175,63 @@ export default function App() {
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
+
+  useEffect(() => {
+    const plotId = overviewSelectedPlot?.id;
+    const requestId = trendRequestRef.current + 1;
+    trendRequestRef.current = requestId;
+
+    if (!user || !plotId) {
+      setTrendHistory(null);
+      setTrendLoading(false);
+      return;
+    }
+
+    setTrendLoading(true);
+    void api.telemetryHistory(plotId, trendMetric)
+      .then((history) => {
+        if (requestId === trendRequestRef.current) {
+          setTrendHistory(history);
+        }
+      })
+      .catch(() => {
+        if (requestId === trendRequestRef.current) {
+          setTrendHistory(null);
+        }
+      })
+      .finally(() => {
+        if (requestId === trendRequestRef.current) {
+          setTrendLoading(false);
+        }
+      });
+  }, [overviewSelectedPlot?.id, trendMetric, user]);
+
+  useEffect(() => {
+    const plotId = selectedPlot?.id;
+    const requestId = plotDetailRequestRef.current + 1;
+    plotDetailRequestRef.current = requestId;
+
+    if (!user || view !== 'plots' || !plotId) {
+      setPlotDetailLoading(false);
+      return;
+    }
+
+    setPlotDetailLoading(true);
+    void api.plot(plotId)
+      .then((detail) => {
+        if (requestId !== plotDetailRequestRef.current) return;
+        setData((current) => ({
+          ...current,
+          plots: current.plots.map((plot) => (plot.id === detail.id ? { ...plot, ...detail } : plot))
+        }));
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (requestId === plotDetailRequestRef.current) {
+          setPlotDetailLoading(false);
+        }
+      });
+  }, [selectedPlot?.id, user, view]);
 
   useEffect(() => {
     if (!user) return;
@@ -191,6 +274,13 @@ export default function App() {
     setUser(null);
     setData(emptyData);
     setSelectedPlotId(null);
+    setOverviewPlotId(null);
+    trendRequestRef.current += 1;
+    setTrendMetric('soilMoisture');
+    setTrendHistory(null);
+    setTrendLoading(false);
+    plotDetailRequestRef.current += 1;
+    setPlotDetailLoading(false);
     setEvents([]);
     setAgentSessionId(null);
     setAgentMessages([]);
@@ -266,6 +356,26 @@ export default function App() {
     }
   }
 
+  async function createThresholdRule(rule: ThresholdRuleCreateInput) {
+    if (!selectedPlot) return false;
+    setBusy(true);
+    try {
+      await api.createThreshold(selectedPlot.id, rule);
+      const thresholds = await api.thresholds(selectedPlot.id);
+      setData((current) => ({
+        ...current,
+        thresholds: { ...current.thresholds, [selectedPlot.id]: thresholds }
+      }));
+      setNotice('阈值规则已添加');
+      return true;
+    } catch (error) {
+      setNotice(errorMessage(error));
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function uploadKnowledge(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     // 在 await 前保存表单引用：React 合成事件的 currentTarget 在异步后失效
@@ -309,74 +419,95 @@ export default function App() {
 
     const controller = new AbortController();
     agentControllerRef.current = controller;
-    let completed = false;
-    let failed = false;
-    try {
-      await streamAgentChat(
-        { sessionId: agentSessionId ?? undefined, plotId: selectedPlot?.id, question: content },
-        (event) => {
-          if (event.type === 'answer' && event.delta) {
-            setAgentMessages((current) =>
-              current.map((message) =>
-                message.id === assistantMessageId
-                  ? { ...message, content: `${message.content}${event.delta}` }
-                  : message
-              )
-            );
-            return;
-          }
-          if (event.type === 'done') {
-            completed = true;
-            if (event.sessionId) setAgentSessionId(event.sessionId);
-            setAgentMessages((current) =>
-              current.map((message) =>
-                message.id === assistantMessageId
-                  ? {
-                      ...message,
-                      content: message.content || event.message || 'AI 未返回内容，请重试。',
-                      status: 'COMPLETE',
-                      sources: event.sources
-                    }
-                  : message
-              )
-            );
-            return;
-          }
-          if (event.type === 'error') {
-            failed = true;
-            const message = event.message || 'AI 响应失败，请稍后重试。';
-            setAgentError(message);
-            setAgentMessages((current) =>
-              current.map((item) =>
-                item.id === assistantMessageId
-                  ? { ...item, content: item.content || message, status: 'ERROR' }
-                  : item
-              )
-            );
-          }
-        },
-        controller.signal
-      );
-      if (!completed && !failed) {
-        setAgentMessages((current) =>
-          current.map((message) =>
-            message.id === assistantMessageId
-              ? { ...message, content: message.content || 'AI 未返回内容，请重试。', status: 'COMPLETE' }
-              : message
-          )
+
+    const runAttempt = async (sessionId?: string) => {
+      let completed = false;
+      let failed = false;
+      let receivedAnswer = false;
+      let needsNewSession = false;
+
+      try {
+        await streamAgentChat(
+          { sessionId, plotId: selectedPlot?.id, question: content },
+          (event) => {
+            if (needsNewSession) return;
+
+            if (event.type === 'answer' && event.delta) {
+              receivedAnswer = true;
+              setAgentMessages((current) =>
+                current.map((message) =>
+                  message.id === assistantMessageId
+                    ? { ...message, content: `${message.content}${event.delta}` }
+                    : message
+                )
+              );
+              return;
+            }
+            if (event.type === 'done') {
+              completed = true;
+              if (event.sessionId) setAgentSessionId(event.sessionId);
+              setAgentMessages((current) =>
+                current.map((message) =>
+                  message.id === assistantMessageId
+                    ? {
+                        ...message,
+                        content: message.content || event.message || 'AI 未返回内容，请重试。',
+                        status: 'COMPLETE',
+                        sources: event.sources
+                      }
+                    : message
+                )
+              );
+              return;
+            }
+            if (event.type === 'error') {
+              const message = event.message || 'AI 响应失败，请稍后重试。';
+              if (sessionId && !receivedAnswer && shouldRenewAgentSession(message)) {
+                needsNewSession = true;
+                return;
+              }
+
+              failed = true;
+              setAgentError(message);
+              setAgentMessages((current) =>
+                current.map((item) =>
+                  item.id === assistantMessageId
+                    ? { ...item, content: item.content || message, status: 'ERROR' }
+                    : item
+                )
+              );
+            }
+          },
+          controller.signal
         );
-      }
-    } catch (error) {
-      if (isAbortError(error)) {
-        setAgentMessages((current) =>
-          current.map((message) =>
-            message.id === assistantMessageId
-              ? { ...message, content: message.content || '已停止生成。', status: 'COMPLETE' }
-              : message
-          )
-        );
-      } else {
+
+        if (needsNewSession) return true;
+        if (!completed && !failed) {
+          setAgentMessages((current) =>
+            current.map((message) =>
+              message.id === assistantMessageId
+                ? { ...message, content: message.content || 'AI 未返回内容，请重试。', status: 'COMPLETE' }
+                : message
+            )
+          );
+        }
+      } catch (error) {
+        if (isAbortError(error)) {
+          setAgentMessages((current) =>
+            current.map((message) =>
+              message.id === assistantMessageId
+                ? { ...message, content: message.content || '已停止生成。', status: 'COMPLETE' }
+                : message
+            )
+          );
+          return false;
+        }
+
         const message = errorMessage(error);
+        if (sessionId && !receivedAnswer && shouldRenewAgentSession(message)) {
+          return true;
+        }
+
         setAgentError(message);
         setAgentMessages((current) =>
           current.map((item) =>
@@ -385,6 +516,17 @@ export default function App() {
               : item
           )
         );
+      }
+
+      return false;
+    };
+
+    try {
+      const needsNewSession = await runAttempt(agentSessionId ?? undefined);
+      if (needsNewSession && !controller.signal.aborted) {
+        setAgentSessionId(null);
+        setAgentError('');
+        await runAttempt(undefined);
       }
     } finally {
       if (agentControllerRef.current === controller) {
@@ -455,7 +597,7 @@ export default function App() {
         <header className="app-header">
           <div>
             <strong>智慧农田</strong>
-            <span>{user?.name ?? '农户'} · {selectedPlot?.name ?? '未绑定地块'}</span>
+            <span>{user?.name ?? '农户'} · {headerPlot?.name ?? (data.plots.length > 0 ? '请选择地块' : '未绑定地块')}</span>
           </div>
           <div className="icon-actions">
             <button
@@ -481,10 +623,15 @@ export default function App() {
             plots={data.plots}
             devices={data.devices}
             alerts={data.alerts}
-            telemetry={selectedTelemetry}
-            irrigation={selectedIrrigation}
-            selectedPlot={selectedPlot}
+            telemetryByPlot={data.telemetry}
+            irrigation={overviewSelectedIrrigation}
+            selectedPlot={overviewSelectedPlot}
             busy={busy}
+            onSelectPlot={selectPlot}
+            trendMetric={trendMetric}
+            trendHistory={trendHistory}
+            trendLoading={trendLoading}
+            onSelectTrendMetric={selectTrendMetric}
             onIrrigate={issueIrrigation}
           />
         )}
@@ -497,8 +644,10 @@ export default function App() {
             devices={data.devices}
             rules={selectedRules}
             busy={busy}
-            onSelect={setSelectedPlotId}
+            detailLoading={plotDetailLoading}
+            onSelect={selectPlot}
             onSaveRule={saveThresholdRule}
+            onCreateRule={createThresholdRule}
           />
         )}
 
@@ -524,7 +673,7 @@ export default function App() {
               irrigation={selectedIrrigation}
               commands={data.commands}
               busy={busy}
-              onSelectPlot={setSelectedPlotId}
+              onSelectPlot={selectPlot}
               onIrrigate={issueIrrigation}
             />
             <AlarmCenterPage
@@ -556,10 +705,18 @@ function PlotsView(props: {
   devices: Device[];
   rules: ThresholdRule[];
   busy: boolean;
+  detailLoading: boolean;
   onSelect: (plotId: number) => void;
   onSaveRule: (rule: ThresholdRule) => Promise<boolean>;
+  onCreateRule: (rule: ThresholdRuleCreateInput) => Promise<boolean>;
 }) {
   const [editingRuleId, setEditingRuleId] = useState<number | null>(null);
+  const [creatingRule, setCreatingRule] = useState(false);
+
+  useEffect(() => {
+    setEditingRuleId(null);
+    setCreatingRule(false);
+  }, [props.selectedPlot?.id]);
 
   return (
     <div className="screen-content">
@@ -580,16 +737,18 @@ function PlotsView(props: {
           >
             <span>
               <strong>{plot.name}</strong>
-              <small>{plot.code} · {plot.cropName || '未设置作物'}</small>
+              <small>{plot.code} · 作物：{plot.cropName || '未设置'} · 种植：{formatPlantingDate(plot.plantingTime)}</small>
             </span>
             <em>{plot.status === 'ACTIVE' ? '启用' : '停用'}</em>
           </button>
         ))}
       </div>
 
-      <section className="detail-band">
+      <section className="detail-band" aria-busy={props.detailLoading}>
         <h3>{props.selectedPlot?.name ?? '地块详情'}</h3>
         <div className="detail-pills">
+          <span>作物 {props.selectedPlot?.cropName || '未设置'}</span>
+          <span>种植 {formatPlantingDate(props.selectedPlot?.plantingTime)}</span>
           <span>土壤 {formatMetric(props.telemetry?.metrics.soilMoisture)}</span>
           <span>温度 {formatMetric(props.telemetry?.metrics.temperature)}</span>
           <span>{props.devices.filter((device) => device.plotId === props.selectedPlot?.id).length} 台设备</span>
@@ -597,8 +756,38 @@ function PlotsView(props: {
       </section>
 
       <section className="list-card">
-        <h3>阈值规则</h3>
-        {props.rules.length === 0 && <EmptyState text="当前地块暂无阈值规则。" />}
+        <div className="list-card-heading">
+          <h3>阈值规则</h3>
+          <button
+            type="button"
+            className="rule-add-button"
+            title={creatingRule ? '取消新增阈值规则' : '新增阈值规则'}
+            aria-label={creatingRule ? '取消新增阈值规则' : '新增阈值规则'}
+            onClick={() => {
+              setEditingRuleId(null);
+              setCreatingRule((current) => !current);
+            }}
+            disabled={!props.selectedPlot || props.busy}
+          >
+            {creatingRule ? <X size={17} /> : <Plus size={17} />}
+            <span>{creatingRule ? '取消' : '新增规则'}</span>
+          </button>
+        </div>
+        {props.rules.length === 0 && !creatingRule && <EmptyState text="当前地块暂无阈值规则。" />}
+        {creatingRule && (
+          <div className="rule-row editing rule-row-create">
+            <span>
+              <strong>新增阈值规则</strong>
+              <small>规则将保存到当前地块</small>
+            </span>
+            <ThresholdRuleEditor
+              busy={props.busy}
+              onCancel={() => setCreatingRule(false)}
+              onSave={props.onSaveRule}
+              onCreate={props.onCreateRule}
+            />
+          </div>
+        )}
         {props.rules.map((rule) => {
           const editing = editingRuleId === rule.id;
           return (
@@ -613,7 +802,10 @@ function PlotsView(props: {
                   className="rule-edit-button"
                   title="编辑阈值"
                   aria-label={`编辑${metricName(rule.metric)}阈值`}
-                  onClick={() => setEditingRuleId(editing ? null : rule.id)}
+                  onClick={() => {
+                    setCreatingRule(false);
+                    setEditingRuleId(editing ? null : rule.id);
+                  }}
                   disabled={props.busy}
                 >
                   <Pencil size={17} />
@@ -625,6 +817,7 @@ function PlotsView(props: {
                   busy={props.busy}
                   onCancel={() => setEditingRuleId(null)}
                   onSave={props.onSaveRule}
+                  onCreate={props.onCreateRule}
                 />
               )}
             </div>
@@ -636,14 +829,23 @@ function PlotsView(props: {
 }
 
 function ThresholdRuleEditor(props: {
-  rule: ThresholdRule;
+  rule?: ThresholdRule;
   busy: boolean;
   onCancel: () => void;
   onSave: (rule: ThresholdRule) => Promise<boolean>;
+  onCreate: (rule: ThresholdRuleCreateInput) => Promise<boolean>;
 }) {
-  const [value, setValue] = useState(String(props.rule.value));
-  const [operator, setOperator] = useState(props.rule.operator);
+  const creating = !props.rule;
+  const [metric, setMetric] = useState<ThresholdRuleCreateInput['metric']>('soilMoisture');
+  const [value, setValue] = useState(String(props.rule?.value ?? '30'));
+  const [operator, setOperator] = useState<ThresholdRuleCreateInput['operator']>(() => {
+    const current = props.rule?.operator;
+    return current === 'LTE' || current === 'GT' || current === 'GTE' ? current : 'LT';
+  });
   const [error, setError] = useState('');
+  const ruleMetric = props.rule?.metric ?? metric;
+  const limits = thresholdMetricLimits(ruleMetric);
+  const unit = props.rule?.unit ?? thresholdMetricUnit(metric);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -652,13 +854,15 @@ function ThresholdRuleEditor(props: {
       setError('请输入有效阈值。');
       return;
     }
+    if (limits && (nextValue < limits.min || nextValue > limits.max)) {
+      setError(`阈值范围为 ${limits.min} 至 ${limits.max}${unit}。`);
+      return;
+    }
 
     setError('');
-    const saved = await props.onSave({
-      ...props.rule,
-      value: nextValue,
-      operator
-    });
+    const saved = props.rule
+      ? await props.onSave({ ...props.rule, value: nextValue, operator })
+      : await props.onCreate({ metric, value: nextValue, operator, hysteresis: 0, enabled: true });
     if (saved) {
       props.onCancel();
     } else {
@@ -668,13 +872,35 @@ function ThresholdRuleEditor(props: {
 
   return (
     <form className="rule-editor" onSubmit={(event) => void submit(event)}>
+      {creating && (
+        <label className="rule-editor-metric">
+          监测指标
+          <select value={metric} onChange={(event) => setMetric(event.target.value as ThresholdRuleCreateInput['metric'])}>
+            <option value="soilMoisture">土壤湿度</option>
+            <option value="temperature">环境温度</option>
+            <option value="light">光照</option>
+          </select>
+        </label>
+      )}
       <label>
-        阈值 ({props.rule.unit})
-        <input type="number" inputMode="decimal" step="any" value={value} onChange={(event) => setValue(event.target.value)} required />
+        阈值 ({unit})
+        <input
+          type="number"
+          inputMode="decimal"
+          step="any"
+          min={limits?.min}
+          max={limits?.max}
+          value={value}
+          onChange={(event) => setValue(event.target.value)}
+          required
+        />
       </label>
       <label>
         触发条件
-        <select value={operator} onChange={(event) => setOperator(event.target.value)}>
+        <select
+          value={operator}
+          onChange={(event) => setOperator(event.target.value as ThresholdRuleCreateInput['operator'])}
+        >
           <option value="LT">低于 (&lt;)</option>
           <option value="LTE">低于等于 (&le;)</option>
           <option value="GT">高于 (&gt;)</option>
@@ -900,6 +1126,10 @@ function isAbortError(error: unknown) {
   return error instanceof DOMException && error.name === 'AbortError';
 }
 
+function shouldRenewAgentSession(message: string) {
+  return message.includes('会话已超时') || message.includes('会话已结束') || message.includes('会话不存在');
+}
+
 function applyTelemetryEvent(current: AppData, event: EventNotice): AppData {
   const plotId = eventNumber(event.data.plotId);
   const soilMoisture = eventNumber(event.data.soilMoisture);
@@ -1032,10 +1262,32 @@ function formatTime(value?: string | null) {
   return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
 }
 
+function formatPlantingDate(value?: string | null) {
+  if (!value) return '未记录';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '未记录';
+  return date.toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' });
+}
+
 function metricName(metric: string) {
   if (metric === 'soilMoisture') return '土壤湿度';
   if (metric.toLowerCase().includes('temperature')) return '温度';
+  if (metric === 'light') return '光照';
   return metric;
+}
+
+function thresholdMetricUnit(metric: string) {
+  if (metric === 'soilMoisture') return '%';
+  if (metric === 'temperature') return celsiusUnit;
+  if (metric === 'light') return 'lx';
+  return '';
+}
+
+function thresholdMetricLimits(metric: string) {
+  if (metric === 'soilMoisture') return { min: 0, max: 100 };
+  if (metric === 'temperature') return { min: -50, max: 100 };
+  if (metric === 'light') return { min: 0, max: 200000 };
+  return undefined;
 }
 
 function levelName(level: string) {

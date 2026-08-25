@@ -217,7 +217,7 @@ func (s *Service) UpsertRule(ctx context.Context, ownerID, plotID, thresholdID u
 	input.Metric = normalizeRuleMetric(input.Metric)
 	input.Operator = ComparisonOperator(strings.ToUpper(strings.TrimSpace(string(input.Operator))))
 	input.Level = Level(strings.ToUpper(strings.TrimSpace(string(input.Level))))
-	// thresholdID == 0 表示新建规则（repository 按 upsert 语义自动创建）
+	// thresholdID == 0 表示新建规则（repository 按 upsert 语义自动创建）。
 	if ownerID == 0 || plotID == 0 {
 		return nil, ErrInvalidInput
 	}
