@@ -88,7 +88,7 @@ Go 侧不负责：
 | 待实现 | `GET /api/v1/dashboard/overview` | 聚合当前用户地块、Redis 最新值、在线设备和活动告警；返回统一采样时间 |
 | 待实现 | `GET /api/v1/plots/{plotId}/telemetry/latest` | 先校验地块归属，再从 Redis 返回最新指标和来源设备 |
 | 待实现 | `GET /api/v1/telemetry/latest` | 批量返回当前用户全部或指定地块的最新数据，避免逐地块查询 |
-| 已实现 | `GET /api/v1/telemetry/history` | 从 TDengine 查询（`TDENGINE_ENABLED` 时装配 `TDengineStore`）；支持 `plotId/metric/range/startTime/endTime/interval`，`INTERVAL` 桶聚合 avg/min/max + `FILL(PREV)`；限制最大时间范围 30 天和点数 |
+| 已实现 | `GET /api/v1/telemetry/history` | 从 TDengine 查询（`TDENGINE_ENABLED` 时装配 `TDengineStore`）；支持 `plotId/metric/range/startTime/endTime/interval`，`INTERVAL` 桶聚合 avg/min/max；空桶不补值，前端按缺失日期留白；限制最大时间范围 30 天和点数 |
 | 待实现 | `POST /api/v1/telemetry/import` | 仅管理员/测试环境可用；校验、批量写入、逐条返回失败原因 |
 
 历史趋势必须按请求粒度聚合和降采样，7 天趋势查询目标为 P95 小于 2 秒。

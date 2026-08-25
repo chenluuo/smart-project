@@ -243,129 +243,182 @@ button.button-feedback {
   background: #f2f6f1;
 }
 
-.field-map {
-  position: relative;
-  min-height: 282px;
-  overflow: hidden;
-  border: 1px solid #e0eadf;
-  border-radius: 16px;
-  background: #eef7ec;
-}
-
-.field-map-empty {
+.trend-controls {
   display: grid;
-  align-content: center;
-  justify-items: center;
-  gap: 8px;
-  color: #718078;
-  background: #f5f8f4;
-  text-align: center;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+  padding: 0 0 14px;
+  border-bottom: 1px solid #e4ece3;
 }
 
-.field-map-empty::after {
-  display: none;
-}
-
-.field-map-empty svg {
-  color: #6b8571;
-}
-
-.field-map-empty strong {
-  color: #42534b;
-  font-size: 18px;
-}
-
-.field-map-empty span {
-  font-size: 14px;
-}
-
-.map-grid-lines {
-  position: absolute;
-  inset: 14px;
-  background:
-    linear-gradient(#d6e6d5 1px, transparent 1px),
-    linear-gradient(90deg, #d6e6d5 1px, transparent 1px);
-  background-size: 32px 32px;
-  opacity: 0.82;
-}
-
-.field-map::after {
-  position: absolute;
-  inset: 48px 72px;
-  border: 1px solid rgba(119, 160, 124, 0.26);
-  border-radius: 999px;
-  content: "";
-}
-
-.irrigation-core {
-  position: absolute;
-  z-index: 2;
-  top: 50%;
-  left: 50%;
+.trend-plot-select {
   display: grid;
-  width: 116px;
-  height: 116px;
-  place-items: center;
-  transform: translate(-50%, -50%);
-  border: 1px solid #d9e2d9;
-  border-radius: 999px;
-  color: #61716a;
-  background: rgba(255, 255, 255, 0.92);
-  box-shadow: 0 14px 35px rgba(47, 87, 56, 0.08);
-}
-
-.irrigation-core span {
-  margin-top: -22px;
-  font-size: 14px;
-}
-
-.plot-chip {
-  position: absolute;
-  z-index: 3;
-  display: grid;
-  min-width: 124px;
-  min-height: 92px;
-  padding: 15px;
-  border: 1px solid #dce7dc;
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.96);
-  box-shadow: 0 8px 22px rgba(74, 95, 80, 0.07);
-}
-
-.plot-chip strong {
-  font-size: 20px;
-}
-
-.plot-chip span {
-  color: #238637;
-  font-size: 16px;
+  gap: 7px;
+  min-width: 0;
+  color: #506159;
   font-weight: 800;
 }
 
-.plot-chip.p1 {
-  top: 32px;
-  left: 28px;
+.trend-plot-select > span {
+  display: flex;
+  align-items: center;
+  gap: 7px;
 }
 
-.plot-chip.p2 {
-  top: 32px;
-  right: 28px;
+.trend-plot-select select {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  border: 1px solid #dbe7dc;
+  border-radius: 12px;
+  color: #142421;
+  background: #fbfdfb;
+  padding: 0 12px;
 }
 
-.plot-chip.p3 {
-  bottom: 32px;
-  left: 28px;
+.trend-plot-select select:focus-visible {
+  outline: 2px solid #80be89;
+  outline-offset: 2px;
 }
 
-.plot-chip.p4 {
-  right: 28px;
-  bottom: 32px;
+.trend-metric-switch {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  min-height: 44px;
+  padding: 3px;
+  border: 1px solid #dbe7dc;
+  border-radius: 12px;
+  background: #f7faf6;
+}
+
+.trend-metric-switch button {
+  display: inline-flex;
+  min-width: 68px;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 0;
+  border-radius: 9px;
+  color: #62726a;
+  background: transparent;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.trend-metric-switch button.active.soil {
+  color: #197b32;
+  background: #e7f7eb;
+}
+
+.trend-metric-switch button.active.temperature {
+  color: #b85022;
+  background: #fff0ea;
+}
+
+.trend-chart {
+  --trend-color: #25883b;
+  padding-top: 14px;
+  transition: opacity 180ms ease;
+}
+
+.trend-chart.temperature {
+  --trend-color: #c45c2c;
+}
+
+.trend-chart.is-loading {
+  opacity: 0.58;
+}
+
+.trend-chart-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+  color: #42564c;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.trend-chart-head span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.trend-chart > svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.trend-grid-line {
+  stroke: #dce8db;
+  stroke-width: 1;
+}
+
+.trend-grid-line.vertical {
+  stroke: #edf3ec;
+}
+
+.trend-y-label,
+.trend-x-label {
+  fill: #7a8981;
+  font-size: 10px;
+}
+
+.trend-y-label {
+  text-anchor: end;
+}
+
+.trend-x-label {
+  text-anchor: middle;
+}
+
+.trend-line {
+  fill: none;
+  stroke: var(--trend-color);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 3;
+}
+
+.trend-point {
+  fill: #fff;
+  stroke: var(--trend-color);
+  stroke-width: 2.5;
 }
 
 .metric-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
+}
+
+.metric-selection-empty {
+  display: grid;
+  min-height: 134px;
+  place-content: center;
+  justify-items: center;
+  gap: 7px;
+  padding: 18px;
+  border: 1px solid #dfe8df;
+  border-radius: 18px;
+  color: #718078;
+  background: #fff;
+  text-align: center;
+}
+
+.metric-selection-empty strong {
+  color: #42534b;
+  font-size: 17px;
+}
+
+.metric-selection-empty span {
+  font-size: 14px;
 }
 
 .metric-card {
@@ -612,6 +665,17 @@ button.button-feedback {
   gap: 10px;
 }
 
+.list-card-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.list-card-heading h3 {
+  margin-bottom: 0;
+}
+
 .plain-row,
 .rule-row,
 .alert-row,
@@ -634,6 +698,14 @@ button.button-feedback {
   align-items: center;
 }
 
+.list-card-heading + .rule-row {
+  border-top: 0;
+}
+
+.rule-row-create {
+  padding-top: 0;
+}
+
 .rule-actions {
   display: flex;
   align-items: center;
@@ -649,6 +721,27 @@ button.button-feedback {
   border-radius: 12px;
   color: #3f6750;
   background: #fbfdfb;
+}
+
+.rule-add-button {
+  display: inline-flex;
+  min-height: 36px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 10px;
+  border: 1px solid #bfe4c5;
+  border-radius: 12px;
+  color: #1d7830;
+  background: #edf8ef;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.rule-add-button:disabled {
+  cursor: default;
+  opacity: 0.5;
 }
 
 .rule-editor {
@@ -667,6 +760,10 @@ button.button-feedback {
   color: #52615b;
   font-size: 13px;
   font-weight: 800;
+}
+
+.rule-editor-metric {
+  grid-column: 1 / -1;
 }
 
 .rule-editor input,
@@ -1594,12 +1691,12 @@ button:disabled {
     padding: 9px 12px;
   }
 
-  .field-map {
-    min-height: 250px;
+  .trend-controls {
+    grid-template-columns: 1fr;
   }
 
-  .plot-chip {
-    min-width: 106px;
+  .trend-metric-switch {
+    width: 100%;
   }
 
   .metric-card strong {

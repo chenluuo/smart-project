@@ -269,6 +269,41 @@ Authorization: Bearer <accessToken>
 - 遥测尚未接入时，`metrics` 可能为空对象。
 - `sourceDevices` 始终返回数组。
 
+### `GET /api/v1/telemetry/history`
+
+用途：读取单个地块、单个指标的聚合历史趋势。
+
+需要认证。
+
+查询参数：
+
+| 参数 | 必填 | 说明 |
+| --- | --- | --- |
+| `plotId` | 是 | 地块 ID |
+| `metric` | 是 | `soilMoisture`、`temperature` 或 `light` |
+| `range` | 否 | `1h`、`24h`、`7d`、`30d`；也可使用 `startTime` 与 `endTime` 指定 RFC3339 时间范围 |
+| `interval` | 否 | `5m`、`1h`、`1d` |
+
+响应 `data`：
+
+```json
+{
+  "plotId": 1,
+  "metric": "soilMoisture",
+  "unit": "%",
+  "points": [
+    {
+      "time": "2026-08-22T00:00:00Z",
+      "avg": 28.6,
+      "min": 27.9,
+      "max": 29.4
+    }
+  ]
+}
+```
+
+注意：缺少采样的时间桶不会补值，也不会出现在 `points` 中；近 7 日图表应为对应日期保留空白。
+
 ## 设备
 
 ### `GET /api/v1/devices`
@@ -554,6 +589,28 @@ Idempotency-Key: <最长64字符>
   }
 ]
 ```
+
+### `POST /api/v1/plots/{plotId}/thresholds`
+
+用途：为当前地块新增阈值规则。
+
+需要认证。
+
+请求：
+
+```json
+{
+  "metric": "soilMoisture",
+  "operator": "LT",
+  "value": 30,
+  "hysteresis": 0,
+  "enabled": true
+}
+```
+
+`metric` 仅支持 `soilMoisture`、`temperature`、`light`；`operator` 支持 `LT`、`LTE`、`GT`、`GTE`。创建时不需要前端传递持续时间和告警级别，服务端默认保存为 `60` 秒和 `MEDIUM`。
+
+成功响应为 HTTP `201`。前端只依赖创建成功后重新请求规则列表；新版 Go 服务可额外返回 `configVersion`、`syncStatus` 和 `targetCount`。
 
 ### `PUT /api/v1/plots/{plotId}/thresholds/{thresholdId}`
 
@@ -913,4 +970,3 @@ data: {"eventTime":"...","resourceId":"..."}
 - `POST /internal/agent/sessions/{sessionId}/messages`
 
 这些接口使用 `X-Internal-Service-Key`，供后端内部或智能体服务调用。
-

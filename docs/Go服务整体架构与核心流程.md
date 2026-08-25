@@ -240,7 +240,7 @@ REST 更新接口返回的是“数据库已提交”的 desired state，不能�
 - 快照包含温度、土壤湿度、光照和三类警告状态，按服务端接收时间拒绝旧值覆盖。
 - 三类 warning 布尔值是机器本地阈值引擎的判定结果；服务端不再按阈值重复判断，只据此幂等创建或恢复告警。
 - 设备在线状态由 owner 维度 Sorted Set 中的最后接收时间推导，不接受设备自报状态、电量或信号。
-- 历史趋势已接入 TDengine（`TDENGINE_ENABLED=true` 时装配 `TDengineStore`）：MQTT 遥测经 `IngestService` 批量异步写入 `readings` 超级表，趋势查询用 `INTERVAL` 时间桶聚合 avg/min/max 并 `FILL(PREV)` 补空桶；未启用时仍由 `NullStore` 返回空点集。
+- 历史趋势已接入 TDengine（`TDENGINE_ENABLED=true` 时装配 `TDengineStore`）：MQTT 遥测经 `IngestService` 批量异步写入 `readings` 超级表，趋势查询用 `INTERVAL` 时间桶聚合 avg/min/max；缺少采样的时间桶不补值，前端按日期留白；未启用时仍由 `NullStore` 返回空点集。
 
 Redis 关闭时最新值使用 `NullStore`；Redis 启用但运行期不可用时，实时接口明确返回服务错误。内部 `IngestService` 已限制设备负载只能包含温度、土壤湿度、光照及三类布尔警告，设备、owner、地块和接收时间由可信消息上下文补充。
 

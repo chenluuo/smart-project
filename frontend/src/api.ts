@@ -18,7 +18,10 @@ import type {
   KnowledgeDocument,
   PageResult,
   Plot,
+  TelemetryHistory,
+  TelemetryHistoryMetric,
   TelemetryLatest,
+  ThresholdRuleCreateInput,
   ThresholdRule,
   ThresholdSync,
   ThresholdUpdateResult,
@@ -95,18 +98,13 @@ export const api = {
   plots: () => request<Plot[]>('/api/v1/plots'),
   plot: (plotId: number) => request<Plot>(`/api/v1/plots/${plotId}`),
   telemetry: (plotId: number) => request<TelemetryLatest>(`/api/v1/plots/${plotId}/telemetry/latest`),
+  telemetryHistory: (plotId: number, metric: TelemetryHistoryMetric) =>
+    request<TelemetryHistory>(`/api/v1/telemetry/history${query({ plotId, metric, range: '7d', interval: '1d' })}`),
   thresholds: (plotId: number) => request<ThresholdRule[]>(`/api/v1/plots/${plotId}/thresholds`),
-  // 新建阈值规则：level/durationSeconds 服务端默认（MEDIUM / 60），不传入
-  createThreshold: (plotId: number, rule: { metric: string; operator: string; value: number; hysteresis?: number; enabled: boolean }) =>
+  createThreshold: (plotId: number, payload: ThresholdRuleCreateInput) =>
     request<ThresholdUpdateResult>(`/api/v1/plots/${plotId}/thresholds`, {
       method: 'POST',
-      body: JSON.stringify({
-        metric: rule.metric,
-        operator: rule.operator,
-        value: rule.value,
-        hysteresis: rule.hysteresis,
-        enabled: rule.enabled
-      })
+      body: JSON.stringify(payload)
     }),
   updateThreshold: (plotId: number, rule: ThresholdRule) =>
     request<ThresholdUpdateResult>(`/api/v1/plots/${plotId}/thresholds/${rule.id}`, {
@@ -373,5 +371,5 @@ function newIdempotencyKey() {
 function backendUnavailableMessage() {
   return API_BASE
     ? `后端服务不可达，请检查 ${API_BASE}`
-    : '后端服务不可达，请确认 Go 后端已在 localhost:8080 启动';
+    : '后端服务不可达，请确认项目 API 服务已启动后重试';
 }

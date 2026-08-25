@@ -43,7 +43,7 @@ func (s *TDengineStore) History(ctx context.Context, q HistoryQuery) (*History, 
 		"SELECT _wstart AS time, AVG(%s) AS avg, MIN(%s) AS min, MAX(%s) AS max "+
 			"FROM %s.readings "+
 			"WHERE plot_id = %d AND ts >= '%s' AND ts <= '%s' "+
-			"INTERVAL(%s) FILL(PREV)",
+			"INTERVAL(%s)",
 		column, column, column,
 		s.db, q.PlotID,
 		q.StartTime.UTC().Format("2006-01-02 15:04:05"),
@@ -72,7 +72,7 @@ func (s *TDengineStore) History(ctx context.Context, q HistoryQuery) (*History, 
 		min, err2 := parseFloat(row[2])
 		max, err3 := parseFloat(row[3])
 		if err1 != nil || err2 != nil || err3 != nil {
-			continue // 空桶（无 FILL 前导数据）跳过
+			continue // 空桶跳过，前端按日期留白。
 		}
 		points = append(points, HistoryPoint{Time: t.UTC(), Avg: avg, Min: min, Max: max})
 	}

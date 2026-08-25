@@ -108,6 +108,11 @@ func TestUpsertRuleNormalizesAndValidatesInput(t *testing.T) {
 		store.hysteresis == nil || !store.hysteresis.Equal(decimal.RequireFromString("2.5")) {
 		t.Fatalf("stored rule = %+v", store.rule)
 	}
+	if _, err := service.UpsertRule(context.Background(), 7, 11, 0, RuleInput{
+		Metric: "soilMoisture", Operator: OperatorLT, Value: 28, DurationSeconds: 60, Level: LevelMedium, Enabled: true,
+	}); err != nil || store.rule.ID != 0 {
+		t.Fatalf("create UpsertRule() = (%+v, %v)", store.rule, err)
+	}
 	_, err = service.UpsertRule(context.Background(), 7, 11, 2, RuleInput{Metric: "soilMoisture", Operator: OperatorLT, Level: "urgent"})
 	if !isRuleValidationError(err) {
 		t.Fatalf("invalid UpsertRule() error = %v", err)
