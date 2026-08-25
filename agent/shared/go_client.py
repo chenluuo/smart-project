@@ -101,6 +101,14 @@ class GoClient:
         )
         return data if isinstance(data, dict) else {}
 
+    def create_threshold(self, authorization: str, plot_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        """新建地块告警阈值规则（Go POST /plots/{id}/thresholds，创建即触发版本化下发）。"""
+        data = self._request(
+            "POST", f"/plots/{plot_id}/thresholds",
+            authorization=authorization, json=body,
+        )
+        return data if isinstance(data, dict) else {}
+
     def get_devices(self, authorization: str, **query: Any) -> list[Any]:
         return self._request("GET", "/devices", authorization=authorization, params=query)
 

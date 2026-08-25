@@ -71,7 +71,8 @@ agri/7/BEARPI-HM-NANO-001/telemetry
 - Topic 中不能包含空格；
 - `ownerId` 必须是大于 0 的整数；
 - `deviceSn` 区分大小写，必须和服务端登记值一致；
-- 一个 MQTT 消息只上传一组当前传感器数据。
+- 一个 MQTT 消息只上传一组当前传感器数据；
+- **`ownerId` 不参与数据归属解析**：服务端按 `deviceSn` 查设备当前有效绑定（`device_bindings → plots`）确定归属地块与归属用户。固件/网关写入的 `ownerId` 即使与管理后台转移后的地块归属不一致，遥测也能正常入库，数据自动跟随设备当前绑定（告警/SSE/在线状态同步路由到当前归属用户）。
 
 ## 5. Payload 字段
 

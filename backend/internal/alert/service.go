@@ -217,8 +217,12 @@ func (s *Service) UpsertRule(ctx context.Context, ownerID, plotID, thresholdID u
 	input.Metric = normalizeRuleMetric(input.Metric)
 	input.Operator = ComparisonOperator(strings.ToUpper(strings.TrimSpace(string(input.Operator))))
 	input.Level = Level(strings.ToUpper(strings.TrimSpace(string(input.Level))))
-	if ownerID == 0 || plotID == 0 || thresholdID == 0 || !validRuleInput(input) {
+	// thresholdID == 0 表示新建规则（repository 按 upsert 语义自动创建）
+	if ownerID == 0 || plotID == 0 {
 		return nil, ErrInvalidInput
+	}
+	if err := validateRuleInput(input); err != nil {
+		return nil, err
 	}
 	now := s.now()
 	var hysteresis *decimal.Decimal
@@ -409,13 +413,43 @@ func (s *Service) Trigger(ctx context.Context, input TriggerInput) (*TriggerResu
 	}, nil
 }
 
-func validRuleInput(input RuleInput) bool {
-	return input.Metric != "" && len(input.Metric) <= 64 &&
-		validMetricThreshold(input.Metric, input.Value) &&
-		(input.Operator == OperatorLT || input.Operator == OperatorLTE || input.Operator == OperatorGT || input.Operator == OperatorGTE) &&
-		!math.IsNaN(input.Value) && !math.IsInf(input.Value, 0) &&
-		(input.Hysteresis == nil || *input.Hysteresis >= 0 && !math.IsNaN(*input.Hysteresis) && !math.IsInf(*input.Hysteresis, 0)) &&
-		input.DurationSeconds >= 0 && input.DurationSeconds <= 86400 && validLevel(input.Level)
+// RuleValidationError 阈值规则字段校验错误，Error() 返回面向调用方的具体提示（含可选项）。
+type RuleValidationError struct {
+	message string
+}
+
+func (e *RuleValidationError) Error() string { return e.message }
+
+func validateRuleInput(input RuleInput) error {
+	if input.Metric == "" || len(input.Metric) > 64 {
+		return &RuleValidationError{"参数错误：metric 必填且长度不能超过 64 个字符"}
+	}
+	switch strings.ToLower(input.Metric) {
+	case "soilmoisture", "temperature", "light":
+	default:
+		return &RuleValidationError{"参数错误：metric 必须为 soilMoisture、temperature 或 light"}
+	}
+	if !validMetricThreshold(input.Metric, input.Value) {
+		return &RuleValidationError{"参数错误：value 超出该指标允许范围（soilMoisture 0~100 / temperature -50~100 / light 0~200000）"}
+	}
+	if math.IsNaN(input.Value) || math.IsInf(input.Value, 0) {
+		return &RuleValidationError{"参数错误：value 必须为有效数字"}
+	}
+	switch input.Operator {
+	case OperatorLT, OperatorLTE, OperatorGT, OperatorGTE:
+	default:
+		return &RuleValidationError{"参数错误：operator 必须为 LT、LTE、GT 或 GTE"}
+	}
+	if input.Hysteresis != nil && (*input.Hysteresis < 0 || math.IsNaN(*input.Hysteresis) || math.IsInf(*input.Hysteresis, 0)) {
+		return &RuleValidationError{"参数错误：hysteresis 必须大于等于 0"}
+	}
+	if input.DurationSeconds < 0 || input.DurationSeconds > 86400 {
+		return &RuleValidationError{"参数错误：durationSeconds 必须在 0~86400 之间"}
+	}
+	if !validLevel(input.Level) {
+		return &RuleValidationError{"参数错误：level 必须为 LOW、MEDIUM 或 HIGH"}
+	}
+	return nil
 }
 
 func validMetricThreshold(metric string, value float64) bool {

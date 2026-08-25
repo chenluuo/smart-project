@@ -96,6 +96,19 @@ export const api = {
   plot: (plotId: number) => request<Plot>(`/api/v1/plots/${plotId}`),
   telemetry: (plotId: number) => request<TelemetryLatest>(`/api/v1/plots/${plotId}/telemetry/latest`),
   thresholds: (plotId: number) => request<ThresholdRule[]>(`/api/v1/plots/${plotId}/thresholds`),
+  createThreshold: (plotId: number, rule: Omit<ThresholdRule, 'id' | 'plotId' | 'unit'>) =>
+    request<ThresholdUpdateResult>(`/api/v1/plots/${plotId}/thresholds`, {
+      method: 'POST',
+      body: JSON.stringify({
+        metric: rule.metric,
+        operator: rule.operator,
+        value: rule.value,
+        hysteresis: rule.hysteresis,
+        durationSeconds: rule.durationSeconds,
+        level: rule.level,
+        enabled: rule.enabled
+      })
+    }),
   updateThreshold: (plotId: number, rule: ThresholdRule) =>
     request<ThresholdUpdateResult>(`/api/v1/plots/${plotId}/thresholds/${rule.id}`, {
       method: 'PUT',

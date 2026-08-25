@@ -541,6 +541,9 @@ Idempotency-Key: irrigation-11-20260822-001
 - `CLOSE` 的 `durationSeconds` 必须为 0 或省略。
 - 地块必须绑定在线的灌溉阀门。
 
+**权限校验（后端 SQL 查归属，不依赖请求/设备 owner）**：
+服务端按 `FindIrrigationDevice(请求者JWT, plotId)` 校验——SQL 从 `plots`（`p.owner_id = 请求者`）→ `device_bindings` → `devices`（类型 `IRRIGATION_VALVE`）查出阀门设备。请求者必须是**该地块的当前归属用户**；校验通过后，MQTT 命令发布到 `{prefix}/{该地块ownerId}/{deviceSn}/command`（topic 的 ownerId 为 SQL 验证过的地块归属，而非请求体或设备上报中的 ownerId）。地块转移归属后，只有新归属用户能下发命令。
+
 请求：
 
 ```json
@@ -669,7 +672,30 @@ Idempotency-Key: irrigation-11-20260822-001
 }
 ```
 
-### 6.2 新增或更新阈值规则并下发配置
+### 6.2 阈值规则：新建与更新并下发配置
+
+#### 新建规则（POST）
+
+`POST /api/v1/plots/{plotId}/thresholds`
+
+无 thresholdId，服务端自动创建规则并触发版本化下发。请求体与更新一致（字段规则见下方 PUT 说明）：
+
+```json
+{
+  "metric": "soilMoisture",
+  "operator": "LT",
+  "value": 28,
+  "hysteresis": 2,
+  "durationSeconds": 300,
+  "level": "MEDIUM",
+  "enabled": true
+}
+```
+
+- 响应 `201`，返回体与 PUT 相同（`id`/`configVersion`/`syncStatus`/`targetCount`）。
+- 错误：`40001` 字段不合法（**逐字段返回可选项提示**，如 `metric 必须为 soilMoisture、temperature 或 light`、`operator 必须为 LT、LTE、GT 或 GTE`、`value 超出该指标允许范围`、`level 必须为 LOW、MEDIUM 或 HIGH`、`durationSeconds 必须在 0~86400 之间`、`hysteresis 必须大于等于 0`）；`40401` 地块不存在。
+
+#### 更新规则（PUT）
 
 `PUT /api/v1/plots/{plotId}/thresholds/{thresholdId}`
 
