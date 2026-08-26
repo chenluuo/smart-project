@@ -183,6 +183,52 @@ func (s *Service) Status(ctx context.Context, ownerID, deviceID uint64) (*Device
 	return result, nil
 }
 
+// AdminStatus 管理后台批量派生设备实时状态（ONLINE/OFFLINE）。
+// 输入来自全量设备列表（含 OwnerID，可能跨用户），内部按 owner 分组读 Redis 心跳，
+// 对每个设备用 offlineAfter 阈值判定在线状态；特殊状态（未激活/禁用/故障/重连）不覆盖。
+func (s *Service) AdminStatus(ctx context.Context, items []AdminDeviceItem) {
+	if s.activity == nil {
+		return
+	}
+	cutoff := time.Now().UTC().Add(-s.offlineAfter)
+	// 按 owner 分组，一次 LastSeen 批量查一个 owner 的设备
+	byOwner := make(map[uint64][]uint64)
+	for i := range items {
+		if items[i].OwnerID == 0 {
+			continue
+		}
+		byOwner[items[i].OwnerID] = append(byOwner[items[i].OwnerID], items[i].Device.ID)
+	}
+	lastSeen := make(map[uint64]time.Time)
+	for ownerID, ids := range byOwner {
+		seen, err := s.activity.LastSeen(ctx, ownerID, ids)
+		if err != nil {
+			slog.Warn("admin device status read activity", "ownerId", ownerID, "error", err)
+			continue
+		}
+		for id, at := range seen {
+			lastSeen[id] = at
+		}
+	}
+	for i := range items {
+		deviceStatus := items[i].Device.Status
+		if deviceStatus == StatusUnactivated || deviceStatus == StatusDisabled ||
+			deviceStatus == StatusFault || deviceStatus == StatusReconnecting {
+			continue
+		}
+		seenAt, ok := lastSeen[items[i].Device.ID]
+		if ok {
+			seenAt = seenAt.UTC()
+			items[i].Device.LastSeenAt = &seenAt
+		}
+		if ok && !seenAt.Before(cutoff) {
+			items[i].Device.Status = StatusOnline
+		} else {
+			items[i].Device.Status = StatusOffline
+		}
+	}
+}
+
 func (s *Service) applyActivity(ctx context.Context, ownerID uint64, items []ListItem) error {
 	ids := make([]uint64, 0, len(items))
 	for i := range items {

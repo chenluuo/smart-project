@@ -312,3 +312,16 @@ export type AdminDevice = {
   firmwareVersion?: string | null;
   lastSeenAt?: string | null;
 };
+
+export type AdminPlotLatest = {
+  plotId: number;
+  plotCode: string;
+  plotName: string;
+  ownerId: number;
+  ownerName?: string | null;
+  status: string;
+  sampleTime?: string | null;
+  soilMoisture?: number | null;
+  temperature?: number | null;
+  light?: number | null;
+};

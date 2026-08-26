@@ -3,6 +3,7 @@ import type {
   AdminDevice,
   AdminKnowledgeDoc,
   AdminPlot,
+  AdminPlotLatest,
   AdminUser,
   AgentMessage,
   AgentSession,
@@ -176,6 +177,10 @@ export const api = {
     request<PageResult<AdminDevice>>(`/api/v1/admin/devices${query({ page: 1, pageSize: 100, ...params })}`),
   adminAlerts: (params: { plotId?: number; status?: string; startTime?: string; endTime?: string; page?: number; pageSize?: number } = {}) =>
     request<PageResult<AlertItem>>(`/api/v1/admin/alerts${query({ page: 1, pageSize: 50, ...params })}`),
+  adminTelemetryLatest: (params: { plotId?: number } = {}) =>
+    request<AdminPlotLatest[]>(`/api/v1/admin/telemetry/latest${query(params)}`),
+  adminDevicesStatus: (params: { plotId?: number; status?: string; type?: string; page?: number; pageSize?: number } = {}) =>
+    request<PageResult<AdminDevice>>(`/api/v1/admin/devices/status${query({ page: 1, pageSize: 100, ...params })}`),
   adminBindDevice: (payload: { deviceSn: string; plotId: number; name: string; type: string }) =>
     request<{ id: number; deviceSn: string; status: string }>('/api/v1/admin/devices/bind', {
       method: 'POST',

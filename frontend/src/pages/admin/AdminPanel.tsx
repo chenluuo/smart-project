@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { api, ApiError } from '../../api';
-import type { AdminDevice, AdminKnowledgeDoc, AdminPlot, AdminUser } from '../../types';
+import type { AdminDevice, AdminKnowledgeDoc, AdminPlot, AdminPlotLatest, AdminUser } from '../../types';
 
 type AdminSection = 'overview' | 'users' | 'plots' | 'knowledge' | 'devices' | 'alerts';
 
@@ -128,6 +128,7 @@ function AdminOverview() {
   const [plots, setPlots] = useState<AdminPlot[]>([]);
   const [pending, setPending] = useState<number | null>(null);
   const [alerts, setAlerts] = useState<number | null>(null);
+  const [latestByPlot, setLatestByPlot] = useState<Record<number, AdminPlotLatest>>({});
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -136,12 +137,18 @@ function AdminOverview() {
       api.adminPlots({ pageSize: 100 }).then((page) => page.items).catch(() => [] as AdminPlot[]),
       api.adminKnowledgeDocs({ status: 'DRAFT', pageSize: 1 }).then((page) => page.total).catch(() => null),
       api.adminKnowledgeDocs({ status: 'APPROVED', pageSize: 1 }).then((page) => page.total).catch(() => null),
-      api.adminAlerts({ pageSize: 1 }).then((page) => page.total).catch(() => null)
-    ]).then(([userTotal, plotItems, draftTotal, approvedTotal, alertTotal]) => {
+      api.adminAlerts({ pageSize: 1 }).then((page) => page.total).catch(() => null),
+      api.adminTelemetryLatest().then((items) => items).catch(() => [] as AdminPlotLatest[])
+    ]).then(([userTotal, plotItems, draftTotal, approvedTotal, alertTotal, latest]) => {
       setUsers(userTotal);
       setPlots(plotItems);
       setPending((draftTotal ?? 0) + (approvedTotal ?? 0));
       setAlerts(alertTotal);
+      const byPlot: Record<number, AdminPlotLatest> = {};
+      for (const item of latest) {
+        byPlot[item.plotId] = item;
+      }
+      setLatestByPlot(byPlot);
     }).catch((err) => setError(errorMessage(err)));
   }, []);
 
@@ -176,19 +183,24 @@ function AdminOverview() {
                 <th>名称</th>
                 <th>归属用户</th>
                 <th>设备</th>
-                <th>状态</th>
+                <th>土壤湿度</th>
+                <th>温度</th>
               </tr>
             </thead>
             <tbody>
-              {plots.slice(0, 10).map((plot) => (
-                <tr key={plot.id}>
-                  <td>{plot.code}</td>
-                  <td>{plot.name}</td>
-                  <td>{plot.ownerName || `#${plot.ownerId}`}</td>
-                  <td>{plot.deviceCount}</td>
-                  <td>{plot.status === 'ACTIVE' ? '启用' : '停用'}</td>
-                </tr>
-              ))}
+              {plots.slice(0, 10).map((plot) => {
+                const latest = latestByPlot[plot.id];
+                return (
+                  <tr key={plot.id}>
+                    <td>{plot.code}</td>
+                    <td>{plot.name}</td>
+                    <td>{plot.ownerName || `#${plot.ownerId}`}</td>
+                    <td>{plot.deviceCount}</td>
+                    <td>{latest?.soilMoisture != null ? `${latest.soilMoisture.toFixed(1)}%` : '--'}</td>
+                    <td>{latest?.temperature != null ? `${latest.temperature.toFixed(1)}℃` : '--'}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -739,7 +751,7 @@ function PreviewDrawer(props: { doc: AdminKnowledgeDoc; onClose: () => void }) {
 // ---------------- 设备管理 ----------------
 
 function AdminDevices() {
-  const { data, loading, error, refresh } = useAdminLoader(() => api.adminDevices({ pageSize: 100 }), []);
+  const { data, loading, error, refresh } = useAdminLoader(() => api.adminDevicesStatus({ pageSize: 100 }), []);
   const plots = useAdminLoader(() => api.adminPlots({ pageSize: 100 }), []);
   const [sn, setSn] = useState('');
   const [name, setName] = useState('');
@@ -851,7 +863,12 @@ function AdminDevices() {
                     <td>{device.name}</td>
                     <td>{device.type}</td>
                     <td>
-                      <span className={`admin-badge ${device.status === 'ONLINE' ? 'ok' : ''}`}>{device.status}</span>
+                      <span className={`admin-badge ${device.status === 'ONLINE' ? 'ok' : device.status === 'OFFLINE' ? 'off' : ''}`}>
+                        {deviceStatusName(device.status)}
+                      </span>
+                      {device.lastSeenAt && (
+                        <small className="admin-device-seen">心跳 {formatDateTime(device.lastSeenAt)}</small>
+                      )}
                     </td>
                     <td>
                       {device.plotId > 0 ? (
@@ -1015,6 +1032,18 @@ function formatDateTime(value?: string | null) {
     year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit'
   });
+}
+
+function deviceStatusName(status: string) {
+  const names: Record<string, string> = {
+    ONLINE: '在线',
+    OFFLINE: '离线',
+    UNACTIVATED: '未激活',
+    RECONNECTING: '重连中',
+    FAULT: '故障',
+    DISABLED: '禁用'
+  };
+  return names[status] ?? status;
 }
 
 // ---------------- 工具函数 ----------------

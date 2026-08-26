@@ -170,6 +170,7 @@ type AdminDeviceItem struct {
 	PlotCode  *string
 	PlotName  *string
 	OwnerName *string
+	OwnerID   uint64
 }
 
 type adminDeviceRow struct {
@@ -178,6 +179,7 @@ type adminDeviceRow struct {
 	PlotCode  *string `gorm:"column:plot_code"`
 	PlotName  *string `gorm:"column:plot_name"`
 	OwnerName *string `gorm:"column:owner_name"`
+	OwnerID   uint64  `gorm:"column:owner_id"`
 }
 
 // AdminList 管理后台全量设备列表（不做归属过滤，含未绑定设备）。
@@ -211,7 +213,7 @@ func (r Repositories) AdminList(ctx context.Context, filter ListFilter) ([]Admin
 	}
 	var rows []adminDeviceRow
 	err := query.Select(
-		"d.*, COALESCE(b.plot_id, 0) AS plot_id, p.code AS plot_code, p.name AS plot_name, u.name AS owner_name",
+		"d.*, COALESCE(b.plot_id, 0) AS plot_id, p.code AS plot_code, p.name AS plot_name, u.name AS owner_name, COALESCE(p.owner_id, 0) AS owner_id",
 	).Order("d.id ASC").Limit(filter.PageSize).Offset((filter.Page - 1) * filter.PageSize).Scan(&rows).Error
 	if err != nil {
 		return nil, 0, err
@@ -221,6 +223,7 @@ func (r Repositories) AdminList(ctx context.Context, filter ListFilter) ([]Admin
 		items = append(items, AdminDeviceItem{
 			Device: rows[index].Device, PlotID: rows[index].PlotID,
 			PlotCode: rows[index].PlotCode, PlotName: rows[index].PlotName, OwnerName: rows[index].OwnerName,
+			OwnerID: rows[index].OwnerID,
 		})
 	}
 	return items, total, nil
