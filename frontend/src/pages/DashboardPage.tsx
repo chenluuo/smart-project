@@ -492,4 +492,3 @@ function formatTime(value?: string | null) {
   if (Number.isNaN(date.getTime())) return '--';
   return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
 }
-
