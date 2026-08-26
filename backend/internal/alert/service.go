@@ -163,6 +163,7 @@ type Store interface {
 	UpsertRuleByOwner(context.Context, uint64, *Rule, *decimal.Decimal, time.Time) (RulePersistenceResult, error)
 	ThresholdSyncByOwner(context.Context, uint64, uint64, uint64) (*ThresholdSyncView, error)
 	ListAlertsByOwner(context.Context, uint64, ListFilter) ([]AlertListRow, int64, error)
+	AdminListAlerts(context.Context, ListFilter) ([]AlertListRow, int64, error)
 	ConfirmAlertByOwner(context.Context, uint64, uint64, string, time.Time) (*Alert, error)
 	CreateTriggeredAlert(context.Context, TriggerInput, time.Time) (*TriggerRecord, error)
 	SyncDeviceWarnings(context.Context, DeviceWarningInput, time.Time) ([]WarningTransition, error)
@@ -286,6 +287,30 @@ func (s *Service) List(ctx context.Context, ownerID uint64, filter ListFilter) (
 	if err != nil {
 		return ListResult{}, fmt.Errorf("list alerts: %w", err)
 	}
+	return listResultFromRows(rows, total, filter), nil
+}
+
+// AdminList 管理后台查询全部告警记录（不做 owner 归属过滤）。
+func (s *Service) AdminList(ctx context.Context, filter ListFilter) (ListResult, error) {
+	if filter.Page == 0 {
+		filter.Page = 1
+	}
+	if filter.PageSize == 0 {
+		filter.PageSize = 20
+	}
+	if filter.Page < 1 || filter.PageSize < 1 || filter.PageSize > 100 ||
+		filter.PlotID != nil && *filter.PlotID == 0 || filter.Status != nil && !validStatus(*filter.Status) ||
+		filter.StartTime != nil && filter.EndTime != nil && filter.StartTime.After(*filter.EndTime) {
+		return ListResult{}, ErrInvalidInput
+	}
+	rows, total, err := s.store.AdminListAlerts(ctx, filter)
+	if err != nil {
+		return ListResult{}, fmt.Errorf("list all alerts: %w", err)
+	}
+	return listResultFromRows(rows, total, filter), nil
+}
+
+func listResultFromRows(rows []AlertListRow, total int64, filter ListFilter) ListResult {
 	items := make([]ListItem, 0, len(rows))
 	for _, row := range rows {
 		if row.WarningType != nil {
@@ -309,7 +334,7 @@ func (s *Service) List(ctx context.Context, ownerID uint64, filter ListFilter) (
 			ConfirmedAt: row.AcknowledgedAt, ConfirmRemark: row.ConfirmationRemark, RecoveredAt: row.ResolvedAt,
 		})
 	}
-	return ListResult{Items: items, Page: filter.Page, PageSize: filter.PageSize, Total: total}, nil
+	return ListResult{Items: items, Page: filter.Page, PageSize: filter.PageSize, Total: total}
 }
 
 func (s *Service) SyncDeviceWarnings(ctx context.Context, input DeviceWarningInput) ([]WarningTransition, error) {

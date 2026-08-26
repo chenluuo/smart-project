@@ -18,12 +18,13 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { api, ApiError } from '../../api';
 import type { AdminDevice, AdminKnowledgeDoc, AdminPlot, AdminUser } from '../../types';
 
-type AdminSection = 'overview' | 'users' | 'plots' | 'knowledge' | 'devices';
+type AdminSection = 'overview' | 'users' | 'plots' | 'knowledge' | 'devices' | 'alerts';
 
 const ADMIN_SECTIONS: Array<{ key: AdminSection; label: string; icon: React.ReactNode }> = [
   { key: 'overview', label: '总览', icon: <LayoutDashboard size={17} /> },
   { key: 'users', label: '用户管理', icon: <Users size={17} /> },
   { key: 'plots', label: '地块管理', icon: <Map size={17} /> },
+  { key: 'alerts', label: '报警记录', icon: <AlertTriangle size={17} /> },
   { key: 'knowledge', label: '文件审批', icon: <BookOpen size={17} /> },
   { key: 'devices', label: '设备管理', icon: <FileText size={17} /> }
 ];
@@ -74,6 +75,7 @@ export function AdminPanel(props: { user: { id: number; name: string } | null; o
           {section === 'overview' && <AdminOverview />}
           {section === 'users' && <AdminUsers />}
           {section === 'plots' && <AdminPlots />}
+          {section === 'alerts' && <AdminAlerts />}
           {section === 'knowledge' && <AdminKnowledge />}
           {section === 'devices' && <AdminDevices />}
         </div>
@@ -134,7 +136,7 @@ function AdminOverview() {
       api.adminPlots({ pageSize: 100 }).then((page) => page.items).catch(() => [] as AdminPlot[]),
       api.adminKnowledgeDocs({ status: 'DRAFT', pageSize: 1 }).then((page) => page.total).catch(() => null),
       api.adminKnowledgeDocs({ status: 'APPROVED', pageSize: 1 }).then((page) => page.total).catch(() => null),
-      api.alerts({ pageSize: 1 }).then((page) => page.total).catch(() => null)
+      api.adminAlerts({ pageSize: 1 }).then((page) => page.total).catch(() => null)
     ]).then(([userTotal, plotItems, draftTotal, approvedTotal, alertTotal]) => {
       setUsers(userTotal);
       setPlots(plotItems);
@@ -149,7 +151,7 @@ function AdminOverview() {
     { label: '地块总数', value: plots.length, tone: 'blue' },
     { label: '绑定设备', value: deviceCount, tone: 'amber' },
     { label: '待审批文件', value: pending ?? '--', tone: 'purple' },
-    { label: '活跃告警', value: alerts ?? '--', tone: 'red' }
+    { label: '告警总数', value: alerts ?? '--', tone: 'red' }
   ];
 
   return (
@@ -879,6 +881,134 @@ function AdminDevices() {
       </AdminState>
     </div>
   );
+}
+
+// ---------------- 报警记录 ----------------
+
+const ALERT_STATUS_NAMES: Record<string, string> = {
+  ACTIVE: '告警中',
+  ACKNOWLEDGED: '已确认',
+  CONFIRMED: '已处理',
+  RESOLVED: '已恢复'
+};
+
+const ALERT_LEVEL_NAMES: Record<string, string> = {
+  LOW: '低',
+  MEDIUM: '中',
+  HIGH: '高',
+  CRITICAL: '严重'
+};
+
+const ALERT_METRIC_NAMES: Record<string, string> = {
+  soilMoisture: '土壤湿度',
+  temperature: '温度',
+  light: '光照',
+  humidity: '空气湿度'
+};
+
+function AdminAlerts() {
+  const [status, setStatus] = useState('');
+  const [query, setQuery] = useState<{ status?: string }>({});
+  const { data, loading, error, refresh } = useAdminLoader(
+    () => api.adminAlerts({ ...query, pageSize: 100 }),
+    [query]
+  );
+
+  const tabs = [
+    { key: '', label: '全部' },
+    { key: 'ACTIVE', label: '告警中' },
+    { key: 'CONFIRMED', label: '已处理' },
+    { key: 'RESOLVED', label: '已恢复' }
+  ];
+
+  return (
+    <div className="admin-stack">
+      <div className="admin-filter-bar">
+        <div className="admin-tabs">
+          {tabs.map((tab) => (
+            <button
+              key={tab.key}
+              className={query.status === tab.key ? 'active' : ''}
+              onClick={() => setQuery({ status: tab.key })}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+        <button type="button" className="ghost" onClick={refresh} title="刷新">
+          <RefreshCw size={15} />
+        </button>
+      </div>
+      <AdminState loading={loading} error={error}>
+        <section className="admin-card">
+          <div className="admin-table-wrap">
+            <table className="admin-table">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>地块</th>
+                  <th>指标</th>
+                  <th>级别</th>
+                  <th>告警内容</th>
+                  <th>触发值</th>
+                  <th>状态</th>
+                  <th>触发时间</th>
+                  <th>处理备注</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(data?.items ?? []).map((alert) => (
+                  <tr key={alert.id}>
+                    <td>{alert.id}</td>
+                    <td className="admin-strong">
+                      {alert.plotCode || `#${alert.plotId}`}
+                    </td>
+                    <td>{ALERT_METRIC_NAMES[alert.metric] ?? alert.metric}</td>
+                    <td>
+                      <span className={`admin-badge ${alert.level === 'HIGH' || alert.level === 'CRITICAL' ? 'danger' : 'warn'}`}>
+                        {ALERT_LEVEL_NAMES[alert.level] ?? alert.level}
+                      </span>
+                    </td>
+                    <td className="admin-ellipsis" title={alert.title}>{alert.title}</td>
+                    <td>{alert.currentValue != null ? alert.currentValue : '--'}</td>
+                    <td>
+                      <span className={`admin-badge ${alert.status === 'ACTIVE' ? 'danger' : alert.status === 'RESOLVED' ? 'ok' : ''}`}>
+                        {ALERT_STATUS_NAMES[alert.status] ?? alert.status}
+                      </span>
+                    </td>
+                    <td>{formatDateTime(alert.startedAt)}</td>
+                    <td className="admin-ellipsis" title={alert.confirmRemark ?? ''}>
+                      {alert.confirmRemark || '--'}
+                    </td>
+                  </tr>
+                ))}
+                {(data?.items ?? []).length === 0 && (
+                  <tr>
+                    <td colSpan={9} className="admin-empty">暂无报警记录。</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+          {data && data.total > (data.items ?? []).length && (
+            <div className="admin-pager">
+              共 {data.total} 条记录（当前显示最近 {data.items.length} 条，可按状态筛选）
+            </div>
+          )}
+        </section>
+      </AdminState>
+    </div>
+  );
+}
+
+function formatDateTime(value?: string | null) {
+  if (!value) return '--';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '--';
+  return date.toLocaleString('zh-CN', {
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit'
+  });
 }
 
 // ---------------- 工具函数 ----------------

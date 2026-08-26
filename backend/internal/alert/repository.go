@@ -284,10 +284,21 @@ func (r Repositories) ExpireThresholdDeliveries(ctx context.Context, now time.Ti
 }
 
 func (r Repositories) ListAlertsByOwner(ctx context.Context, ownerID uint64, filter ListFilter) ([]AlertListRow, int64, error) {
+	return r.listAlerts(ctx, filter, &ownerID)
+}
+
+// AdminListAlerts 管理后台查询全部告警记录（不做 owner 归属过滤）。
+func (r Repositories) AdminListAlerts(ctx context.Context, filter ListFilter) ([]AlertListRow, int64, error) {
+	return r.listAlerts(ctx, filter, nil)
+}
+
+func (r Repositories) listAlerts(ctx context.Context, filter ListFilter, ownerID *uint64) ([]AlertListRow, int64, error) {
 	query := r.db.WithContext(ctx).Table("alerts AS a").
 		Joins("LEFT JOIN alert_rules AS ar ON ar.id = a.rule_id").
-		Joins("JOIN plots AS p ON p.id = a.plot_id").
-		Where("p.owner_id = ?", ownerID)
+		Joins("JOIN plots AS p ON p.id = a.plot_id")
+	if ownerID != nil {
+		query = query.Where("p.owner_id = ?", *ownerID)
+	}
 	if filter.PlotID != nil {
 		query = query.Where("p.id = ?", *filter.PlotID)
 	}

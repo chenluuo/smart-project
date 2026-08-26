@@ -119,6 +119,7 @@ func NewRouterWithAdminServices(
 	adminPlots adminPlotService,
 	adminKnowledge adminKnowledgeService,
 	adminDevices adminDeviceService,
+	adminAlerts adminAlertService,
 	eventSubscribers ...eventSubscriber,
 ) *gin.Engine {
 	router := NewRouterWithBackendServices(
@@ -136,6 +137,9 @@ func NewRouterWithAdminServices(
 	}
 	if adminDevices != nil {
 		registerAdminDeviceRoutes(router, auth, adminDevices)
+	}
+	if adminAlerts != nil {
+		registerAdminAlertRoutes(router, auth, adminAlerts)
 	}
 	return router
 }

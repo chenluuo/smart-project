@@ -66,6 +66,11 @@ func (s *cachedStore) ListAlertsByOwner(ctx context.Context, ownerID uint64, fil
 	return rows, total, err
 }
 
+// AdminListAlerts 管理后台全量查询不经过缓存，直接透传（管理员低频查询，保证实时）。
+func (s *cachedStore) AdminListAlerts(ctx context.Context, filter ListFilter) ([]AlertListRow, int64, error) {
+	return s.next.AdminListAlerts(ctx, filter)
+}
+
 func (s *cachedStore) ConfirmAlertByOwner(ctx context.Context, ownerID, alertID uint64, remark string, now time.Time) (*Alert, error) {
 	result, err := s.next.ConfirmAlertByOwner(ctx, ownerID, alertID, remark, now)
 	if err == nil {
