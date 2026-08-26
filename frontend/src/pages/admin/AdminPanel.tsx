@@ -914,6 +914,12 @@ function AdminAlerts() {
     [query]
   );
 
+  // 自动轮询：告警状态（ACTIVE→RESOLVED）由设备侧异步变化，30s 自动刷新保持页面不过期
+  useEffect(() => {
+    const timer = window.setInterval(() => refresh(), 30_000);
+    return () => window.clearInterval(timer);
+  }, [refresh]);
+
   const tabs = [
     { key: '', label: '全部' },
     { key: 'ACTIVE', label: '告警中' },

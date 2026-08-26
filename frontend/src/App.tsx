@@ -236,10 +236,17 @@ export default function App() {
   useEffect(() => {
     if (!user) return;
     const controller = new AbortController();
+    // 告警/命令状态变化事件 → 后台刷新告警列表（避免页面停留时状态过期）
+    const alertStateEvents = new Set(['alert.created', 'alert.recovered', 'command.result']);
     streamEvents((event) => {
       if (event.type === telemetryUpdatedEvent) {
         setData((current) => applyTelemetryEvent(current, event));
         return;
+      }
+      if (alertStateEvents.has(event.type)) {
+        void api.alerts()
+          .then((page) => setData((current) => ({ ...current, alerts: page.items })))
+          .catch(() => undefined);
       }
       setEvents((current) => [event, ...current].slice(0, 5));
     }, controller.signal).catch(() => undefined);
