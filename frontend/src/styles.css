@@ -348,6 +348,34 @@ button.button-feedback {
   gap: 7px;
 }
 
+.trend-selected-day {
+  border: 0;
+  padding: 0;
+  color: var(--trend-color);
+  background: transparent;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.trend-selected-day:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.trend-selected-day:focus-visible {
+  outline: 2px solid #80be89;
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+.trend-selected-day-hint {
+  margin-left: 4px;
+  color: #76867d;
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .trend-chart > svg {
   display: block;
   width: 100%;
@@ -383,7 +411,35 @@ button.button-feedback {
   stroke: var(--trend-color);
   stroke-linecap: round;
   stroke-linejoin: round;
-  stroke-width: 3;
+  stroke-width: 1.5;
+}
+
+.trend-date-target {
+  cursor: pointer;
+}
+
+.trend-date-selection {
+  fill: transparent;
+  stroke: transparent;
+  transition: fill 160ms ease, stroke 160ms ease;
+}
+
+.trend-date-target:hover .trend-date-selection,
+.trend-date-target:focus-visible .trend-date-selection {
+  fill: #f0f8f1;
+  stroke: #cfe5d1;
+}
+
+.trend-date-target:hover .trend-x-label,
+.trend-date-target:focus-visible .trend-x-label {
+  fill: var(--trend-color);
+  font-weight: 800;
+}
+
+.trend-chart.temperature .trend-date-target:hover .trend-date-selection,
+.trend-chart.temperature .trend-date-target:focus-visible .trend-date-selection {
+  fill: #fff3ee;
+  stroke: #f2cfbf;
 }
 
 .metric-grid {

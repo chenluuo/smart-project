@@ -1,4 +1,5 @@
 import { AlertTriangle, Droplets, Map as MapIcon, Power, Thermometer, TrendingUp, Wifi } from 'lucide-react';
+import { useState } from 'react';
 import type { ReactNode } from 'react';
 import type {
   AlertItem,
@@ -86,6 +87,7 @@ export function DashboardPage({
           onSelectMetric={onSelectTrendMetric}
         />
         <SevenDayTrend
+          key={`${selectedPlot?.id ?? 'unselected'}-${trendMetric}`}
           plot={selectedPlot}
           metric={trendMetric}
           history={selectedTrendHistory}
@@ -222,17 +224,22 @@ function SevenDayTrend(props: {
   latest?: TelemetryLatest;
   loading: boolean;
 }) {
+  const [selectedDayKey, setSelectedDayKey] = useState<string | null>(null);
   const latestValue = props.metric === 'soilMoisture'
     ? props.latest?.metrics.soilMoisture?.value
     : props.latest?.metrics.temperature?.value;
   const samples = tenMinuteTrendSamples(props.history?.points ?? [], { time: props.latest?.sampleTime, value: latestValue });
   const axisDays = recentDayAxis();
-  const values = samples.flatMap((sample) => sample.value == null ? [] : [sample.value]);
+  const selectedDay = selectedDayKey && axisDays.some((day) => day.key === selectedDayKey) ? selectedDayKey : null;
+  const selectedDayLabel = axisDays.find((day) => day.key === selectedDay)?.label;
+  const displaySamples = selectedDay ? singleDayTrendSamples(samples, selectedDay) : samples;
+  const axis = selectedDay ? singleDayAxis() : axisDays;
+  const values = displaySamples.flatMap((sample) => sample.value == null ? [] : [sample.value]);
   const domain = trendDomain(values, props.metric);
   const chart = { left: 38, right: 12, top: 20, bottom: 34, width: 322, height: 144 };
-  const points = samples.map((sample, index) => ({
+  const points = displaySamples.map((sample, index) => ({
     ...sample,
-    x: chart.left + (chart.width * index) / Math.max(1, samples.length - 1),
+    x: chart.left + (chart.width * index) / Math.max(1, displaySamples.length - 1),
     y: sample.value == null
       ? null
       : chart.top + ((domain.max - sample.value) / (domain.max - domain.min)) * chart.height
@@ -241,19 +248,33 @@ function SevenDayTrend(props: {
   const hasValues = values.length > 0;
   const metricLabel = trendMetricLabel(props.metric);
   const tone = props.metric === 'soilMoisture' ? 'soil' : 'temperature';
+  const chartTitle = selectedDay ? `${selectedDayLabel ?? ''}${metricLabel}趋势` : `近7日${metricLabel}趋势`;
+  const chartDescription = props.plot ? `${props.plot.name}${chartTitle}图` : `${chartTitle}图`;
+
+  const toggleDay = (dayKey: string) => {
+    setSelectedDayKey((current) => current === dayKey ? null : dayKey);
+  };
 
   return (
     <div className={`trend-chart ${tone} ${props.loading ? 'is-loading' : ''}`} aria-busy={props.loading}>
       <div className="trend-chart-head">
-        <span>
-          <TrendingUp size={18} />
-          近7日{metricLabel}趋势
-        </span>
+        <TrendingUp size={18} />
+        {selectedDay ? (
+          <button
+            type="button"
+            className="trend-selected-day"
+            title="再次点击返回近7日总览"
+            onClick={() => setSelectedDayKey(null)}
+          >
+            {chartTitle}
+            <span className="trend-selected-day-hint">（点击退出）</span>
+          </button>
+        ) : <span>{chartTitle}</span>}
       </div>
       <svg
         viewBox="0 0 372 212"
-        role="img"
-        aria-label={props.plot ? `${props.plot.name}近7日${metricLabel}趋势图` : `近7日${metricLabel}趋势图`}
+        role="group"
+        aria-label={chartDescription}
       >
         {[0, 0.5, 1].map((ratio) => {
           const y = chart.top + chart.height * ratio;
@@ -265,28 +286,51 @@ function SevenDayTrend(props: {
             </g>
           );
         })}
-        {axisDays.map((day, index) => {
-          const x = chart.left + (chart.width * index) / Math.max(1, axisDays.length - 1);
+        {axis.map((item) => {
+          const x = chart.left + chart.width * item.ratio;
           return (
-          <line
-            className="trend-grid-line vertical"
-            key={day.key}
-            x1={x}
-            x2={x}
-            y1={chart.top}
-            y2={chart.top + chart.height}
-          />
+            <line
+              className="trend-grid-line vertical"
+              key={item.key}
+              x1={x}
+              x2={x}
+              y1={chart.top}
+              y2={chart.top + chart.height}
+            />
           );
         })}
         {lineSegments.map((path, index) => (
           <path className="trend-line" d={path} key={index} />
         ))}
-        {axisDays.map((day, index) => {
-          const x = chart.left + (chart.width * index) / Math.max(1, axisDays.length - 1);
+        {axis.map((item) => {
+          const x = chart.left + chart.width * item.ratio;
+          if (selectedDay) {
+            return (
+              <text className="trend-x-label" key={`label-${item.key}`} x={x} y={chart.top + chart.height + 24}>
+                {item.label}
+              </text>
+            );
+          }
+
           return (
-          <text className="trend-x-label" key={`label-${day.key}`} x={x} y={chart.top + chart.height + 24}>
-            {day.label}
-          </text>
+            <g
+              className="trend-date-target"
+              key={`label-${item.key}`}
+              role="button"
+              tabIndex={0}
+              aria-label={`查看${item.label}${metricLabel}单日趋势`}
+              aria-pressed={false}
+              onClick={() => toggleDay(item.key)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  toggleDay(item.key);
+                }
+              }}
+            >
+              <rect className="trend-date-selection" x={x - 23} y={chart.top + chart.height + 9} width="46" height="28" rx="8" />
+              <text className="trend-x-label" x={x} y={chart.top + chart.height + 28}>{item.label}</text>
+            </g>
           );
         })}
       </svg>
@@ -339,10 +383,36 @@ function recentDayAxis() {
     const date = new Date(today);
     date.setDate(date.getDate() - 6 + index);
     return {
-      key: `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`,
-      label: date.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })
+      key: localDayKey(date),
+      label: date.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' }),
+      ratio: index / 6
     };
   });
+}
+
+function singleDayAxis() {
+  return [0, 4, 8, 12, 16, 20, 24].map((hour) => ({
+    key: `${hour}:00`,
+    label: `${String(hour).padStart(2, '0')}:00`,
+    ratio: hour / 24
+  }));
+}
+
+function singleDayTrendSamples(samples: Array<{ key: string; time: number; value: number | null }>, dayKey: string) {
+  const [year, month, day] = dayKey.split('-').map(Number);
+  const start = new Date(year, month - 1, day).getTime();
+  const samplesByTime = new Map(samples.map((sample) => [sample.time, sample]));
+
+  return Array.from({ length: 24 * 6 }, (_, index) => {
+    const time = start + index * tenMinuteMilliseconds;
+    return samplesByTime.get(time) ?? { key: String(time), time, value: null };
+  });
+}
+
+function localDayKey(date: Date) {
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${date.getFullYear()}-${month}-${day}`;
 }
 
 function trendDomain(values: number[], metric: TelemetryHistoryMetric) {
