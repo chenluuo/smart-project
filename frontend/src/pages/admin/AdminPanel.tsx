@@ -136,7 +136,7 @@ function AdminOverview() {
       api.adminPlots({ pageSize: 100 }).then((page) => page.items).catch(() => [] as AdminPlot[]),
       api.adminKnowledgeDocs({ status: 'DRAFT', pageSize: 1 }).then((page) => page.total).catch(() => null),
       api.adminKnowledgeDocs({ status: 'APPROVED', pageSize: 1 }).then((page) => page.total).catch(() => null),
-      api.alerts({ pageSize: 1 }).then((page) => page.total).catch(() => null)
+      api.adminAlerts({ pageSize: 1 }).then((page) => page.total).catch(() => null)
     ]).then(([userTotal, plotItems, draftTotal, approvedTotal, alertTotal]) => {
       setUsers(userTotal);
       setPlots(plotItems);
@@ -151,7 +151,7 @@ function AdminOverview() {
     { label: '地块总数', value: plots.length, tone: 'blue' },
     { label: '绑定设备', value: deviceCount, tone: 'amber' },
     { label: '待审批文件', value: pending ?? '--', tone: 'purple' },
-    { label: '活跃告警', value: alerts ?? '--', tone: 'red' }
+    { label: '告警总数', value: alerts ?? '--', tone: 'red' }
   ];
 
   return (
