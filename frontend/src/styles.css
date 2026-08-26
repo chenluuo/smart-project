@@ -386,12 +386,6 @@ button.button-feedback {
   stroke-width: 3;
 }
 
-.trend-point {
-  fill: #fff;
-  stroke: var(--trend-color);
-  stroke-width: 2.5;
-}
-
 .metric-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

@@ -667,6 +667,12 @@ export default function App() {
 
         {view === 'manage' && (
           <div className="screen-content">
+            <AlarmCenterPage
+              plots={data.plots}
+              alerts={data.alerts}
+              busy={busy}
+              onConfirmAlert={confirmAlert}
+            />
             <ControlPanelPage
               plots={data.plots}
               selectedPlot={selectedPlot}
@@ -675,12 +681,6 @@ export default function App() {
               busy={busy}
               onSelectPlot={selectPlot}
               onIrrigate={issueIrrigation}
-            />
-            <AlarmCenterPage
-              plots={data.plots}
-              alerts={data.alerts}
-              busy={busy}
-              onConfirmAlert={confirmAlert}
             />
             <KnowledgePage
               user={user}

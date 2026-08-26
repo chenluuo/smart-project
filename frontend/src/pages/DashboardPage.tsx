@@ -222,20 +222,20 @@ function SevenDayTrend(props: {
   latest?: TelemetryLatest;
   loading: boolean;
 }) {
-  const unit = props.history?.unit ?? trendMetricUnit(props.metric);
   const latestValue = props.metric === 'soilMoisture'
     ? props.latest?.metrics.soilMoisture?.value
     : props.latest?.metrics.temperature?.value;
-  const days = recentDays(props.history?.points ?? [], { time: props.latest?.sampleTime, value: latestValue });
-  const values = days.flatMap((day) => day.value == null ? [] : [day.value]);
+  const samples = tenMinuteTrendSamples(props.history?.points ?? [], { time: props.latest?.sampleTime, value: latestValue });
+  const axisDays = recentDayAxis();
+  const values = samples.flatMap((sample) => sample.value == null ? [] : [sample.value]);
   const domain = trendDomain(values, props.metric);
   const chart = { left: 38, right: 12, top: 20, bottom: 34, width: 322, height: 144 };
-  const points = days.map((day, index) => ({
-    ...day,
-    x: chart.left + (chart.width * index) / (days.length - 1),
-    y: day.value == null
+  const points = samples.map((sample, index) => ({
+    ...sample,
+    x: chart.left + (chart.width * index) / Math.max(1, samples.length - 1),
+    y: sample.value == null
       ? null
-      : chart.top + ((domain.max - day.value) / (domain.max - domain.min)) * chart.height
+      : chart.top + ((domain.max - sample.value) / (domain.max - domain.min)) * chart.height
   }));
   const lineSegments = trendLineSegments(points);
   const hasValues = values.length > 0;
@@ -265,63 +265,84 @@ function SevenDayTrend(props: {
             </g>
           );
         })}
-        {points.map((point) => (
+        {axisDays.map((day, index) => {
+          const x = chart.left + (chart.width * index) / Math.max(1, axisDays.length - 1);
+          return (
           <line
             className="trend-grid-line vertical"
-            key={point.key}
-            x1={point.x}
-            x2={point.x}
+            key={day.key}
+            x1={x}
+            x2={x}
             y1={chart.top}
             y2={chart.top + chart.height}
           />
-        ))}
+          );
+        })}
         {lineSegments.map((path, index) => (
           <path className="trend-line" d={path} key={index} />
         ))}
-        {points.map((point) => point.y != null && point.value != null && (
-          <circle className="trend-point" cx={point.x} cy={point.y} r="4" key={`point-${point.key}`}>
-            <title>{`${point.label} ${formatTrendValue(point.value)}${unit}`}</title>
-          </circle>
-        ))}
-        {points.map((point) => (
-          <text className="trend-x-label" key={`label-${point.key}`} x={point.x} y={chart.top + chart.height + 24}>
-            {point.label}
+        {axisDays.map((day, index) => {
+          const x = chart.left + (chart.width * index) / Math.max(1, axisDays.length - 1);
+          return (
+          <text className="trend-x-label" key={`label-${day.key}`} x={x} y={chart.top + chart.height + 24}>
+            {day.label}
           </text>
-        ))}
+          );
+        })}
       </svg>
     </div>
   );
 }
 
-function recentDays(history: TelemetryHistory['points'], latest?: { time?: string | null; value?: number }) {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const slots = Array.from({ length: 7 }, (_, index) => {
-    const date = new Date(today);
-    date.setDate(date.getDate() - 6 + index);
-    return {
-      key: dayKey(date),
-      label: date.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' }),
-      value: null as number | null
-    };
-  });
-  const valuesByDay = new Map<string, number>();
+const tenMinuteMilliseconds = 10 * 60 * 1000;
+const sevenDayTrendSampleCount = 7 * 24 * 6;
+
+function tenMinuteTrendSamples(history: TelemetryHistory['points'], latest?: { time?: string | null; value?: number }) {
+  const end = Math.floor(Date.now() / tenMinuteMilliseconds) * tenMinuteMilliseconds;
+  const start = end - (sevenDayTrendSampleCount - 1) * tenMinuteMilliseconds;
+  const buckets = new Map<number, { total: number; count: number }>();
 
   history.forEach((point) => {
-    const date = new Date(point.time);
-    if (Number.isNaN(date.getTime()) || !Number.isFinite(point.avg)) return;
-    valuesByDay.set(dayKey(date), point.avg);
+    const time = new Date(point.time).getTime();
+    if (Number.isNaN(time) || !Number.isFinite(point.avg)) return;
+    const bucket = Math.floor(time / tenMinuteMilliseconds) * tenMinuteMilliseconds;
+    if (bucket < start || bucket > end) return;
+    const aggregate = buckets.get(bucket) ?? { total: 0, count: 0 };
+    aggregate.total += point.avg;
+    aggregate.count += 1;
+    buckets.set(bucket, aggregate);
   });
 
   if (latest?.time && latest.value != null && Number.isFinite(latest.value)) {
-    const date = new Date(latest.time);
-    if (!Number.isNaN(date.getTime())) {
-      const key = dayKey(date);
-      if (!valuesByDay.has(key)) valuesByDay.set(key, latest.value);
+    const time = new Date(latest.time).getTime();
+    const bucket = Math.floor(time / tenMinuteMilliseconds) * tenMinuteMilliseconds;
+    if (!Number.isNaN(time) && bucket >= start && bucket <= end && !buckets.has(bucket)) {
+      buckets.set(bucket, { total: latest.value, count: 1 });
     }
   }
 
-  return slots.map((slot) => ({ ...slot, value: valuesByDay.get(slot.key) ?? null }));
+  return Array.from({ length: sevenDayTrendSampleCount }, (_, index) => {
+    const time = start + index * tenMinuteMilliseconds;
+    const aggregate = buckets.get(time);
+    return {
+      key: String(time),
+      time,
+      value: aggregate ? aggregate.total / aggregate.count : null
+    };
+  });
+}
+
+function recentDayAxis() {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(today);
+    date.setDate(date.getDate() - 6 + index);
+    return {
+      key: `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`,
+      label: date.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })
+    };
+  });
 }
 
 function trendDomain(values: number[], metric: TelemetryHistoryMetric) {
@@ -361,18 +382,8 @@ function trendLineSegments(points: Array<{ x: number; y: number | null }>) {
   return segments;
 }
 
-function dayKey(date: Date) {
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${date.getFullYear()}-${month}-${day}`;
-}
-
 function trendMetricLabel(metric: TelemetryHistoryMetric) {
   return metric === 'soilMoisture' ? '土壤湿度' : '环境温度';
-}
-
-function trendMetricUnit(metric: TelemetryHistoryMetric) {
-  return metric === 'soilMoisture' ? '%' : '°C';
 }
 
 function formatTrendValue(value: number) {

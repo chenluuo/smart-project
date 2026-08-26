@@ -98,8 +98,12 @@ export const api = {
   plots: () => request<Plot[]>('/api/v1/plots'),
   plot: (plotId: number) => request<Plot>(`/api/v1/plots/${plotId}`),
   telemetry: (plotId: number) => request<TelemetryLatest>(`/api/v1/plots/${plotId}/telemetry/latest`),
-  telemetryHistory: (plotId: number, metric: TelemetryHistoryMetric) =>
-    request<TelemetryHistory>(`/api/v1/telemetry/history${query({ plotId, metric, range: '7d', interval: '1d' })}`),
+  telemetryHistory: async (plotId: number, metric: TelemetryHistoryMetric) => {
+    const history = await request<TelemetryHistory>(
+      `/api/v1/telemetry/history${query({ plotId, metric, range: '7d', interval: '5m' })}`
+    );
+    return withLocalTrendDemo(history, plotId, metric);
+  },
   thresholds: (plotId: number) => request<ThresholdRule[]>(`/api/v1/plots/${plotId}/thresholds`),
   createThreshold: (plotId: number, payload: ThresholdRuleCreateInput) =>
     request<ThresholdUpdateResult>(`/api/v1/plots/${plotId}/thresholds`, {
@@ -366,6 +370,41 @@ function newIdempotencyKey() {
     return crypto.randomUUID().slice(0, 64);
   }
   return `cmd_${Date.now()}_${Math.random().toString(16).slice(2)}`.slice(0, 64);
+}
+
+function withLocalTrendDemo(
+  history: TelemetryHistory,
+  plotId: number,
+  metric: TelemetryHistoryMetric
+): TelemetryHistory {
+  const demoPlotId = Number(new URLSearchParams(window.location.search).get('trendDemoPlotId') ?? 0);
+  if (!import.meta.env.DEV || demoPlotId !== plotId || history.points.length > 0) return history;
+
+  const interval = 5 * 60 * 1000;
+  const pointCount = 7 * 24 * 12;
+  const end = Math.floor(Date.now() / interval) * interval;
+  const start = end - (pointCount - 1) * interval;
+  const points = Array.from({ length: pointCount }, (_, index) => {
+    const dayCycle = (index % (24 * 12)) / (24 * 12);
+    const longWave = Math.sin(index / 72);
+    const value = metric === 'soilMoisture'
+      ? 43 + Math.sin(dayCycle * Math.PI * 2) * 2.8 + longWave * 2.1 + (index % 96 < 12 ? 3.6 : 0)
+      : 25.4 + Math.sin((dayCycle - 0.24) * Math.PI * 2) * 2.7 + longWave * 0.7;
+    const spread = metric === 'soilMoisture' ? 0.45 : 0.18;
+    return {
+      time: new Date(start + index * interval).toISOString(),
+      avg: Number(value.toFixed(2)),
+      min: Number((value - spread).toFixed(2)),
+      max: Number((value + spread).toFixed(2))
+    };
+  });
+
+  return {
+    plotId,
+    metric,
+    unit: metric === 'soilMoisture' ? '%' : '°C',
+    points
+  };
 }
 
 function backendUnavailableMessage() {
