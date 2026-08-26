@@ -2290,3 +2290,22 @@ button:disabled {
   color: #2f7f3a;
   font-size: 13px;
 }
+
+/* ---------------- 管理后台：报警记录 ---------------- */
+.admin-badge.danger {
+  background: #fbeaea;
+  color: #c0392b;
+}
+
+.admin-ellipsis {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.admin-pager {
+  padding: 10px 14px;
+  font-size: 12.5px;
+  color: #7a8a80;
+}

@@ -203,7 +203,7 @@ func main() {
 		Handler: httpserver.NewRouterWithAdminServices(
 			cfg.Server.Mode, healthPinger, authService, plotService, deviceService, controlService, alertService,
 			agentService, knowledgeService, telemetryService, cfg.Internal.ServiceKey,
-			identity.NewRepositories(db), plotRepositories, knowledgeService, deviceRepositories, eventBroker,
+			identity.NewRepositories(db), plotRepositories, knowledgeService, deviceRepositories, alertService, eventBroker,
 		),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,

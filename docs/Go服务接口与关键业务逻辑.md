@@ -1549,3 +1549,47 @@ DELETE /api/v1/admin/knowledge/docs/{docId}
 
 - **保护**：设备存在命令记录（`device_commands`）时返回 `40901` 拒绝删除（保留操作历史）。
 - 错误：`40402` 设备不存在；`40901` 设备存在命令记录，无法删除。
+
+### 12.11 告警记录（全量，管理后台）
+
+`GET /api/v1/admin/alerts?plotId=11&status=ACTIVE&startTime=2026-08-01T00:00:00Z&endTime=2026-08-22T23:59:59Z&page=1&pageSize=50`（SYSTEM_ADMIN）
+
+查询**全部用户**的告警记录，不做 JWT 归属过滤（管理员可跨地块查看）。筛选参数与农户版告警列表一致：
+
+- `plotId`：按地块过滤（可选）
+- `status`：按状态过滤（可选；`CONFIRMED` 兼容旧的 `ACKNOWLEDGED`）
+- `startTime` / `endTime`：触发时间范围（ISO 8601，可选）
+- `page` / `pageSize`：分页（默认 `page=1&pageSize=20`，`pageSize` 上限 100）
+
+响应结构与 6.5 告警列表一致：
+
+```json
+{
+  "code": 0,
+  "message": "OK",
+  "data": {
+    "items": [
+      {
+        "id": 339,
+        "plotId": 3,
+        "plotCode": "C1",
+        "metric": "soilMoisture",
+        "level": "MEDIUM",
+        "status": "RESOLVED",
+        "title": "C1 地块湿度警告",
+        "content": "设备上报湿度警告，当前值 59.85%",
+        "currentValue": 59.85,
+        "thresholdValue": null,
+        "startedAt": "2026-08-26T01:26:44.400718Z",
+        "recoveredAt": "2026-08-26T01:27:46.620668Z"
+      }
+    ],
+    "page": 1,
+    "pageSize": 50,
+    "total": 19
+  }
+}
+```
+
+- 实现说明：复用告警列表的查询与转换逻辑，仅去掉 `p.owner_id` 归属过滤；查询**不经过 Redis 缓存**，直接读库保证实时性。
+- 权限：非 SYSTEM_ADMIN 返回 `40301` 需要系统管理员权限。
