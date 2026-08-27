@@ -52,6 +52,7 @@ export function KnowledgePage({ user, knowledge, busy, onUploadKnowledge }: Know
       {canUpload && uploadOpen && (
         <section className="list-card">
           <h3>上传文档</h3>
+          <p className="knowledge-upload-hint">提交后为草稿，需管理员审核并发布后才会进入知识库供查询。</p>
           <form className="knowledge-upload-form" onSubmit={onUploadKnowledge}>
             <input name="title" placeholder="标题" required />
             <input name="category" placeholder="分类，如 irrigation" required />
