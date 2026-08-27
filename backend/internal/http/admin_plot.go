@@ -53,10 +53,10 @@ type assignOwnerRequest struct {
 
 func registerAdminPlotRoutes(router *gin.Engine, auth authService, service adminPlotService) {
 	handler := adminPlotHandler{service: service}
-	admin := router.Group("/api/v1/admin", jwtAuthentication(auth), requireSystemAdmin())
+	admin := router.Group("/api/v1/admin", jwtAuthentication(auth), requireAdminOrTechnician())
 	admin.GET("/plots", handler.list)
-	admin.POST("/plots", handler.create)
-	admin.PUT("/plots/:plotId/owner", handler.assignOwner)
+	admin.POST("/plots", requireSystemAdmin(), handler.create)
+	admin.PUT("/plots/:plotId/owner", requireSystemAdmin(), handler.assignOwner)
 }
 
 func (h adminPlotHandler) list(c *gin.Context) {

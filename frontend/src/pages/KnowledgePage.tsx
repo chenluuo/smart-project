@@ -13,7 +13,7 @@ type KnowledgePageProps = {
 export function KnowledgePage({ user, knowledge, busy, onUploadKnowledge }: KnowledgePageProps) {
   const [category, setCategory] = useState('');
   const [uploadOpen, setUploadOpen] = useState(false);
-  const canUpload = user?.role === 'SYSTEM_ADMIN';
+  const canUpload = user != null;
   const categories = useMemo(() => {
     return Array.from(new Set(knowledge.map((doc) => doc.category).filter(Boolean))).sort();
   }, [knowledge]);
@@ -70,7 +70,7 @@ export function KnowledgePage({ user, knowledge, busy, onUploadKnowledge }: Know
           <button
           className="knowledge-upload-trigger"
           type="button"
-          title={canUpload ? '上传文档' : '仅系统管理员可上传'}
+          title="上传文档"
           aria-expanded={uploadOpen}
           disabled={!canUpload}
           onClick={() => setUploadOpen((current) => !current)}

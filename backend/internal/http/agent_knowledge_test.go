@@ -71,6 +71,14 @@ func (adminAuthServiceStub) Authenticate(ctx context.Context, token string) (ide
 	return claims, err
 }
 
+type technicianAuthServiceStub struct{ authServiceStub }
+
+func (technicianAuthServiceStub) Authenticate(ctx context.Context, token string) (identity.Claims, error) {
+	claims, err := (authServiceStub{}).Authenticate(ctx, token)
+	claims.Role = "TECHNICIAN"
+	return claims, err
+}
+
 func TestAgentRoutesAndInternalAuthentication(t *testing.T) {
 	const key = "test-internal-service-key-32-characters"
 	router := NewRouterWithBackendServices("test", pingerStub{}, authServiceStub{}, nil, nil, nil, nil, agentServiceStub{}, nil, nil, key)
@@ -112,18 +120,45 @@ func TestAgentRoutesAndInternalAuthentication(t *testing.T) {
 	}
 }
 
-func TestKnowledgeRoutesRequireSystemAdmin(t *testing.T) {
-	farmerRouter := NewRouterWithBackendServices("test", pingerStub{}, authServiceStub{}, nil, nil, nil, nil, nil, knowledgeServiceStub{}, nil, "unused-internal-service-key-32-chars")
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/knowledge/docs", strings.NewReader(`{"title":"指南","category":"general","objectKey":"knowledge/guide.pdf","fileHash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`))
+func TestKnowledgeRoutesRoleGates(t *testing.T) {
+	const key = "unused-internal-service-key-32-chars"
+
+	// 上传对所有登录用户开放（农户也可上传）。
+	farmerRouter := NewRouterWithBackendServices("test", pingerStub{}, authServiceStub{}, nil, nil, nil, nil, nil, knowledgeServiceStub{}, nil, key)
+	request := multipartUploadRequest(t)
 	request.Header.Set("Authorization", "Bearer signed-token")
-	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	farmerRouter.ServeHTTP(response, request)
-	if response.Code != http.StatusForbidden {
-		t.Fatalf("farmer status=%d body=%s, want 403", response.Code, response.Body.String())
+	if response.Code != http.StatusCreated {
+		t.Fatalf("farmer upload status=%d body=%s, want 201", response.Code, response.Body.String())
 	}
 
-	adminRouter := NewRouterWithBackendServices("test", pingerStub{}, adminAuthServiceStub{}, nil, nil, nil, nil, nil, knowledgeServiceStub{}, nil, "unused-internal-service-key-32-chars")
+	// 发布仍仅限系统管理员：农户/技术员 403，管理员 200。
+	publishCases := []struct {
+		name string
+		auth authService
+		want int
+	}{
+		{name: "farmer", auth: authServiceStub{}, want: http.StatusForbidden},
+		{name: "technician", auth: technicianAuthServiceStub{}, want: http.StatusForbidden},
+		{name: "admin", auth: adminAuthServiceStub{}, want: http.StatusOK},
+	}
+	for _, tc := range publishCases {
+		t.Run(tc.name, func(t *testing.T) {
+			router := NewRouterWithBackendServices("test", pingerStub{}, tc.auth, nil, nil, nil, nil, nil, knowledgeServiceStub{}, nil, key)
+			request := httptest.NewRequest(http.MethodPost, "/api/v1/knowledge/docs/1/publish", nil)
+			request.Header.Set("Authorization", "Bearer signed-token")
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+			if response.Code != tc.want {
+				t.Fatalf("publish status=%d body=%s, want %d", response.Code, response.Body.String(), tc.want)
+			}
+		})
+	}
+}
+
+func multipartUploadRequest(t *testing.T) *http.Request {
+	t.Helper()
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
 	_ = writer.WriteField("title", "指南")
@@ -134,12 +169,7 @@ func TestKnowledgeRoutesRequireSystemAdmin(t *testing.T) {
 	}
 	_, _ = part.Write([]byte("document"))
 	_ = writer.Close()
-	request = httptest.NewRequest(http.MethodPost, "/api/v1/knowledge/docs", body)
-	request.Header.Set("Authorization", "Bearer signed-token")
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/knowledge/docs", body)
 	request.Header.Set("Content-Type", writer.FormDataContentType())
-	response = httptest.NewRecorder()
-	adminRouter.ServeHTTP(response, request)
-	if response.Code != http.StatusCreated || !strings.Contains(response.Body.String(), `"status":"DRAFT"`) {
-		t.Fatalf("admin status=%d body=%s, want 201 draft", response.Code, response.Body.String())
-	}
+	return request
 }

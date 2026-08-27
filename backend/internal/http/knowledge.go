@@ -17,10 +17,10 @@ func registerKnowledgeRoutes(router *gin.Engine, auth authService, service knowl
 	handler := knowledgeHandler{service: service}
 	api := router.Group("/api/v1/knowledge/docs", jwtAuthentication(auth))
 	api.GET("", handler.list)
-	api.POST("", requireSystemAdmin(), handler.upload)
-	api.POST("/:docId/approve", requireSystemAdmin(), handler.approve)
+	api.POST("", handler.upload)
+	api.POST("/:docId/approve", requireAdminOrTechnician(), handler.approve)
 	api.POST("/:docId/publish", requireSystemAdmin(), handler.publish)
-	api.POST("/:docId/archive", requireSystemAdmin(), handler.archive)
+	api.POST("/:docId/archive", requireAdminOrTechnician(), handler.archive)
 }
 
 func (h knowledgeHandler) list(c *gin.Context) {
@@ -91,18 +91,33 @@ func (h knowledgeHandler) transition(c *gin.Context, transition func(context.Con
 	respondSuccess(c, http.StatusOK, document)
 }
 
-func requireSystemAdmin() gin.HandlerFunc {
+func requireAnyRole(roles ...string) gin.HandlerFunc {
+	allowed := make(map[string]struct{}, len(roles))
+	for _, role := range roles {
+		allowed[role] = struct{}{}
+	}
 	return func(c *gin.Context) {
 		value, exists := c.Get(claimsContextKey)
 		claims, ok := value.(identity.Claims)
-		if !exists || !ok || claims.Role != "SYSTEM_ADMIN" {
-			respondError(c, http.StatusForbidden, 40301, "需要系统管理员权限")
+		if !exists || !ok {
+			respondError(c, http.StatusUnauthorized, 40101, "未登录或访问令牌无效")
+			c.Abort()
+			return
+		}
+		if _, ok := allowed[claims.Role]; !ok {
+			respondError(c, http.StatusForbidden, 40301, "无权限执行此操作")
 			c.Abort()
 			return
 		}
 		c.Next()
 	}
 }
+
+// requireSystemAdmin 仅允许系统管理员。
+func requireSystemAdmin() gin.HandlerFunc { return requireAnyRole("SYSTEM_ADMIN") }
+
+// requireAdminOrTechnician 允许系统管理员或技术员。
+func requireAdminOrTechnician() gin.HandlerFunc { return requireAnyRole("SYSTEM_ADMIN", "TECHNICIAN") }
 
 func respondKnowledgeError(c *gin.Context, err error) {
 	switch {
