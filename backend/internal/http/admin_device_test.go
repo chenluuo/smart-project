@@ -51,7 +51,7 @@ func (s *adminDeviceServiceStub) AdminDelete(_ context.Context, deviceID uint64)
 
 func newAdminDeviceRouter(auth authService, service adminDeviceService) *gin.Engine {
 	router := NewRouter("test", pingerStub{}, auth)
-	registerAdminDeviceRoutes(router, auth, service)
+	registerAdminDeviceRoutes(router, auth, service, nil)
 	return router
 }
 

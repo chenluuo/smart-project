@@ -31,6 +31,12 @@ type View = 'overview' | 'plots' | 'ask' | 'manage';
 const telemetryUpdatedEvent = 'telemetry.updated';
 const celsiusUnit = String.fromCharCode(176) + 'C';
 
+const adminRoles = ['SYSTEM_ADMIN', 'TECHNICIAN'];
+
+function canAccessAdmin(role?: string) {
+  return role != null && adminRoles.includes(role);
+}
+
 export default function App() {
   const [authMode, setAuthMode] = useState<AuthMode>('login');
   const [credentials, setCredentials] = useState(defaultCredentials);
@@ -265,7 +271,7 @@ export default function App() {
       tokenStorage().set(result.accessToken);
       setUser(result.user);
       await loadData();
-      if (result.user.role === 'SYSTEM_ADMIN' && localStorage.getItem(ADMIN_ENTRY_KEY) === '1') {
+      if (canAccessAdmin(result.user.role) && localStorage.getItem(ADMIN_ENTRY_KEY) === '1') {
         window.location.hash = '#/admin';
       }
     } catch (error) {
@@ -578,7 +584,7 @@ export default function App() {
     );
   }
 
-  if (user && adminMode && user.role === 'SYSTEM_ADMIN') {
+  if (user && adminMode && canAccessAdmin(user.role)) {
     return (
       <AdminPanel
         user={user}

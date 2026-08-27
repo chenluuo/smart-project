@@ -50,7 +50,7 @@ func registerAdminTelemetryRoutes(
 	alerts adminTelemetryAlerts,
 ) {
 	handler := adminTelemetryHandler{plots: plots, telemetry: telemetry, alerts: alerts}
-	admin := router.Group("/api/v1/admin", jwtAuthentication(auth), requireSystemAdmin())
+	admin := router.Group("/api/v1/admin", jwtAuthentication(auth), requireAdminOrTechnician())
 	admin.GET("/telemetry/latest", handler.latest)
 }
 

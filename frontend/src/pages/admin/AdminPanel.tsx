@@ -36,8 +36,13 @@ const DOC_STATUS_NAMES: Record<string, string> = {
   ARCHIVED: '已归档'
 };
 
-export function AdminPanel(props: { user: { id: number; name: string } | null; onBack: () => void; onLogout: () => void }) {
+export function AdminPanel(props: {
+  user: { id: number; name: string; role?: string } | null;
+  onBack: () => void;
+  onLogout: () => void;
+}) {
   const [section, setSection] = useState<AdminSection>('overview');
+  const isAdmin = props.user?.role === 'SYSTEM_ADMIN';
 
   return (
     <div className="admin-shell">
@@ -69,15 +74,15 @@ export function AdminPanel(props: { user: { id: number; name: string } | null; o
       <main className="admin-main">
         <header className="admin-topbar">
           <h1>{ADMIN_SECTIONS.find((item) => item.key === section)?.label}</h1>
-          <span className="admin-topbar-sub">系统管理员控制面板</span>
+          <span className="admin-topbar-sub">{isAdmin ? '系统管理员控制面板' : '技术员控制面板'}</span>
         </header>
         <div className="admin-content">
           {section === 'overview' && <AdminOverview />}
           {section === 'users' && <AdminUsers />}
-          {section === 'plots' && <AdminPlots />}
+          {section === 'plots' && <AdminPlots isAdmin={isAdmin} />}
           {section === 'alerts' && <AdminAlerts />}
-          {section === 'knowledge' && <AdminKnowledge />}
-          {section === 'devices' && <AdminDevices />}
+          {section === 'knowledge' && <AdminKnowledge isAdmin={isAdmin} />}
+          {section === 'devices' && <AdminDevices isAdmin={isAdmin} />}
         </div>
       </main>
     </div>
@@ -235,6 +240,7 @@ function AdminUsers() {
         <select value={role} onChange={(event) => setRole(event.target.value)}>
           <option value="">全部角色</option>
           <option value="FARMER">农户</option>
+          <option value="TECHNICIAN">技术员</option>
           <option value="SYSTEM_ADMIN">系统管理员</option>
         </select>
         <button type="submit">查询</button>
@@ -265,7 +271,7 @@ function AdminUsers() {
                     <td>{user.mobile}</td>
                     <td>
                       <span className={`admin-badge ${user.role === 'SYSTEM_ADMIN' ? 'admin' : ''}`}>
-                        {user.role === 'SYSTEM_ADMIN' ? '管理员' : '农户'}
+                        {user.role === 'SYSTEM_ADMIN' ? '管理员' : user.role === 'TECHNICIAN' ? '技术员' : '农户'}
                       </span>
                     </td>
                     <td>
@@ -288,7 +294,7 @@ function AdminUsers() {
 
 // ---------------- 地块管理 ----------------
 
-function AdminPlots() {
+function AdminPlots({ isAdmin }: { isAdmin: boolean }) {
   const [keyword, setKeyword] = useState('');
   const [query, setQuery] = useState<{ keyword?: string }>({});
   const { data, loading, error, refresh } = useAdminLoader(
@@ -300,7 +306,7 @@ function AdminPlots() {
   const [assignPlot, setAssignPlot] = useState<AdminPlot | null>(null);
   const [notice, setNotice] = useState('');
 
-  const farmerOptions = useMemo(() => (users.data?.items ?? []).filter((user) => user.role !== 'SYSTEM_ADMIN'), [users.data]);
+  const farmerOptions = useMemo(() => (users.data?.items ?? []).filter((user) => user.role === 'FARMER'), [users.data]);
 
   function submitSearch(event: FormEvent) {
     event.preventDefault();
@@ -319,10 +325,12 @@ function AdminPlots() {
         <button type="button" className="ghost" onClick={refresh} title="刷新">
           <RefreshCw size={15} />
         </button>
-        <button type="button" className="primary" onClick={() => setCreateOpen(true)}>
-          <Plus size={15} />
-          新建地块
-        </button>
+        {isAdmin && (
+          <button type="button" className="primary" onClick={() => setCreateOpen(true)}>
+            <Plus size={15} />
+            新建地块
+          </button>
+        )}
       </form>
       <AdminState loading={loading} error={error}>
         <section className="admin-card">
@@ -355,9 +363,11 @@ function AdminPlots() {
                       </span>
                     </td>
                     <td>
-                      <button className="admin-link-btn" onClick={() => setAssignPlot(plot)}>
-                        分配/转移
-                      </button>
+                      {isAdmin && (
+                        <button className="admin-link-btn" onClick={() => setAssignPlot(plot)}>
+                          分配/转移
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -538,7 +548,7 @@ function AssignPlotModal(props: {
 
 // ---------------- 文件审批 ----------------
 
-function AdminKnowledge() {
+function AdminKnowledge({ isAdmin }: { isAdmin: boolean }) {
   const [status, setStatus] = useState('');
   const [keyword, setKeyword] = useState('');
   const [query, setQuery] = useState<{ status?: string }>({});
@@ -649,7 +659,7 @@ function AdminKnowledge() {
                           通过
                         </button>
                       )}
-                      {doc.status === 'APPROVED' && (
+                      {isAdmin && doc.status === 'APPROVED' && (
                         <button className="admin-link-btn" disabled={busy} onClick={() => void runAction(doc, 'publish')}>
                           发布
                         </button>
@@ -750,7 +760,7 @@ function PreviewDrawer(props: { doc: AdminKnowledgeDoc; onClose: () => void }) {
 
 // ---------------- 设备管理 ----------------
 
-function AdminDevices() {
+function AdminDevices({ isAdmin }: { isAdmin: boolean }) {
   const { data, loading, error, refresh } = useAdminLoader(() => api.adminDevicesStatus({ pageSize: 100 }), []);
   const plots = useAdminLoader(() => api.adminPlots({ pageSize: 100 }), []);
   const [sn, setSn] = useState('');
@@ -821,25 +831,27 @@ function AdminDevices() {
   return (
     <div className="admin-stack">
       {notice && <div className="admin-notice">{notice}</div>}
-      <section className="admin-card">
-        <h3>添加 / 绑定设备</h3>
-        <form className="admin-bind-form" onSubmit={bind}>
-          <input value={sn} onChange={(event) => setSn(event.target.value)} placeholder="设备序列号 deviceSn（不存在则自动创建）" />
-          <input value={name} onChange={(event) => setName(event.target.value)} placeholder="设备名称" />
-          <input value={type} onChange={(event) => setType(event.target.value)} placeholder="设备类型，如 SOIL_SENSOR / VALVE" />
-          <select value={plotId} onChange={(event) => setPlotId(event.target.value)}>
-            <option value="">暂不绑定（仅添加设备）</option>
-            {(plots.data?.items ?? []).map((plot) => (
-              <option value={plot.id} key={plot.id}>
-                {plot.code} {plot.name}（{plot.ownerName || `#${plot.ownerId}`}）
-              </option>
-            ))}
-          </select>
-          <button type="submit" className="primary" disabled={busy}>
-            {busy ? '处理中…' : plotId ? '绑定设备' : '添加设备'}
-          </button>
-        </form>
-      </section>
+      {isAdmin && (
+        <section className="admin-card">
+          <h3>添加 / 绑定设备</h3>
+          <form className="admin-bind-form" onSubmit={bind}>
+            <input value={sn} onChange={(event) => setSn(event.target.value)} placeholder="设备序列号 deviceSn（不存在则自动创建）" />
+            <input value={name} onChange={(event) => setName(event.target.value)} placeholder="设备名称" />
+            <input value={type} onChange={(event) => setType(event.target.value)} placeholder="设备类型，如 SOIL_SENSOR / VALVE" />
+            <select value={plotId} onChange={(event) => setPlotId(event.target.value)}>
+              <option value="">暂不绑定（仅添加设备）</option>
+              {(plots.data?.items ?? []).map((plot) => (
+                <option value={plot.id} key={plot.id}>
+                  {plot.code} {plot.name}（{plot.ownerName || `#${plot.ownerId}`}）
+                </option>
+              ))}
+            </select>
+            <button type="submit" className="primary" disabled={busy}>
+              {busy ? '处理中…' : plotId ? '绑定设备' : '添加设备'}
+            </button>
+          </form>
+        </section>
+      )}
       <AdminState loading={loading} error={error}>
         <section className="admin-card">
           <h3>全部设备</h3>
@@ -879,15 +891,17 @@ function AdminDevices() {
                     </td>
                     <td>{device.ownerName || '--'}</td>
                     <td className="admin-actions">
-                      {device.plotId > 0 && (
+                      {isAdmin && device.plotId > 0 && (
                         <button className="admin-link-btn danger" disabled={busy} onClick={() => void unbind(device)}>
                           解绑
                         </button>
                       )}
-                      <button className="admin-link-btn danger" disabled={busy} onClick={() => void removeDevice(device)}>
-                        <Trash2 size={14} />
-                        删除
-                      </button>
+                      {isAdmin && (
+                        <button className="admin-link-btn danger" disabled={busy} onClick={() => void removeDevice(device)}>
+                          <Trash2 size={14} />
+                          删除
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}

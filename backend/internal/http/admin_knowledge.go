@@ -21,7 +21,7 @@ type adminKnowledgeHandler struct {
 
 func registerAdminKnowledgeRoutes(router *gin.Engine, auth authService, service adminKnowledgeService) {
 	handler := adminKnowledgeHandler{service: service}
-	admin := router.Group("/api/v1/admin", jwtAuthentication(auth), requireSystemAdmin())
+	admin := router.Group("/api/v1/admin", jwtAuthentication(auth), requireAdminOrTechnician())
 	admin.GET("/knowledge/docs", handler.list)
 	admin.DELETE("/knowledge/docs/:docId", handler.delete)
 }

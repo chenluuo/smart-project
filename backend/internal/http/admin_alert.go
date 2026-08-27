@@ -20,7 +20,7 @@ type adminAlertHandler struct {
 
 func registerAdminAlertRoutes(router *gin.Engine, auth authService, service adminAlertService) {
 	handler := adminAlertHandler{service: service}
-	admin := router.Group("/api/v1/admin", jwtAuthentication(auth), requireSystemAdmin())
+	admin := router.Group("/api/v1/admin", jwtAuthentication(auth), requireAdminOrTechnician())
 	admin.GET("/alerts", handler.list)
 }
 

@@ -45,12 +45,12 @@ type adminDeviceItemView struct {
 
 func registerAdminDeviceRoutes(router *gin.Engine, auth authService, service adminDeviceService, status deviceStatusService) {
 	handler := adminDeviceHandler{service: service, status: status}
-	admin := router.Group("/api/v1/admin", jwtAuthentication(auth), requireSystemAdmin())
+	admin := router.Group("/api/v1/admin", jwtAuthentication(auth), requireAdminOrTechnician())
 	admin.GET("/devices", handler.list)
 	admin.GET("/devices/status", handler.statusList)
-	admin.POST("/devices/bind", handler.bind)
-	admin.DELETE("/devices/:deviceId/binding", handler.unbind)
-	admin.DELETE("/devices/:deviceId", handler.delete)
+	admin.POST("/devices/bind", requireSystemAdmin(), handler.bind)
+	admin.DELETE("/devices/:deviceId/binding", requireSystemAdmin(), handler.unbind)
+	admin.DELETE("/devices/:deviceId", requireSystemAdmin(), handler.delete)
 }
 
 // statusList 返回全部设备实时状态（ONLINE/OFFLINE，含归属地块与用户）。
