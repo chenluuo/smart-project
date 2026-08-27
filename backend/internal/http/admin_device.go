@@ -19,8 +19,14 @@ type adminDeviceService interface {
 	AdminDelete(context.Context, uint64) error
 }
 
+// deviceStatusService 管理后台设备实时状态派生（读取 Redis 心跳）。
+type deviceStatusService interface {
+	AdminStatus(context.Context, []device.AdminDeviceItem)
+}
+
 type adminDeviceHandler struct {
 	service adminDeviceService
+	status  deviceStatusService
 }
 
 type adminDeviceItemView struct {
@@ -37,13 +43,55 @@ type adminDeviceItemView struct {
 	LastSeenAt      *string       `json:"lastSeenAt"`
 }
 
-func registerAdminDeviceRoutes(router *gin.Engine, auth authService, service adminDeviceService) {
-	handler := adminDeviceHandler{service: service}
+func registerAdminDeviceRoutes(router *gin.Engine, auth authService, service adminDeviceService, status deviceStatusService) {
+	handler := adminDeviceHandler{service: service, status: status}
 	admin := router.Group("/api/v1/admin", jwtAuthentication(auth), requireSystemAdmin())
 	admin.GET("/devices", handler.list)
+	admin.GET("/devices/status", handler.statusList)
 	admin.POST("/devices/bind", handler.bind)
 	admin.DELETE("/devices/:deviceId/binding", handler.unbind)
 	admin.DELETE("/devices/:deviceId", handler.delete)
+}
+
+// statusList 返回全部设备实时状态（ONLINE/OFFLINE，含归属地块与用户）。
+// 与 /devices 的区别：status 经 Redis 心跳派生，反映设备当前在线情况。
+func (h adminDeviceHandler) statusList(c *gin.Context) {
+	filter, err := parseAdminDeviceListFilter(c)
+	if err != nil {
+		respondError(c, http.StatusBadRequest, 40001, err.Error())
+		return
+	}
+	filter.PageSize = 100
+	filter.Page = 1
+	items, total, err := h.service.AdminList(c.Request.Context(), filter)
+	if errors.Is(err, device.ErrInvalidInput) {
+		respondError(c, http.StatusBadRequest, 40001, "参数错误：分页、plotId 或 status 不合法")
+		return
+	}
+	if err != nil {
+		respondError(c, http.StatusInternalServerError, 50000, "服务器内部错误")
+		return
+	}
+	if h.status != nil {
+		h.status.AdminStatus(c.Request.Context(), items)
+	}
+	views := make([]adminDeviceItemView, 0, len(items))
+	for _, item := range items {
+		var lastSeen *string
+		if item.Device.LastSeenAt != nil {
+			value := item.Device.LastSeenAt.Format("2006-01-02T15:04:05Z07:00")
+			lastSeen = &value
+		}
+		views = append(views, adminDeviceItemView{
+			ID: item.Device.ID, DeviceSN: item.Device.SerialNo, Name: item.Device.Name,
+			Type: item.Device.DeviceType, Status: item.Device.Status, PlotID: item.PlotID,
+			PlotCode: item.PlotCode, PlotName: item.PlotName, OwnerName: item.OwnerName,
+			FirmwareVersion: item.Device.FirmwareVersion, LastSeenAt: lastSeen,
+		})
+	}
+	respondSuccess(c, http.StatusOK, gin.H{
+		"items": views, "page": filter.Page, "pageSize": filter.PageSize, "total": total,
+	})
 }
 
 func (h adminDeviceHandler) list(c *gin.Context) {

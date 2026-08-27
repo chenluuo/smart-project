@@ -131,19 +131,22 @@ func NewRouterWithAdminServices(
 	}
 	if adminPlots != nil {
 		registerAdminPlotRoutes(router, auth, adminPlots)
+		if alertsAdmin, ok := alerts.(adminTelemetryAlerts); ok {
+			registerAdminTelemetryRoutes(router, auth, adminPlots, telemetry, alertsAdmin)
+		}
 	}
 	if adminKnowledge != nil {
 		registerAdminKnowledgeRoutes(router, auth, adminKnowledge)
 	}
 	if adminDevices != nil {
-		registerAdminDeviceRoutes(router, auth, adminDevices)
+		statusService, _ := devices.(deviceStatusService)
+		registerAdminDeviceRoutes(router, auth, adminDevices, statusService)
 	}
 	if adminAlerts != nil {
 		registerAdminAlertRoutes(router, auth, adminAlerts)
 	}
 	return router
 }
-
 type authService interface {
 	Register(context.Context, identity.RegisterInput) (*identity.User, error)
 	Login(context.Context, string, string) (*identity.LoginResult, error)
