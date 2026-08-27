@@ -17,7 +17,7 @@ func registerKnowledgeRoutes(router *gin.Engine, auth authService, service knowl
 	handler := knowledgeHandler{service: service}
 	api := router.Group("/api/v1/knowledge/docs", jwtAuthentication(auth))
 	api.GET("", handler.list)
-	api.POST("", requireSystemAdmin(), handler.upload)
+	api.POST("", handler.upload)
 	api.POST("/:docId/approve", requireSystemAdmin(), handler.approve)
 	api.POST("/:docId/publish", requireSystemAdmin(), handler.publish)
 	api.POST("/:docId/archive", requireSystemAdmin(), handler.archive)
