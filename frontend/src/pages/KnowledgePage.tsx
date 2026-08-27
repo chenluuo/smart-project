@@ -13,7 +13,8 @@ type KnowledgePageProps = {
 export function KnowledgePage({ user, knowledge, busy, onUploadKnowledge }: KnowledgePageProps) {
   const [category, setCategory] = useState('');
   const [uploadOpen, setUploadOpen] = useState(false);
-  const canUpload = user?.role === 'SYSTEM_ADMIN';
+  // 所有登录用户均可上传；文档提交后为 DRAFT，需管理员审核并发布后才进入知识库。
+  const canUpload = Boolean(user);
   const categories = useMemo(() => {
     return Array.from(new Set(knowledge.map((doc) => doc.category).filter(Boolean))).sort();
   }, [knowledge]);
@@ -52,6 +53,7 @@ export function KnowledgePage({ user, knowledge, busy, onUploadKnowledge }: Know
       {canUpload && uploadOpen && (
         <section className="list-card">
           <h3>上传文档</h3>
+          <p className="knowledge-upload-hint">提交后为草稿，需管理员审核并发布后才会进入知识库供查询。</p>
           <form className="knowledge-upload-form" onSubmit={onUploadKnowledge}>
             <input name="title" placeholder="标题" required />
             <input name="category" placeholder="分类，如 irrigation" required />
@@ -70,7 +72,7 @@ export function KnowledgePage({ user, knowledge, busy, onUploadKnowledge }: Know
           <button
           className="knowledge-upload-trigger"
           type="button"
-          title={canUpload ? '上传文档' : '仅系统管理员可上传'}
+          title="上传文档（提交后需管理员审核）"
           aria-expanded={uploadOpen}
           disabled={!canUpload}
           onClick={() => setUploadOpen((current) => !current)}

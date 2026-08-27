@@ -1408,6 +1408,16 @@ button.button-feedback {
   gap: 8px;
 }
 
+.knowledge-upload-hint {
+  margin: 0 0 8px;
+  padding: 8px 12px;
+  border: 1px solid #f0e3c2;
+  border-radius: 10px;
+  background: #fdf8ec;
+  color: #8a6d1f;
+  font-size: 12.5px;
+}
+
 .knowledge-upload-form input {
   min-height: 44px;
   width: 100%;
