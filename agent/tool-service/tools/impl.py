@@ -125,7 +125,8 @@ def get_latest_telemetry(authorization: str, args: dict) -> dict:
 
 GET_TELEMETRY_HISTORY_SCHEMA = {
     "plot_id": {"type": "string"},
-    "metric": {"type": "string", "enum": ["soilMoisture", "temperature"]},
+    "metric": {"type": "string", "enum": ["soilMoisture", "temperature", "light"],
+               "description": "指标：soilMoisture 土壤湿度 / temperature 温度 / light 光照"},
     "range": {"type": "string", "enum": ["1h", "24h", "7d", "30d"]},
     "interval": {"type": "string", "description": "聚合粒度，如 5m/1h/1d"},
 }
