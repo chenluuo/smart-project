@@ -1,4 +1,4 @@
-"""tool-service：16 个工具实现（集中管理）+ JSON Schema 定义。
+"""tool-service：19 个工具实现（集中管理）+ JSON Schema 定义。
 
 工具清单：
   1. get_user_plots        田块查询入口（Go /plots，JWT 权限）
@@ -16,6 +16,9 @@
  13. update_alert_rule     修改告警阈值规则（Go PUT /plots/{id}/thresholds/{tid}）
  14. create_alert_rule     新建告警阈值规则（Go POST /plots/{id}/thresholds，创建即下发）
  15. irrigate_to_target_humidity 目标湿度灌溉（阈值闭环，内部经 Go 灌溉命令）
+ 16. create_scheduled_task 创建定时任务（interval/cron/once，到点提醒）
+ 17. list_scheduled_tasks  查询我的定时任务
+ 18. cancel_scheduled_task 取消定时任务
 
 注：按时间控泵的 send_irrigation_command 已不对 LLM 暴露（保留函数仅供
 irrigate_to_target_humidity 内部发 OPEN/CLOSE 使用），灌溉统一按阈值驱动。
@@ -470,13 +473,123 @@ def create_alert_rule(authorization: str, args: dict) -> dict:
 
 
 # ============================================================
+# 16-18. 定时任务：按农户（user_id）创建/查询/取消周期性任务。
+# 到点由 ingest worker 触发，将任务消息发给 agent 自主处理（复用告警主动推送模式）。
+# ============================================================
+
+CREATE_SCHEDULED_TASK_SCHEMA = {
+    "name": {"type": "string", "description": "任务名称"},
+    "trigger_type": {"type": "string", "enum": ["interval", "cron", "once"],
+                     "description": "触发类型：interval=间隔秒 / cron=周期 / once=一次性"},
+    "trigger": {"type": "string", "description": "触发值，如 3600 / \"0 8 * * *\" / \"2026-09-01T08:00:00+08:00\""},
+    "message": {"type": "string", "description": "到点提醒内容"},
+}
+
+LIST_SCHEDULED_TASKS_SCHEMA = {
+    "status": {"type": "string", "enum": ["all", "enabled"], "description": "筛选（可选）"},
+}
+
+CANCEL_SCHEDULED_TASK_SCHEMA = {
+    "task_id": {"type": "string", "description": "任务 ID（来自 list_scheduled_tasks）"},
+}
+
+
+def _user_id_from_auth(authorization: str) -> str:
+    from shared.jwt import JWTError, user_id_from_token
+
+    if not authorization.startswith("Bearer "):
+        raise ValueError("缺少 JWT")
+    try:
+        return user_id_from_token(authorization[7:])
+    except JWTError as e:
+        raise ValueError(f"JWT 无效: {e}") from e
+
+
+def create_scheduled_task(authorization: str, args: dict) -> dict:
+    """创建定时任务（绑定当前登录用户，到点由 worker 触发 agent 处理）。"""
+    import time as _t
+    import uuid
+
+    from shared.redis_client import get_redis
+    from shared.scheduler import next_run
+
+    try:
+        user_id = _user_id_from_auth(authorization)
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+
+    trigger_type = (args.get("trigger_type") or "").strip().lower()
+    trigger = str(args.get("trigger") or "").strip()
+    name = (args.get("name") or "").strip()
+    message = (args.get("message") or "").strip()
+    if not name or not message:
+        return {"ok": False, "error": "name 和 message 不能为空"}
+    if trigger_type not in ("interval", "cron", "once"):
+        return {"ok": False, "error": "trigger_type 必须为 interval/cron/once"}
+
+    try:
+        import datetime as _dt
+
+        nxt = next_run(trigger_type, trigger,
+                       now=_dt.datetime.now(_dt.timezone.utc))
+    except Exception as e:
+        return {"ok": False, "error": f"trigger 非法: {e}"}
+    if nxt is None:
+        return {"ok": False, "error": "触发时间已过，任务不会执行，请检查 trigger"}
+
+    task_id = "task_" + uuid.uuid4().hex[:12]
+    task = {
+        "task_id": task_id,
+        "user_id": user_id,
+        "name": name,
+        "trigger_type": trigger_type,
+        "trigger": trigger,
+        "message": message,
+        "next_run_at": str(int(nxt)),
+        "created_at": _t.strftime("%Y-%m-%dT%H:%M:%SZ", _t.gmtime()),
+        "enabled": "1",
+    }
+    get_redis().task_create(user_id, task_id, task)
+    return {"ok": True, "data": {"task_id": task_id, "next_run_at": task["next_run_at"]}}
+
+
+def list_scheduled_tasks(authorization: str, args: dict) -> dict:
+    """查询当前用户的定时任务列表。"""
+    from shared.redis_client import get_redis
+
+    try:
+        user_id = _user_id_from_auth(authorization)
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+    tasks = get_redis().task_list(user_id)
+    status = (args.get("status") or "all").strip().lower()
+    if status == "enabled":
+        tasks = [t for t in tasks if t.get("enabled") == "1"]
+    return {"ok": True, "data": tasks}
+
+
+def cancel_scheduled_task(authorization: str, args: dict) -> dict:
+    """取消（删除）定时任务。"""
+    from shared.redis_client import get_redis
+
+    try:
+        user_id = _user_id_from_auth(authorization)
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+    task_id = (args.get("task_id") or "").strip()
+    if not task_id:
+        return {"ok": False, "error": "task_id 不能为空"}
+    get_redis().task_cancel(user_id, task_id)
+    return {"ok": True, "data": {"task_id": task_id, "cancelled": True}}
+
+
+# ============================================================
 # 15. irrigate_to_target_humidity：目标湿度灌溉（闭环，无新增 Go 接口）
 # 用户说"把湿度浇到 X%"时调用。执行内闭环：
 #   当前湿度 >= 目标 → 跳过；
 #   否则 OPEN 水泵 → 每 _POLL_SECONDS 轮询 Go telemetry/latest →
 #   达到目标湿度 → CLOSE（达标）；超过 _MAX_WAIT_SECONDS → CLOSE（超时兜底）。
 # ============================================================
-
 IRRIGATE_TO_TARGET_SCHEMA = {
     "plot_id": {"type": "string", "description": "地块 ID（必填）"},
     "target_humidity": {"type": "number", "minimum": 0, "maximum": 100,
@@ -603,3 +716,7 @@ def register_all() -> None:
     reg.register("set_crop", "1.0", "设置地块种植作物（传\"未种植\"表示清除作物）", SET_CROP_SCHEMA, ["plot_id", "crop_name"], set_crop)
     reg.register("update_alert_rule", "1.0", "修改地块告警阈值规则（指标/比较符/阈值/回差/级别/启停）", UPDATE_ALERT_RULE_SCHEMA, ["plot_id", "threshold_id", "metric", "operator", "value", "level", "enabled"], update_alert_rule)
     reg.register("create_alert_rule", "1.0", "新建地块告警阈值规则（创建即下发到地块绑定设备）", CREATE_ALERT_RULE_SCHEMA, ["plot_id", "metric", "operator", "value"], create_alert_rule)
+    # 定时任务（按农户；到点由 worker 触发 agent 自主处理）
+    reg.register("create_scheduled_task", "1.0", "创建定时任务（周期/间隔/一次性，到点提醒）", CREATE_SCHEDULED_TASK_SCHEMA, ["name", "trigger_type", "trigger", "message"], create_scheduled_task)
+    reg.register("list_scheduled_tasks", "1.0", "查询我的定时任务", LIST_SCHEDULED_TASKS_SCHEMA, [], list_scheduled_tasks)
+    reg.register("cancel_scheduled_task", "1.0", "取消定时任务", CANCEL_SCHEDULED_TASK_SCHEMA, ["task_id"], cancel_scheduled_task)
