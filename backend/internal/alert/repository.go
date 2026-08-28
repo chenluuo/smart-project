@@ -501,7 +501,7 @@ func (r Repositories) SyncDeviceWarnings(ctx context.Context, input DeviceWarnin
 					}).Error; err != nil {
 						return err
 					}
-					// 持续告警再推送给 agent：告警 ACTIVE 期间每 3 分钟推一次
+					// 持续告警再推送：限 3 次（创建时第 1 次；1 分钟后第 2 次；3 分钟后第 3 次），级别保持 MEDIUM
 					if shouldRepushDeviceAlert(tx, existing, now) {
 						if err := createDeviceAlertOutbox(tx, existing, input, spec, now); err != nil {
 							return err
@@ -559,8 +559,16 @@ func decimalFromFloat(value float64) decimal.Decimal {
 	return decimal.NewFromFloat(value)
 }
 
-// alertRepushInterval 持续告警再推送间隔：告警 ACTIVE 期间每 3 分钟推一次给 agent。
-const alertRepushInterval = 3 * time.Minute
+// 设备告警推送节奏（限 3 次，级别保持 MEDIUM）：
+// 第 1 次：告警创建时立即推；
+// 第 2 次：距上次推送 ≥ alertRepushInterval1（1 分钟）仍未恢复则再推；
+// 第 3 次：距上次推送 ≥ alertRepushInterval2（3 分钟）仍未恢复则再推；
+// 超过 3 次不再推送（避免连续告警无限轰炸 agent）。
+const (
+	alertRepushInterval1 = 1 * time.Minute
+	alertRepushInterval2 = 3 * time.Minute
+	maxAlertRepushCount  = 3
+)
 
 // createDeviceAlertOutbox 写设备告警 outbox 事件（dispatcher 转发给 agent）。
 func createDeviceAlertOutbox(tx *gorm.DB, alert Alert, input DeviceWarningInput, spec warningSpec, now time.Time) error {
@@ -582,13 +590,38 @@ func createDeviceAlertOutbox(tx *gorm.DB, alert Alert, input DeviceWarningInput,
 	}).Error
 }
 
-// shouldRepushDeviceAlert 判断持续告警是否再次推送：距上次推送已满 alertRepushInterval。
+// shouldRepushDeviceAlert 判断持续告警是否再次推送（限 3 次，级别保持 MEDIUM）。
+// 规则：
+//   - 已推送 1 次：距上次 ≥ 1 分钟再推第 2 次；
+//   - 已推送 2 次：距上次 ≥ 3 分钟再推第 3 次；
+//   - 已推送 ≥ 3 次：不再推送。
+//
+// 计数基于 outbox_events（aggregate_id = alert ID），无需新增字段。
 func shouldRepushDeviceAlert(tx *gorm.DB, alert Alert, now time.Time) bool {
+	var count int64
+	if err := tx.Table("outbox_events").
+		Where("aggregate_type = ? AND aggregate_id = ? AND event_type = ?",
+			"ALERT", strconv.FormatUint(alert.ID, 10), "ALERT_DEVICE_TRIGGERED").
+		Count(&count).Error; err != nil {
+		return false // 查询失败不推送，避免放大
+	}
+	if count >= maxAlertRepushCount {
+		return false
+	}
 	var lastPushAt time.Time
 	if err := tx.Table("outbox_events").Select("MAX(available_at)").
 		Where("aggregate_type = ? AND aggregate_id = ?", "ALERT", strconv.FormatUint(alert.ID, 10)).
 		Scan(&lastPushAt).Error; err != nil {
 		return false // 查询失败不推送，避免放大
 	}
-	return now.Sub(lastPushAt) >= alertRepushInterval
+	switch count {
+	case 1:
+		// 第 1 次已推（创建时），第 2 次：距上次 ≥ 1 分钟
+		return now.Sub(lastPushAt) >= alertRepushInterval1
+	case 2:
+		// 第 2 次已推，第 3 次：距上次 ≥ 3 分钟
+		return now.Sub(lastPushAt) >= alertRepushInterval2
+	default:
+		return false
+	}
 }
