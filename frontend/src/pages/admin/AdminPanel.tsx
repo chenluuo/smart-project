@@ -36,6 +36,9 @@ const DOC_STATUS_NAMES: Record<string, string> = {
   ARCHIVED: '已归档'
 };
 
+type PlotFormErrors = Partial<Record<'code' | 'name' | 'ownerId' | 'area' | 'form', string>>;
+type DeviceBindErrors = Partial<Record<'sn' | 'name' | 'type' | 'plotId' | 'form', string>>;
+
 export function AdminPanel(props: {
   user: { id: number; name: string; role?: string } | null;
   onBack: () => void;
@@ -416,27 +419,46 @@ function CreatePlotModal(props: {
   const [location, setLocation] = useState('');
   const [ownerId, setOwnerId] = useState('');
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
+  const [fieldErrors, setFieldErrors] = useState<PlotFormErrors>({});
+
+  function clearFieldError(field: keyof PlotFormErrors) {
+    setFieldErrors((current) => {
+      if (!current[field] && !current.form) return current;
+      const next = { ...current };
+      delete next[field];
+      delete next.form;
+      return next;
+    });
+  }
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    setError('');
-    if (!ownerId) {
-      setError('请选择归属用户');
+    const parsedArea = area.trim() ? Number(area) : null;
+    const nextErrors: PlotFormErrors = {};
+    if (!code.trim()) nextErrors.code = '请输入地块编码。';
+    if (!name.trim()) nextErrors.name = '请输入地块名称。';
+    if (!ownerId) nextErrors.ownerId = '请选择归属用户。';
+    if (parsedArea !== null && (!Number.isFinite(parsedArea) || parsedArea < 0)) {
+      nextErrors.area = '请输入不小于 0 的面积。';
+    }
+    if (Object.keys(nextErrors).length > 0) {
+      setFieldErrors(nextErrors);
       return;
     }
+
+    setFieldErrors({});
     setBusy(true);
     try {
       await api.adminCreatePlot({
         code: code.trim(),
         name: name.trim(),
-        area: area ? Number(area) : null,
+        area: parsedArea,
         location: location.trim() || null,
         ownerId: Number(ownerId)
       });
       await props.onCreated();
     } catch (err) {
-      setError(errorMessage(err));
+      setFieldErrors(plotFormErrorFor(errorMessage(err)));
     } finally {
       setBusy(false);
     }
@@ -444,7 +466,7 @@ function CreatePlotModal(props: {
 
   return (
     <div className="admin-modal-mask">
-      <form className="admin-modal" onSubmit={submit}>
+      <form className="admin-modal" onSubmit={submit} noValidate>
         <header>
           <h3>新建地块</h3>
           <button type="button" onClick={props.onClose}>
@@ -453,15 +475,46 @@ function CreatePlotModal(props: {
         </header>
         <label>
           地块编码 *
-          <input value={code} onChange={(event) => setCode(event.target.value)} placeholder="如 B2" required />
+          <input
+            value={code}
+            onChange={(event) => {
+              setCode(event.target.value);
+              clearFieldError('code');
+            }}
+            placeholder="如 B2"
+            className={fieldErrors.code ? 'input-invalid' : undefined}
+            aria-invalid={Boolean(fieldErrors.code)}
+            aria-describedby={fieldErrors.code ? 'plot-code-error' : undefined}
+          />
+          {fieldErrors.code && <p className="field-error" id="plot-code-error" role="alert">{fieldErrors.code}</p>}
         </label>
         <label>
           地块名称 *
-          <input value={name} onChange={(event) => setName(event.target.value)} placeholder="如 B2 西瓜试验田" required />
+          <input
+            value={name}
+            onChange={(event) => {
+              setName(event.target.value);
+              clearFieldError('name');
+            }}
+            placeholder="如 B2 西瓜试验田"
+            className={fieldErrors.name ? 'input-invalid' : undefined}
+            aria-invalid={Boolean(fieldErrors.name)}
+            aria-describedby={fieldErrors.name ? 'plot-name-error' : undefined}
+          />
+          {fieldErrors.name && <p className="field-error" id="plot-name-error" role="alert">{fieldErrors.name}</p>}
         </label>
         <label>
           归属用户 *
-          <select value={ownerId} onChange={(event) => setOwnerId(event.target.value)} required>
+          <select
+            value={ownerId}
+            onChange={(event) => {
+              setOwnerId(event.target.value);
+              clearFieldError('ownerId');
+            }}
+            className={fieldErrors.ownerId ? 'input-invalid' : undefined}
+            aria-invalid={Boolean(fieldErrors.ownerId)}
+            aria-describedby={fieldErrors.ownerId ? 'plot-owner-error' : undefined}
+          >
             <option value="">请选择</option>
             {props.farmers.map((user) => (
               <option value={user.id} key={user.id}>
@@ -469,16 +522,31 @@ function CreatePlotModal(props: {
               </option>
             ))}
           </select>
+          {fieldErrors.ownerId && <p className="field-error" id="plot-owner-error" role="alert">{fieldErrors.ownerId}</p>}
         </label>
         <label>
           面积（亩）
-          <input value={area} onChange={(event) => setArea(event.target.value)} type="number" min={0} step="0.1" placeholder="可选" />
+          <input
+            value={area}
+            onChange={(event) => {
+              setArea(event.target.value);
+              clearFieldError('area');
+            }}
+            type="number"
+            min={0}
+            step="0.1"
+            placeholder="可选"
+            className={fieldErrors.area ? 'input-invalid' : undefined}
+            aria-invalid={Boolean(fieldErrors.area)}
+            aria-describedby={fieldErrors.area ? 'plot-area-error' : undefined}
+          />
+          {fieldErrors.area && <p className="field-error" id="plot-area-error" role="alert">{fieldErrors.area}</p>}
         </label>
         <label>
           位置
           <input value={location} onChange={(event) => setLocation(event.target.value)} placeholder="可选" />
         </label>
-        {error && <div className="admin-error">{error}</div>}
+        {fieldErrors.form && <p className="field-error admin-form-error" role="alert">{fieldErrors.form}</p>}
         <footer>
           <button type="button" onClick={props.onClose}>取消</button>
           <button type="submit" className="primary" disabled={busy}>
@@ -498,17 +566,20 @@ function AssignPlotModal(props: {
 }) {
   const [ownerId, setOwnerId] = useState(String(props.plot.ownerId));
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
+  const [ownerError, setOwnerError] = useState('');
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!ownerId) return;
+    if (!ownerId) {
+      setOwnerError('请选择归属用户。');
+      return;
+    }
     setBusy(true);
-    setError('');
+    setOwnerError('');
     try {
       await props.onAssigned(Number(ownerId));
     } catch (err) {
-      setError(errorMessage(err));
+      setOwnerError(errorMessage(err));
     } finally {
       setBusy(false);
     }
@@ -516,7 +587,7 @@ function AssignPlotModal(props: {
 
   return (
     <div className="admin-modal-mask">
-      <form className="admin-modal" onSubmit={submit}>
+      <form className="admin-modal" onSubmit={submit} noValidate>
         <header>
           <h3>分配地块 {props.plot.code}</h3>
           <button type="button" onClick={props.onClose}>
@@ -526,15 +597,24 @@ function AssignPlotModal(props: {
         <p className="admin-modal-hint">将地块 {props.plot.name} 分配给以下用户（转移归属）。</p>
         <label>
           归属用户 *
-          <select value={ownerId} onChange={(event) => setOwnerId(event.target.value)} required>
+          <select
+            value={ownerId}
+            onChange={(event) => {
+              setOwnerId(event.target.value);
+              setOwnerError('');
+            }}
+            className={ownerError ? 'input-invalid' : undefined}
+            aria-invalid={Boolean(ownerError)}
+            aria-describedby={ownerError ? 'assign-owner-error' : undefined}
+          >
             {props.farmers.map((user) => (
               <option value={user.id} key={user.id}>
                 {user.username}（#id {user.id}，当前 {user.plotCount} 块）
               </option>
             ))}
           </select>
+          {ownerError && <p className="field-error" id="assign-owner-error" role="alert">{ownerError}</p>}
         </label>
-        {error && <div className="admin-error">{error}</div>}
         <footer>
           <button type="button" onClick={props.onClose}>取消</button>
           <button type="submit" className="primary" disabled={busy}>
@@ -769,14 +849,31 @@ function AdminDevices({ isAdmin }: { isAdmin: boolean }) {
   const [plotId, setPlotId] = useState('');
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
+  const [bindErrors, setBindErrors] = useState<DeviceBindErrors>({});
+
+  function clearBindError(field: keyof DeviceBindErrors) {
+    setBindErrors((current) => {
+      if (!current[field] && !current.form) return current;
+      const next = { ...current };
+      delete next[field];
+      delete next.form;
+      return next;
+    });
+  }
 
   async function bind(event: FormEvent) {
     event.preventDefault();
     setNotice('');
-    if (!sn.trim() || !name.trim() || !type.trim()) {
-      setNotice('请填写完整的设备信息（序列号/名称/类型）');
+    const nextErrors: DeviceBindErrors = {};
+    if (!sn.trim()) nextErrors.sn = '请输入设备序列号。';
+    if (!name.trim()) nextErrors.name = '请输入设备名称。';
+    if (!type.trim()) nextErrors.type = '请输入设备类型。';
+    if (Object.keys(nextErrors).length > 0) {
+      setBindErrors(nextErrors);
       return;
     }
+
+    setBindErrors({});
     setBusy(true);
     try {
       const onlyAdd = !plotId;
@@ -788,7 +885,7 @@ function AdminDevices({ isAdmin }: { isAdmin: boolean }) {
       setPlotId('');
       refresh();
     } catch (err) {
-      setNotice(errorMessage(err));
+      setBindErrors(deviceBindErrorFor(errorMessage(err)));
     } finally {
       setBusy(false);
     }
@@ -834,21 +931,77 @@ function AdminDevices({ isAdmin }: { isAdmin: boolean }) {
       {isAdmin && (
         <section className="admin-card">
           <h3>添加 / 绑定设备</h3>
-          <form className="admin-bind-form" onSubmit={bind}>
-            <input value={sn} onChange={(event) => setSn(event.target.value)} placeholder="设备序列号 deviceSn（不存在则自动创建）" />
-            <input value={name} onChange={(event) => setName(event.target.value)} placeholder="设备名称" />
-            <input value={type} onChange={(event) => setType(event.target.value)} placeholder="设备类型，如 SOIL_SENSOR / VALVE" />
-            <select value={plotId} onChange={(event) => setPlotId(event.target.value)}>
-              <option value="">暂不绑定（仅添加设备）</option>
-              {(plots.data?.items ?? []).map((plot) => (
-                <option value={plot.id} key={plot.id}>
-                  {plot.code} {plot.name}（{plot.ownerName || `#${plot.ownerId}`}）
-                </option>
-              ))}
-            </select>
+          <form className="admin-bind-form" onSubmit={bind} noValidate>
+            <label className="admin-input-field">
+              <span>设备序列号</span>
+              <input
+                value={sn}
+                onChange={(event) => {
+                  setSn(event.target.value);
+                  clearBindError('sn');
+                }}
+                placeholder="deviceSn（不存在则自动创建）"
+                className={bindErrors.sn ? 'input-invalid' : undefined}
+                aria-invalid={Boolean(bindErrors.sn)}
+                aria-describedby={bindErrors.sn ? 'device-sn-error' : undefined}
+              />
+              {bindErrors.sn && <p className="field-error" id="device-sn-error" role="alert">{bindErrors.sn}</p>}
+            </label>
+            <label className="admin-input-field">
+              <span>设备名称</span>
+              <input
+                value={name}
+                onChange={(event) => {
+                  setName(event.target.value);
+                  clearBindError('name');
+                }}
+                placeholder="请输入设备名称"
+                className={bindErrors.name ? 'input-invalid' : undefined}
+                aria-invalid={Boolean(bindErrors.name)}
+                aria-describedby={bindErrors.name ? 'device-name-error' : undefined}
+              />
+              {bindErrors.name && <p className="field-error" id="device-name-error" role="alert">{bindErrors.name}</p>}
+            </label>
+            <label className="admin-input-field">
+              <span>设备类型</span>
+              <input
+                value={type}
+                onChange={(event) => {
+                  setType(event.target.value);
+                  clearBindError('type');
+                }}
+                placeholder="如 SOIL_SENSOR / VALVE"
+                className={bindErrors.type ? 'input-invalid' : undefined}
+                aria-invalid={Boolean(bindErrors.type)}
+                aria-describedby={bindErrors.type ? 'device-type-error' : undefined}
+              />
+              {bindErrors.type && <p className="field-error" id="device-type-error" role="alert">{bindErrors.type}</p>}
+            </label>
+            <label className="admin-input-field">
+              <span>绑定地块</span>
+              <select
+                value={plotId}
+                onChange={(event) => {
+                  setPlotId(event.target.value);
+                  clearBindError('plotId');
+                }}
+                className={bindErrors.plotId ? 'input-invalid' : undefined}
+                aria-invalid={Boolean(bindErrors.plotId)}
+                aria-describedby={bindErrors.plotId ? 'device-plot-error' : undefined}
+              >
+                <option value="">暂不绑定（仅添加设备）</option>
+                {(plots.data?.items ?? []).map((plot) => (
+                  <option value={plot.id} key={plot.id}>
+                    {plot.code} {plot.name}（{plot.ownerName || `#${plot.ownerId}`}）
+                  </option>
+                ))}
+              </select>
+              {bindErrors.plotId && <p className="field-error" id="device-plot-error" role="alert">{bindErrors.plotId}</p>}
+            </label>
             <button type="submit" className="primary" disabled={busy}>
               {busy ? '处理中…' : plotId ? '绑定设备' : '添加设备'}
             </button>
+            {bindErrors.form && <p className="field-error admin-form-error" role="alert">{bindErrors.form}</p>}
           </form>
         </section>
       )}
@@ -1073,4 +1226,22 @@ function errorMessage(error: unknown) {
   if (error instanceof ApiError) return error.message;
   if (error instanceof Error) return error.message;
   return '操作失败，请稍后重试';
+}
+
+function plotFormErrorFor(message: string): PlotFormErrors {
+  const normalized = message.toLowerCase();
+  if (/编码|code/.test(normalized)) return { code: message };
+  if (/名称|name/.test(normalized)) return { name: message };
+  if (/归属|用户|owner/.test(normalized)) return { ownerId: message };
+  if (/面积|area/.test(normalized)) return { area: message };
+  return { form: message };
+}
+
+function deviceBindErrorFor(message: string): DeviceBindErrors {
+  const normalized = message.toLowerCase();
+  if (/序列号|devicesn|device sn|serial/.test(normalized)) return { sn: message };
+  if (/名称|name/.test(normalized)) return { name: message };
+  if (/类型|type/.test(normalized)) return { type: message };
+  if (/地块|plot/.test(normalized)) return { plotId: message };
+  return { form: message };
 }

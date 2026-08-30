@@ -1,6 +1,6 @@
-import { Bell, Bot, Check, Grid2X2, LogOut, Map, MessageSquare, Pencil, Plus, RefreshCw, Send, Settings, Sprout, Square, X } from 'lucide-react';
+import { Bell, Bot, Check, Grid2X2, Inbox, LogOut, Map, MessageSquare, Pencil, Plus, RefreshCw, Send, Settings, Sprout, Square, X } from 'lucide-react';
 import { FormEvent, MouseEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { api, ApiError, streamAgentChat, streamEvents, tokenStorage } from './api';
+import { api, ApiError, streamAgentChat, streamEvents, streamOfflineBacklog, tokenStorage } from './api';
 import { AdminPanel } from './pages/admin/AdminPanel';
 import { AlarmCenterPage } from './pages/AlarmCenterPage';
 import { ControlPanelPage } from './pages/ControlPanelPage';
@@ -56,6 +56,7 @@ export default function App() {
   const [plotDetailLoading, setPlotDetailLoading] = useState(false);
   const [events, setEvents] = useState<EventNotice[]>([]);
   const agentControllerRef = useRef<AbortController | null>(null);
+  const offlineBacklogControllerRef = useRef<AbortController | null>(null);
   const refreshRequestRef = useRef(0);
   const trendRequestRef = useRef(0);
   const plotDetailRequestRef = useRef(0);
@@ -63,6 +64,9 @@ export default function App() {
   const [agentMessages, setAgentMessages] = useState<AgentChatMessage[]>([]);
   const [agentStreaming, setAgentStreaming] = useState(false);
   const [agentError, setAgentError] = useState('');
+  const [offlineBacklog, setOfflineBacklog] = useState('');
+  const [offlineBacklogLoading, setOfflineBacklogLoading] = useState(false);
+  const [offlineBacklogError, setOfflineBacklogError] = useState('');
 
   const pulseButton = useCallback((button: HTMLButtonElement | null) => {
     if (!button || !button.isConnected) return;
@@ -99,6 +103,45 @@ export default function App() {
 
   const selectTrendMetric = useCallback((metric: TelemetryHistoryMetric) => {
     setTrendMetric(metric);
+  }, []);
+
+  const requestOfflineBacklog = useCallback(async () => {
+    if (offlineBacklogControllerRef.current) return;
+
+    const controller = new AbortController();
+    offlineBacklogControllerRef.current = controller;
+    let content = '';
+    let streamError = '';
+    setOfflineBacklogError('');
+    setOfflineBacklogLoading(true);
+
+    try {
+      await streamOfflineBacklog((event) => {
+        if (event.type === 'answer' && event.delta) {
+          content += event.delta;
+          setOfflineBacklog(content);
+          return;
+        }
+        if (event.type === 'error') {
+          streamError = event.message || '补发信息获取失败，请稍后重试。';
+        }
+      }, controller.signal);
+      if (!streamError && !controller.signal.aborted) {
+        setOfflineBacklog(content);
+      }
+    } catch (error) {
+      if (!isAbortError(error)) {
+        streamError = errorMessage(error);
+      }
+    } finally {
+      if (offlineBacklogControllerRef.current === controller) {
+        offlineBacklogControllerRef.current = null;
+        if (streamError && !controller.signal.aborted) {
+          setOfflineBacklogError(streamError);
+        }
+        setOfflineBacklogLoading(false);
+      }
+    }
   }, []);
 
   const loadData = useCallback(async () => {
@@ -283,6 +326,8 @@ export default function App() {
 
   function logout() {
     agentControllerRef.current?.abort();
+    offlineBacklogControllerRef.current?.abort();
+    offlineBacklogControllerRef.current = null;
     tokenStorage().clear();
     setUser(null);
     setData(emptyData);
@@ -299,6 +344,9 @@ export default function App() {
     setAgentMessages([]);
     setAgentStreaming(false);
     setAgentError('');
+    setOfflineBacklog('');
+    setOfflineBacklogLoading(false);
+    setOfflineBacklogError('');
   }
 
   async function issueIrrigation(action: 'OPEN' | 'CLOSE', durationSeconds = 600) {
@@ -362,8 +410,7 @@ export default function App() {
       );
       return true;
     } catch (error) {
-      setNotice(errorMessage(error));
-      return false;
+      throw error;
     } finally {
       setBusy(false);
     }
@@ -382,19 +429,20 @@ export default function App() {
       setNotice('阈值规则已添加');
       return true;
     } catch (error) {
-      setNotice(errorMessage(error));
-      return false;
+      throw error;
     } finally {
       setBusy(false);
     }
   }
 
-  async function uploadKnowledge(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    // 在 await 前保存表单引用：React 合成事件的 currentTarget 在异步后失效
-    const formElement = event.currentTarget;
-    const form = new FormData(formElement);
+  async function uploadKnowledge(form: FormData) {
+    const file = form.get('file');
+    if (!(file instanceof File) || !file.name || file.size === 0) {
+      throw new Error('请选择可用的文档文件。');
+    }
+
     setBusy(true);
+    setNotice('');
     try {
       const uploaded = await api.uploadKnowledge(form);
       const knowledge = await api.knowledge();
@@ -402,10 +450,7 @@ export default function App() {
         ...current,
         knowledge: [uploaded, ...knowledge.filter((document) => document.id !== uploaded.id)]
       }));
-      formElement.reset();
       setNotice('知识文档已上传');
-    } catch (error) {
-      setNotice(errorMessage(error));
     } finally {
       setBusy(false);
     }
@@ -576,8 +621,14 @@ export default function App() {
           credentials={credentials}
           busy={busy}
           notice={notice}
-          onAuthModeChange={setAuthMode}
-          onCredentialsChange={setCredentials}
+          onAuthModeChange={(mode) => {
+            setAuthMode(mode);
+            setNotice('');
+          }}
+          onCredentialsChange={(nextCredentials) => {
+            setCredentials(nextCredentials);
+            setNotice('');
+          }}
           onSubmit={handleAuth}
         />
       </div>
@@ -672,9 +723,13 @@ export default function App() {
             messages={agentMessages}
             streaming={agentStreaming}
             error={agentError}
+            offlineBacklog={offlineBacklog}
+            offlineBacklogLoading={offlineBacklogLoading}
+            offlineBacklogError={offlineBacklogError}
             onSend={sendAgentQuestion}
             onNewSession={startNewAgentSession}
             onStop={stopAgentResponse}
+            onRequestOfflineBacklog={requestOfflineBacklog}
           />
         )}
 
@@ -762,8 +817,9 @@ function PlotsView(props: {
         <div className="detail-pills">
           <span>作物 {props.selectedPlot?.cropName || '未设置'}</span>
           <span>种植 {formatPlantingDate(props.selectedPlot?.plantingTime)}</span>
-          <span>土壤 {formatMetric(props.telemetry?.metrics.soilMoisture)}</span>
+          <span>湿度 {formatMetric(props.telemetry?.metrics.soilMoisture)}</span>
           <span>温度 {formatMetric(props.telemetry?.metrics.temperature)}</span>
+          <span>光照 {formatMetric(props.telemetry?.metrics.light)}</span>
           <span>{props.devices.filter((device) => device.plotId === props.selectedPlot?.id).length} 台设备</span>
         </div>
       </section>
@@ -855,7 +911,8 @@ function ThresholdRuleEditor(props: {
     const current = props.rule?.operator;
     return current === 'LTE' || current === 'GT' || current === 'GTE' ? current : 'LT';
   });
-  const [error, setError] = useState('');
+  const [valueError, setValueError] = useState('');
+  const [formError, setFormError] = useState('');
   const ruleMetric = props.rule?.metric ?? metric;
   const limits = thresholdMetricLimits(ruleMetric);
   const unit = props.rule?.unit ?? thresholdMetricUnit(metric);
@@ -863,28 +920,38 @@ function ThresholdRuleEditor(props: {
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const nextValue = Number(value);
-    if (!Number.isFinite(nextValue)) {
-      setError('请输入有效阈值。');
+    if (!value.trim() || !Number.isFinite(nextValue)) {
+      setValueError('请输入有效阈值。');
       return;
     }
     if (limits && (nextValue < limits.min || nextValue > limits.max)) {
-      setError(`阈值范围为 ${limits.min} 至 ${limits.max}${unit}。`);
+      setValueError(`阈值范围为 ${limits.min} 至 ${limits.max}${unit}。`);
       return;
     }
 
-    setError('');
-    const saved = props.rule
-      ? await props.onSave({ ...props.rule, value: nextValue, operator })
-      : await props.onCreate({ metric, value: nextValue, operator, hysteresis: 0, enabled: true });
-    if (saved) {
-      props.onCancel();
-    } else {
-      setError('保存失败，请检查后重试。');
+    setValueError('');
+    setFormError('');
+    try {
+      const saved = props.rule
+        ? await props.onSave({ ...props.rule, value: nextValue, operator })
+        : await props.onCreate({ metric, value: nextValue, operator, hysteresis: 0, enabled: true });
+      if (saved) {
+        props.onCancel();
+      } else {
+        setFormError('保存失败，请检查后重试。');
+      }
+    } catch (error) {
+      const message = errorMessage(error);
+      if (/阈值|threshold|value|范围/.test(message.toLowerCase())) {
+        setValueError(message);
+      } else {
+        setFormError(message);
+      }
     }
   }
 
   return (
-    <form className="rule-editor" onSubmit={(event) => void submit(event)}>
+    <form className="rule-editor" onSubmit={(event) => void submit(event)} noValidate>
       {creating && (
         <label className="rule-editor-metric">
           监测指标
@@ -904,9 +971,15 @@ function ThresholdRuleEditor(props: {
           min={limits?.min}
           max={limits?.max}
           value={value}
-          onChange={(event) => setValue(event.target.value)}
-          required
+          onChange={(event) => {
+            setValue(event.target.value);
+            setValueError('');
+          }}
+          className={valueError ? 'input-invalid' : undefined}
+          aria-invalid={Boolean(valueError)}
+          aria-describedby={valueError ? 'threshold-value-error' : undefined}
         />
+        {valueError && <p className="field-error" id="threshold-value-error" role="alert">{valueError}</p>}
       </label>
       <label>
         触发条件
@@ -920,7 +993,7 @@ function ThresholdRuleEditor(props: {
           <option value="GTE">高于等于 (&ge;)</option>
         </select>
       </label>
-      {error && <p className="rule-editor-error">{error}</p>}
+      {formError && <p className="rule-editor-error" role="alert">{formError}</p>}
       <div className="rule-editor-actions">
         <button type="submit" className="rule-save-button" disabled={props.busy}>
           <Check size={17} />
@@ -942,9 +1015,13 @@ function AskView(props: {
   messages: AgentChatMessage[];
   streaming: boolean;
   error: string;
+  offlineBacklog: string;
+  offlineBacklogLoading: boolean;
+  offlineBacklogError: string;
   onSend: (question: string) => Promise<void>;
   onNewSession: () => Promise<void>;
   onStop: () => void;
+  onRequestOfflineBacklog: () => Promise<void>;
 }) {
   const [draft, setDraft] = useState('');
 
@@ -1068,6 +1145,33 @@ function AskView(props: {
           </div>
         ))}
       </section>
+      <section className="offline-backlog" aria-busy={props.offlineBacklogLoading}>
+        <header className="offline-backlog-header">
+          <div className="offline-backlog-title">
+            <Inbox size={19} />
+            <strong>离线补发</strong>
+          </div>
+          <button
+            type="button"
+            className={`offline-backlog-action${props.offlineBacklogLoading ? ' is-refreshing' : ''}`}
+            onClick={() => void props.onRequestOfflineBacklog()}
+            disabled={props.offlineBacklogLoading}
+          >
+            <RefreshCw size={16} />
+            <span>{props.offlineBacklogLoading ? '获取中' : '获取补发'}</span>
+          </button>
+        </header>
+        <div className="offline-backlog-content" aria-live="polite">
+          {props.offlineBacklog ? (
+            <p>{props.offlineBacklog}</p>
+          ) : (
+            <span className="offline-backlog-empty">
+              {props.offlineBacklogLoading ? '正在获取补发信息' : '暂无补发信息'}
+            </span>
+          )}
+          {props.offlineBacklogError && <p className="offline-backlog-error" role="alert">{props.offlineBacklogError}</p>}
+        </div>
+      </section>
     </div>
   );
 }
@@ -1147,7 +1251,8 @@ function applyTelemetryEvent(current: AppData, event: EventNotice): AppData {
   const plotId = eventNumber(event.data.plotId);
   const soilMoisture = eventNumber(event.data.soilMoisture);
   const temperature = eventNumber(event.data.temperature);
-  if (plotId == null || (soilMoisture == null && temperature == null)) {
+  const light = eventNumber(event.data.light);
+  if (plotId == null || (soilMoisture == null && temperature == null && light == null)) {
     return current;
   }
 
@@ -1169,7 +1274,10 @@ function applyTelemetryEvent(current: AppData, event: EventNotice): AppData {
             value: temperature,
             unit: existing?.metrics.temperature?.unit ?? current.dashboard?.avgTemperature?.unit ?? celsiusUnit
           }
-        })
+        }),
+    ...(light == null
+      ? {}
+      : { light: { value: light, unit: existing?.metrics.light?.unit ?? 'lx' } })
   };
   const telemetry: Record<number, TelemetryLatest> = {
     ...current.telemetry,

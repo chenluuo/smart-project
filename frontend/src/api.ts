@@ -31,6 +31,7 @@ import type {
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '');
 const AGENT_BASE = (import.meta.env.VITE_AGENT_BASE_URL ?? '').replace(/\/$/, '');
+export const SYSTEM_REDELIVERY_QUESTION = '【系统补发】';
 
 export class ApiError extends Error {
   status: number;
@@ -210,7 +211,7 @@ export const api = {
 };
 
 export async function streamAgentChat(
-  payload: { sessionId?: string; plotId?: number; question: string },
+  payload: { sessionId?: string; plotId?: number | ''; question: string },
   onEvent: (event: AgentStreamEvent) => void,
   signal: AbortSignal
 ) {
@@ -277,6 +278,17 @@ export async function streamAgentChat(
       }
     }
   }
+}
+
+export function streamOfflineBacklog(
+  onEvent: (event: AgentStreamEvent) => void,
+  signal: AbortSignal
+) {
+  return streamAgentChat(
+    { sessionId: '', plotId: '', question: SYSTEM_REDELIVERY_QUESTION },
+    onEvent,
+    signal
+  );
 }
 
 async function closeAgentChat(sessionId: string) {
