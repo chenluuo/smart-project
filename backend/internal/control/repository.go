@@ -20,6 +20,7 @@ type IrrigationDevice struct {
 type CommandListRow struct {
 	Command
 	PlotCode     string `gorm:"column:plot_code"`
+	PlotName     string `gorm:"column:plot_name"`
 	OperatorName string `gorm:"column:operator_name"`
 }
 
@@ -122,7 +123,34 @@ func (r *Repository) ListByOwner(ctx context.Context, ownerID uint64, filter Lis
 		return nil, 0, err
 	}
 	var rows []CommandListRow
-	err := query.Select("c.*, p.code AS plot_code, u.name AS operator_name").
+	err := query.Select("c.*, p.code AS plot_code, p.name AS plot_name, u.name AS operator_name").
+		Order("c.created_at DESC, c.id DESC").
+		Limit(filter.PageSize).Offset((filter.Page - 1) * filter.PageSize).
+		Scan(&rows).Error
+	if err != nil {
+		return nil, 0, err
+	}
+	return rows, total, nil
+}
+
+// AdminList 管理后台全量命令查询（不按地块归属过滤）。
+func (r *Repository) AdminList(ctx context.Context, filter ListFilter) ([]CommandListRow, int64, error) {
+	query := r.db.WithContext(ctx).Table("device_commands AS c").
+		Joins("JOIN plots AS p ON p.id = c.plot_id").
+		Joins("JOIN users AS u ON u.id = c.issued_by")
+	if filter.PlotID != nil {
+		query = query.Where("c.plot_id = ?", *filter.PlotID)
+	}
+	if filter.Status != nil {
+		query = query.Where("c.status = ?", *filter.Status)
+	}
+
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var rows []CommandListRow
+	err := query.Select("c.*, p.code AS plot_code, p.name AS plot_name, u.name AS operator_name").
 		Order("c.created_at DESC, c.id DESC").
 		Limit(filter.PageSize).Offset((filter.Page - 1) * filter.PageSize).
 		Scan(&rows).Error

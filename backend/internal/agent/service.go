@@ -25,15 +25,28 @@ type Store interface {
 	AppendMessageByOwner(context.Context, *Message, uint64) error
 	ListMessagesByOwner(context.Context, string, uint64, int, int) ([]Message, int64, error)
 	CloseSessionByOwner(context.Context, string, uint64, time.Time) (*Session, error)
+	TokenUsage(context.Context, uint64) (TokenUsage, error)
 }
 
 type MessageInput struct {
-	Role         string
-	Content      string
-	Citations    json.RawMessage
-	PlotID       *uint64
-	ModelVersion string
-	TraceID      string
+	Role             string
+	Content          string
+	Citations        json.RawMessage
+	PlotID           *uint64
+	ModelVersion     string
+	TraceID          string
+	PromptTokens     uint64
+	CompletionTokens uint64
+}
+
+// TokenUsage 用户的 LLM token 消耗（今日与累计，来自 chat_messages 聚合）。
+type TokenUsage struct {
+	TodayPromptTokens     uint64 `json:"todayPromptTokens"`
+	TodayCompletionTokens uint64 `json:"todayCompletionTokens"`
+	TodayTotal            uint64 `json:"todayTotal"`
+	TotalPromptTokens     uint64 `json:"totalPromptTokens"`
+	TotalCompletionTokens uint64 `json:"totalCompletionTokens"`
+	Total                 uint64 `json:"total"`
 }
 
 type MessageList struct {
@@ -119,7 +132,8 @@ func (s *Service) newMessage(sessionID string, input MessageInput) (*Message, er
 	now := s.now().UTC()
 	message := &Message{
 		SessionID: sessionID, Role: role, Content: input.Content, CitationsJSON: citations,
-		PlotID: input.PlotID, ModelVersion: optionalString(input.ModelVersion), TraceID: optionalString(input.TraceID), CreatedAt: now,
+		PlotID: input.PlotID, ModelVersion: optionalString(input.ModelVersion), TraceID: optionalString(input.TraceID),
+		PromptTokens: input.PromptTokens, CompletionTokens: input.CompletionTokens, CreatedAt: now,
 	}
 	return message, nil
 }
@@ -145,6 +159,17 @@ func (s *Service) CloseSession(ctx context.Context, userID uint64, sessionID str
 		return nil, fmt.Errorf("close chat session: %w", err)
 	}
 	return session, nil
+}
+
+func (s *Service) TokenUsage(ctx context.Context, userID uint64) (TokenUsage, error) {
+	if userID == 0 {
+		return TokenUsage{}, ErrInvalidInput
+	}
+	usage, err := s.store.TokenUsage(ctx, userID)
+	if err != nil {
+		return TokenUsage{}, fmt.Errorf("query token usage: %w", err)
+	}
+	return usage, nil
 }
 
 func validMessageRole(role MessageRole) bool {

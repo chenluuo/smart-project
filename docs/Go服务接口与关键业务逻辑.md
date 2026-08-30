@@ -1086,6 +1086,8 @@ X-Trace-Id: trace-001
 | `plot_id` | string/null | 否 | Python 使用的 snake_case 字段；值必须是十进制正整数形式，如 `"11"`，并且必须与会话绑定地块一致 |
 | `model_version` | string | 否 | Python 使用的 snake_case 字段；模型名称或版本，最长 64 个字符 |
 | `trace_id` | string | 否 | Python 使用的 snake_case 字段；链路 ID，最长 64 个字符；优先级高于 `X-Trace-Id` 请求头 |
+| `prompt_tokens` | integer | 否 | 本轮问答消耗的 LLM 输入 token 数（agent 记录，非负整数，缺省 0） |
+| `completion_tokens` | integer | 否 | 本轮问答消耗的 LLM 输出 token 数（agent 记录，非负整数，缺省 0） |
 
 成功响应：
 
@@ -1118,6 +1120,34 @@ X-Trace-Id: trace-001
 | `401` | `40101` | 未携带用户访问令牌、令牌无效或账户已停用 |
 | `404` | `40404` | 会话不存在，或者会话不属于当前用户 |
 | `409` | `40903` | 会话已经关闭，禁止继续写入消息 |
+
+### 8.5 查询自己的 token 消耗
+
+`GET /api/v1/users/me/token-usage`
+
+当前登录用户查询自己的 LLM token 消耗，数据来自 `chat_messages` 中 `ASSISTANT` 消息聚合（agent 每次问答随消息落库 `prompt_tokens`/`completion_tokens`）。
+
+请求体：无。
+
+响应：
+
+```json
+{
+  "code": 0,
+  "message": "OK",
+  "data": {
+    "todayPromptTokens": 15371,
+    "todayCompletionTokens": 807,
+    "todayTotal": 16178,
+    "totalPromptTokens": 15371,
+    "totalCompletionTokens": 807,
+    "total": 16178
+  }
+}
+```
+
+- `today*`：按数据库时间（UTC）当日 00:00 起累计；`total*`：全部历史累计。
+- 历史消息没有 token 数据时各值为 `0`，新问答产生后开始累计。
 
 ## 9. 知识文档管理（Go 侧）
 
@@ -1592,4 +1622,56 @@ DELETE /api/v1/admin/knowledge/docs/{docId}
 ```
 
 - 实现说明：复用告警列表的查询与转换逻辑，仅去掉 `p.owner_id` 归属过滤；查询**不经过 Redis 缓存**，直接读库保证实时性。
+- 权限：非 SYSTEM_ADMIN 返回 `40301` 需要系统管理员权限。
+
+### 12.12 命令记录（全量，管理后台）
+
+`GET /api/v1/admin/commands?plotId=2&status=SUCCEEDED&page=1&pageSize=20`（SYSTEM_ADMIN）
+
+查询**全部用户**的灌溉命令记录（复用 `device_commands` 表，不做 JWT 归属过滤），供管理员面板"命令记录"页使用。
+
+查询参数：
+
+- `plotId`：按地块过滤（可选）
+- `status`：按状态过滤（可选；`PENDING`/`SENT`/`ACKNOWLEDGED`/`SUCCEEDED`/`FAILED`/`TIMEOUT`/`EXPIRED`/`REJECTED`）
+- `page` / `pageSize`：分页（默认 `page=1&pageSize=20`，`pageSize` 上限 100）
+
+响应：
+
+```json
+{
+  "code": 0,
+  "message": "OK",
+  "data": {
+    "items": [
+      {
+        "id": 332,
+        "commandId": "cmd_d99f534c54fd3441fe3f6fb9b5b780de",
+        "plotId": 2,
+        "plotCode": "B1",
+        "plotName": "B1 黄瓜地",
+        "deviceId": 3,
+        "issuedBy": 4,
+        "operatorName": "h268",
+        "action": "IRRIGATION_OFF",
+        "parameters": { "mode": "MANUAL", "reason": "达到目标湿度 65.0%（当前 69.3%）" },
+        "status": "SUCCEEDED",
+        "errorCode": null,
+        "errorMessage": null,
+        "issuedAt": "2026-08-30T07:14:49Z",
+        "expiresAt": "2026-08-30T07:15:49Z",
+        "executedAt": "2026-08-30T07:14:49Z",
+        "createdAt": "2026-08-30T07:14:49Z"
+      }
+    ],
+    "page": 1,
+    "pageSize": 20,
+    "total": 313
+  }
+}
+```
+
+- `parameters` 为 `device_commands.parameters_json` 原样透传（含 `mode`/`reason`/`durationSeconds` 等）。
+- `plotCode`/`plotName` 联 `plots` 表，`operatorName` 联 `users` 表（`issued_by`）。
+- 与农户视角的 `GET /api/v1/commands`（按 JWT 归属过滤）不同，此接口返回全部命令。
 - 权限：非 SYSTEM_ADMIN 返回 `40301` 需要系统管理员权限。
