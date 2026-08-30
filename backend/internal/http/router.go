@@ -115,6 +115,7 @@ func NewRouterWithAdminServices(
 	knowledgeDocuments knowledgeService,
 	telemetry telemetryService,
 	internalServiceKey string,
+	trade tradeService,
 	adminUsers adminUserService,
 	adminPlots adminPlotService,
 	adminKnowledge adminKnowledgeService,
@@ -150,6 +151,8 @@ func NewRouterWithAdminServices(
 	if adminAlerts != nil {
 		registerAdminAlertRoutes(router, auth, adminAlerts)
 	}
+	if trade != nil {
+		registerTradeRoutes(router, auth, trade)
 	if warehouses != nil {
 		registerWarehouseRoutes(router, auth, warehouses)
 	}

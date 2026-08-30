@@ -15,6 +15,7 @@ type registerRequest struct {
 	Mobile   string `json:"mobile" binding:"required"`
 	Username string `json:"username" binding:"required"`
 	Password string `json:"password" binding:"required"`
+	Role     string `json:"role"`
 }
 
 type loginRequest struct {
@@ -54,13 +55,13 @@ func (h authHandler) register(c *gin.Context) {
 		return
 	}
 	user, err := h.service.Register(c.Request.Context(), identity.RegisterInput{
-		Mobile: request.Mobile, AccountName: request.Username, Password: request.Password,
+		Mobile: request.Mobile, AccountName: request.Username, Password: request.Password, Role: request.Role,
 	})
 	if err != nil {
 		switch {
 		case errors.Is(err, identity.ErrUserConflict):
 			respondError(c, http.StatusConflict, 40901, err.Error())
-		case errors.Is(err, identity.ErrInvalidAccountName), errors.Is(err, identity.ErrInvalidMobile), errors.Is(err, identity.ErrInvalidPassword):
+		case errors.Is(err, identity.ErrInvalidAccountName), errors.Is(err, identity.ErrInvalidMobile), errors.Is(err, identity.ErrInvalidPassword), errors.Is(err, identity.ErrInvalidRole):
 			respondError(c, http.StatusBadRequest, 40001, err.Error())
 		default:
 			respondError(c, http.StatusInternalServerError, 50000, "服务器内部错误")

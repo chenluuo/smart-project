@@ -51,7 +51,7 @@ func (s *memoryUserStore) FindUserByID(_ context.Context, userID uint64) (*User,
 	return nil, ErrUserNotFound
 }
 
-func (s *memoryUserStore) CreateUser(_ context.Context, user *User) error {
+func (s *memoryUserStore) CreateUser(_ context.Context, user *User, _ string) error {
 	user.ID = uint64(len(s.users) + 1)
 	s.users = append(s.users, user)
 	return nil

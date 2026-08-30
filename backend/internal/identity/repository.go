@@ -54,13 +54,13 @@ func (r Repositories) FindUserByID(ctx context.Context, userID uint64) (*User, e
 	return &user, nil
 }
 
-func (r Repositories) CreateUser(ctx context.Context, user *User) error {
+func (r Repositories) CreateUser(ctx context.Context, user *User, roleCode string) error {
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(user).Error; err != nil {
 			return err
 		}
 		var role Role
-		if err := tx.Where("role_code = ?", "FARMER").First(&role).Error; err != nil {
+		if err := tx.Where("role_code = ?", roleCode).First(&role).Error; err != nil {
 			return err
 		}
 		return tx.Create(&UserRole{UserID: user.ID, RoleID: role.ID}).Error
