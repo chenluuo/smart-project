@@ -3,7 +3,9 @@
 流程：收到通知（Go 文档上传/变更 → agent 入队）
   → 服务账号登录拿 JWT → 拉 GET /knowledge/docs（可用文档清单，含 downloadUrl）
   → 与 Milvus 已有向量对比（doc_id + version）
-  → 缺失/版本变更 → downloadUrl 拉原文 → 切片 → embedding → 写知识 collection（幂等）
+  → 缺失/版本变更 → downloadUrl 拉原文（二进制）
+      → docling-serve 解析成 Markdown（PDF/DOCX/XLSX/PPTX/图片；纯文本降级 resp.text）
+      → 切片 → embedding → 写知识 collection（幂等）
 """
 from __future__ import annotations
 
@@ -38,14 +40,68 @@ def _service_token() -> str:
         return _cached_token
 
 
-def _fetch(url: str) -> str:
-    """按签名 URL 拉取文档原文（downloadUrl 已带 MinIO 签名）。"""
+def _download(url: str) -> tuple[bytes, str]:
+    """按签名 URL 下载文档原文（二进制 + content-type）。"""
     import httpx
 
     with httpx.Client(timeout=60, trust_env=False) as client:
         resp = client.get(url)
         resp.raise_for_status()
-        return resp.text
+        return resp.content, resp.headers.get("content-type", "")
+
+
+def _parse_with_docling(content: bytes, filename: str) -> str:
+    """调 docling-serve（/v1/convert/file）把文档解析成 Markdown 文本。
+
+    返回空串表示解析无可提取文本（非异常）；HTTP 失败抛异常由调用方降级。
+    """
+    import httpx
+
+    cfg = get_config("docling")
+    url = f"http://{cfg.get('host', 'localhost')}:{cfg.get('port', 5001)}/v1/convert/file"
+    headers = {}
+    api_key = cfg.get("api_key")
+    if api_key:
+        headers["X-Api-Key"] = api_key
+    timeout = int(cfg.get("timeout_seconds", 180))
+    files = {"files": (filename or "document", content, "application/octet-stream")}
+    data = {"to_formats": ["md"]}  # 只要 Markdown（含表格）
+    with httpx.Client(timeout=timeout, trust_env=False) as client:
+        resp = client.post(url, files=files, data=data, headers=headers)
+        resp.raise_for_status()
+        payload = resp.json()
+    # 新版 docling-server：document.{md_content,text_content}；旧版：顶层 markdown
+    doc = payload.get("document") or {}
+    md = (doc.get("md_content") or payload.get("markdown") or "").strip()
+    if not md:  # 都没有 markdown 时兜底纯文本
+        md = (doc.get("text_content") or "").strip()
+    return md
+
+
+def _extract_text(url: str, filename: str, content_type: str) -> str:
+    """优先 docling 解析（支持 PDF/Office/图片）；纯文本格式降级直读。"""
+    try:
+        md = _parse_with_docling(_download(url)[0], filename)
+        if md:
+            return md
+        # docling 返回空：说明文件本身无文本（如纯图片无 OCR），走降级
+        raise ValueError("docling 未提取到文本")
+    except Exception:
+        # 纯文本（txt/md/csv 等）降级为直读原文；二进制格式解析失败则抛错
+        from urllib.parse import urlparse
+
+        url_ext = (urlparse(url).path or "").lower()
+        is_text = (
+            content_type.startswith("text/")
+            or url_ext.endswith((".txt", ".md", ".markdown", ".csv"))
+            or filename.lower().endswith((".txt", ".md", ".markdown", ".csv"))
+        )
+        if is_text:
+            import httpx
+
+            with httpx.Client(timeout=60, trust_env=False) as client:
+                return client.get(url).text
+        raise
 
 
 def _chunk_text(text: str, size: int, overlap: int) -> list[str]:
@@ -87,11 +143,12 @@ def process_doc_event(event: dict) -> dict:
     if not download_url:
         return {"doc_id": doc_id, "status": "skipped", "reason": "缺少 downloadUrl"}
 
-    # 拉原文（downloadUrl 为 MinIO 签名 URL，直连拉取）
+    # 拉原文（二进制）→ docling 解析成 Markdown（纯文本降级）
     try:
-        text = _fetch(download_url)
+        content, content_type = _download(download_url)
+        text = _extract_text(download_url, doc.get("title") or f"{doc_id}.bin", content_type)
     except Exception as e:
-        return {"doc_id": doc_id, "status": "failed", "reason": f"拉取原文失败: {e}"}
+        return {"doc_id": doc_id, "status": "failed", "reason": f"拉取/解析原文失败: {e}"}
 
     # 切片 + embedding + 写入（doc_id + version 幂等）
     chunks = _chunk_text(text, chunk_size, chunk_overlap)

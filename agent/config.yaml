@@ -49,6 +49,13 @@ services:
     bucket: "knowledge"
     secure: false
 
+  docling:
+    host: ${DOCLING_HOST:-localhost}
+    port: 5001
+    # 与 docker-compose 的 DOCLING_API_KEY 保持一致；dev 默认值，上线用 .env 覆盖
+    api_key: ${DOCLING_API_KEY:-dev-docling-key}
+    timeout_seconds: 180        # 解析超时（大文档/首启模型加载都较慢）
+
   agent:
     port: 8000
     base_url: ${AGENT_BASE_URL:-http://localhost:8000}

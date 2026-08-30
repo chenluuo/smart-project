@@ -45,6 +45,19 @@ services:
     ports: ["9000:9000", "9001:9001"]
     volumes: ["minio-data:/data"]
 
+  # 文档解析服务（docling-serve，hwdsl2 一键镜像）：PDF/DOCX/XLSX/PPTX/图片 → Markdown/JSON
+  # ingest-service 上传知识文档时调用 /v1/convert/file 解析原文，替代原纯文本拉取
+  docling:
+    image: hwdsl2/docling-server
+    container_name: agent-docling
+    restart: always
+    environment:
+      # 固定 dev key（与 config.yaml docling.api_key 默认一致）；上线用 .env 覆盖
+      DOCLING_API_KEY: ${DOCLING_API_KEY:-dev-docling-key}
+      DOCLING_DISABLE_USAGE_COUNTS: "1"
+    ports: ["5001:5001"]
+    volumes: ["docling-data:/var/lib/docling"]
+
   agent-service:
     build: {context: ., dockerfile: Dockerfile}
     command: uvicorn main:app --host 0.0.0.0 --port 8000
@@ -81,3 +94,4 @@ volumes:
   milvus-etcd:
   milvus-minio:
   minio-data:
+  docling-data:
