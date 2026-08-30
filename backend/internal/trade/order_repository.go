@@ -5,6 +5,7 @@ import (
 
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // OrderRepository 意向订单仓储（只读查询；写路径由后续订单流转接口补充）。
@@ -159,4 +160,104 @@ func (r *OrderRepository) ReservedByMaterials(ctx context.Context, materialIDs [
 		result[materialID] = reserved
 	}
 	return result, rows.Err()
+}
+
+// WithTx 返回绑定到给定事务的仓库（供在仓储事务内操作订单表）。
+func (r *OrderRepository) WithTx(db *gorm.DB) *OrderRepository { return &OrderRepository{db: db} }
+
+// CreateOrder 创建订单头与明细。
+func (r *OrderRepository) CreateOrder(ctx context.Context, order *OrderHeader, items []OrderItem) (*OrderHeader, []OrderItem, error) {
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(order).Error; err != nil {
+			return mapWriteError(err)
+		}
+		for i := range items {
+			items[i].OrderID = order.ID
+			if err := tx.Create(&items[i]).Error; err != nil {
+				return mapWriteError(err)
+			}
+		}
+		return nil
+	})
+	return order, items, err
+}
+
+// LockOrder 行锁订单（排除已软删）。
+func (r *OrderRepository) LockOrder(ctx context.Context, orderID uint64) (*OrderHeader, error) {
+	var order OrderHeader
+	if err := r.db.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id = ? AND status <> ?", orderID, OrderStatusDeleted).First(&order).Error; err != nil {
+		return nil, mapNotFound(err)
+	}
+	return &order, nil
+}
+
+// Transition 纯状态流转（行锁 + 前置状态校验）。
+func (r *OrderRepository) Transition(ctx context.Context, orderID uint64, target OrderStatus) (*OrderHeader, error) {
+	var order *OrderHeader
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		repo := r.WithTx(tx)
+		o, err := repo.LockOrder(ctx, orderID)
+		if err != nil {
+			return err
+		}
+		if !validOrderTransition(o.Status, target) {
+			return ErrConflict
+		}
+		if err := tx.Model(&OrderHeader{}).Where("id = ?", orderID).Update("status", target).Error; err != nil {
+			return err
+		}
+		o.Status = target
+		order = o
+		return nil
+	})
+	return order, err
+}
+
+// UpdateItemQuantity 成交时更新明细为实成交量。
+func (r *OrderRepository) UpdateItemQuantity(ctx context.Context, itemID uint64, quantity decimal.Decimal) error {
+	result := r.db.WithContext(ctx).Model(&OrderItem{}).Where("id = ?", itemID).Update("quantity", quantity)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// SoftDelete 软删订单（status=DELETED，释放 TRADING 占用）。
+func (r *OrderRepository) SoftDelete(ctx context.Context, orderID uint64) error {
+	result := r.db.WithContext(ctx).Model(&OrderHeader{}).Where("id = ?", orderID).Update("status", OrderStatusDeleted)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// StocksByMaterials 查询指定物料的启用库存（按 warehouse_id 升序，供成交分配仓库）。
+func (r *OrderRepository) StocksByMaterials(ctx context.Context, materialIDs []uint64) ([]Stock, error) {
+	var stocks []Stock
+	if err := r.db.WithContext(ctx).
+		Where("material_id IN ? AND status = ?", materialIDs, StatusActive).
+		Order("warehouse_id ASC").Find(&stocks).Error; err != nil {
+		return nil, err
+	}
+	return stocks, nil
+}
+
+func validOrderTransition(current, target OrderStatus) bool {
+	switch current {
+	case OrderStatusPending:
+		return target == OrderStatusApproved || target == OrderStatusRejected || target == OrderStatusDeleted
+	case OrderStatusApproved:
+		return target == OrderStatusTrading
+	case OrderStatusTrading:
+		return target == OrderStatusClosed
+	default:
+		return false
+	}
 }

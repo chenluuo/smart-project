@@ -161,6 +161,7 @@ func main() {
 	// 意向订单服务实现 ReservationReader（TRADING 占用），注入仓库服务让 GET /stocks 的可用数量减去占用
 	orderService := trade.NewOrderService(trade.NewOrderRepository(db))
 	warehouseService := trade.NewWarehouseService(trade.NewWarehouseRepository(db), orderService)
+	orderService.ConfigureWarehouse(warehouseService)
 	workerContext, stopWorkers := context.WithCancel(context.Background())
 	defer stopWorkers()
 	go alert.NewThresholdExpiryWorker(alertRepositories).Run(workerContext, cfg.Internal.OutboxDispatchInterval)
