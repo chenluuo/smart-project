@@ -1675,3 +1675,97 @@ DELETE /api/v1/admin/knowledge/docs/{docId}
 - `plotCode`/`plotName` 联 `plots` 表，`operatorName` 联 `users` 表（`issued_by`）。
 - 与农户视角的 `GET /api/v1/commands`（按 JWT 归属过滤）不同，此接口返回全部命令。
 - 权限：非 SYSTEM_ADMIN 返回 `40301` 需要系统管理员权限。
+
+## 13. 仓储与意向订单
+
+仓储（物料/仓库/库存/流水/收获入库）与采购意向订单接口。全链路**无价格字段**；数量类型 `DECIMAL(18,3)`，单位取 `materials.unit`。
+
+### 13.1 物料与仓库主数据
+
+`GET/POST/PUT/DELETE /api/v1/materials`、`GET/POST/PUT/DELETE /api/v1/warehouses`
+
+- 权限：`WAREHOUSE_MANAGER` / `SYSTEM_ADMIN`（读写）；列表支持 `keyword`/`status`/分页。
+- 物料字段：`name`、`category`、`unit`、`spec`（可空）、`status`（ACTIVE/DISABLED）；删除为软删除（`DELETED`），物料/仓库存在非零库存时拒绝删除（`40901`）。
+
+### 13.2 库存与出入库流水
+
+`GET /api/v1/stocks?warehouseId=&materialId=&page=&pageSize=`
+
+- 权限：`WAREHOUSE_MANAGER` / `SYSTEM_ADMIN`。
+- 返回每行含 `totalQuantity`（总量）、`reservedQuantity`（已占用，`TRADING` 状态意向占用）、`availableQuantity`（可售 = 总量 − 占用）：
+
+```json
+{
+  "code": 0, "message": "OK",
+  "data": {
+    "items": [{
+      "stockId": 1, "warehouseId": 1, "warehouseName": "成品仓",
+      "materialId": 1, "materialName": "番茄", "unit": "kg",
+      "totalQuantity": "500.000", "reservedQuantity": "200.000", "availableQuantity": "300.000"
+    }],
+    "page": 1, "pageSize": 20, "total": 1
+  }
+}
+```
+
+`GET /api/v1/stock-records?warehouseId=&materialId=&type=IN|OUT&plotId=&startAt=&endAt=&page=&pageSize=`
+
+- 权限：`WAREHOUSE_MANAGER` / `SYSTEM_ADMIN`；返回流水（`type`/`quantity`/`refType`（HARVEST/ORDER/ADJUSTMENT）/`refId`/`plotId`/`operatorName` 等），倒序分页。
+
+### 13.3 收获入库
+
+`POST /api/v1/stocks/inbound`
+
+- 权限：**`FARMER` / `WAREHOUSE_MANAGER` / `SYSTEM_ADMIN`**（FARMER 可登记收获入库）。
+- **必须携带 `Idempotency-Key` 请求头**（≤128 字符，同键同内容重试返回原结果）；`plotId` 必填（来源地块）。
+- 请求体：
+
+```json
+{
+  "warehouseId": 1,
+  "materialId": 1,
+  "quantity": "100",
+  "plotId": 2,
+  "remark": "3 号地块番茄收获"
+}
+```
+
+- 响应 `201`：`{ "recordId": 1, "stockQuantity": "600.000" }`（流水 `ref_type=HARVEST`，`ref_id` 为幂等键）。
+- 错误：`40001` 参数/幂等键不合法；`40401` 仓库、物料或地块不存在；`40901` 内容不一致或主数据停用。
+
+### 13.4 采购意向订单（只读）
+
+`GET /api/v1/orders?status=&page=&pageSize=`
+
+- 权限：登录即可；**`FARMER` / `WAREHOUSE_MANAGER` / `SYSTEM_ADMIN` 可见全部**，**`CUSTOMER` 仅见自己**发起的意向。
+- `status` 可选：`PENDING`/`APPROVED`/`TRADING`/`CONFIRMED`/`CLOSED`/`REJECTED`。
+
+响应（`data.items[]`，倒序分页）：
+
+```json
+{
+  "id": 1, "orderNo": "INT-20260830-001", "status": "APPROVED",
+  "customerId": 26, "customerName": "customer1",
+  "expectedTime": "2026-09-15T00:00:00Z", "remark": "番茄采购意向",
+  "createdAt": "2026-08-30T08:00:00Z",
+  "items": [{
+    "materialId": 1, "materialName": "番茄", "unit": "kg",
+    "quantity": "300.000", "availableQuantity": "300.000"
+  }]
+}
+```
+
+- 每单明细的 `availableQuantity` 为该物料可售数量（库存总量 − TRADING 占用，与 `GET /stocks` 同源）。
+- 意向单的创建/审批/成交等写路径由订单模块后续补充；当前表结构、占用计算与只读查询已就绪。
+
+`GET /api/v1/orders/{id}`
+
+- 权限同上；`CUSTOMER` 访问他人意向返回 `40401`。
+- 返回结构与列表单条一致。
+
+### 13.5 Agent 工具（tool-service）
+
+| 工具 | 数据源 | 说明 |
+|---|---|---|
+| `get_order_intents` | `GET /orders?status=APPROVED` | 查审批通过的意向（**固定 APPROVED，无入参**），返回物料/数量/期望时间，供种植建议 |
+| `harvest_inbound` | `POST /stocks/inbound` | 收获入库登记（内部生成 `Idempotency-Key` 幂等） |

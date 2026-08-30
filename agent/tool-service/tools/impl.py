@@ -1,4 +1,4 @@
-"""tool-service：17 个工具实现（集中管理）+ JSON Schema 定义。
+"""tool-service：19 个工具实现（集中管理）+ JSON Schema 定义。
 
 工具清单：
   1. get_user_plots        田块查询入口（Go /plots，JWT 权限）
@@ -18,6 +18,8 @@
  15. create_scheduled_task 创建定时任务（interval/cron/once，到点提醒）
  16. list_scheduled_tasks  查询我的定时任务
  17. cancel_scheduled_task 取消定时任务
+ 18. get_order_intents     查询审批通过的采购意向（Go GET /orders，供种植建议）
+ 19. harvest_inbound       收获入库（Go POST /stocks/inbound，幂等）
 
 注：
 - 按时间控泵的 send_irrigation_command 已不对 LLM 暴露（保留函数仅供
@@ -667,6 +669,73 @@ def irrigate_to_target_humidity(authorization: str, args: dict) -> dict:
 
 
 # ============================================================
+# 19. get_order_intents：查询审批通过的采购意向（供农户种植建议）
+# 数据源 Go GET /orders?status=APPROVED（固定审批通过状态；FARMER/ADMIN/WAREHOUSE_MANAGER 全量）
+# ============================================================
+
+GET_ORDER_INTENTS_SCHEMA = {}
+
+
+def get_order_intents(authorization: str, args: dict) -> dict:
+    """查询审批通过（APPROVED）的采购意向订单，返回订单号/物料/数量/期望时间，供安排种植参考。"""
+    if _mock_enabled():
+        return {"ok": True, "data": {
+            "items": [{"orderNo": "INT-20260830-001", "materialName": "番茄",
+                       "quantity": "500.000", "unit": "kg", "expectedTime": "2026-09-15T00:00:00Z"}],
+        }}
+    data = get_go_client().get_orders(authorization, status="APPROVED")
+    items = []
+    for order in (data.get("items") or []):
+        for it in (order.get("items") or []):
+            items.append({
+                "orderId": order.get("id"),
+                "orderNo": order.get("orderNo"),
+                "status": order.get("status"),
+                "materialId": it.get("materialId"),
+                "materialName": it.get("materialName"),
+                "quantity": it.get("quantity"),
+                "unit": it.get("unit"),
+                "availableQuantity": it.get("availableQuantity"),
+                "expectedTime": order.get("expectedTime"),
+            })
+    return {"ok": True, "data": {"items": items}}
+
+
+# ============================================================
+# 20. harvest_inbound：收获入库（调 Go POST /stocks/inbound）
+# FARMER/WAREHOUSE_MANAGER/SYSTEM_ADMIN 可调；Idempotency-Key 幂等
+# ============================================================
+
+HARVEST_INBOUND_SCHEMA = {
+    "warehouse_id": {"type": "integer", "description": "仓库 ID（必填）"},
+    "material_id": {"type": "integer", "description": "物料 ID（必填）"},
+    "quantity": {"type": "number", "description": "收获数量（必填，>0）"},
+    "plot_id": {"type": "integer", "description": "来源地块 ID（必填）"},
+    "remark": {"type": "string", "description": "备注（可选）"},
+}
+
+
+def harvest_inbound(authorization: str, args: dict) -> dict:
+    """收获入库：把本次收获登记进成品仓库存（Go POST /stocks/inbound，幂等）。"""
+    import time as _t
+    import uuid
+
+    if _mock_enabled():
+        return {"ok": True, "data": {"recordId": 1, "stockQuantity": args.get("quantity")}}
+    body = {
+        "warehouseId": args["warehouse_id"],
+        "materialId": args["material_id"],
+        "quantity": str(args["quantity"]),
+        "plotId": args["plot_id"],
+    }
+    if args.get("remark"):
+        body["remark"] = args["remark"]
+    key = f"harvest-{int(_t.time() * 1000)}-{uuid.uuid4().hex[:8]}"
+    data = get_go_client().post_stock_inbound(authorization, body, headers={"Idempotency-Key": key})
+    return {"ok": True, "data": data}
+
+
+# ============================================================
 # 注册表（启动时调用）
 # ============================================================
 
@@ -694,3 +763,6 @@ def register_all() -> None:
     reg.register("create_scheduled_task", "1.0", "创建定时任务（周期/间隔/一次性，到点提醒）", CREATE_SCHEDULED_TASK_SCHEMA, ["name", "trigger_type", "trigger", "message"], create_scheduled_task)
     reg.register("list_scheduled_tasks", "1.0", "查询我的定时任务", LIST_SCHEDULED_TASKS_SCHEMA, [], list_scheduled_tasks)
     reg.register("cancel_scheduled_task", "1.0", "取消定时任务", CANCEL_SCHEDULED_TASK_SCHEMA, ["task_id"], cancel_scheduled_task)
+    # 仓储/意向订单
+    reg.register("get_order_intents", "1.0", "查询审批通过的采购意向订单（物料/数量/期望时间），供种植安排参考", GET_ORDER_INTENTS_SCHEMA, [], get_order_intents)
+    reg.register("harvest_inbound", "1.0", "收获入库：登记本次收获进成品仓库存（幂等）", HARVEST_INBOUND_SCHEMA, ["warehouse_id", "material_id", "quantity", "plot_id"], harvest_inbound)

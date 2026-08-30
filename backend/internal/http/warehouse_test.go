@@ -67,11 +67,20 @@ func (s *warehouseServiceStub) ListRecords(context.Context, trade.RecordFilter) 
 	return trade.ListResult[trade.RecordView]{Items: []trade.RecordView{}, Page: 1, PageSize: 20}, nil
 }
 
+type orderServiceStub struct{}
+
+func (orderServiceStub) List(context.Context, trade.OrderFilter) (trade.ListResult[trade.OrderView], error) {
+	return trade.ListResult[trade.OrderView]{Items: []trade.OrderView{}, Page: 1, PageSize: 20}, nil
+}
+func (orderServiceStub) Get(context.Context, uint64) (*trade.OrderView, error) {
+	return &trade.OrderView{ID: 1, OrderNo: "INT-1"}, nil
+}
+
 func TestWarehouseRoutesAuthenticationAndRoleGates(t *testing.T) {
 	farmerService := &warehouseServiceStub{}
 	farmerAuth := roleAuthStub{role: "FARMER"}
 	farmerRouter := NewRouter("test", pingerStub{}, farmerAuth)
-	registerWarehouseRoutes(farmerRouter, farmerAuth, farmerService)
+	registerWarehouseRoutes(farmerRouter, farmerAuth, farmerService, orderServiceStub{})
 
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/stocks", nil)
 	response := httptest.NewRecorder()
@@ -96,7 +105,7 @@ func TestWarehouseRoutesAuthenticationAndRoleGates(t *testing.T) {
 	}
 	farmAdminAuth := roleAuthStub{role: "FARM_ADMIN"}
 	farmAdminRouter := NewRouter("test", pingerStub{}, farmAdminAuth)
-	registerWarehouseRoutes(farmAdminRouter, farmAdminAuth, &warehouseServiceStub{})
+	registerWarehouseRoutes(farmAdminRouter, farmAdminAuth, &warehouseServiceStub{}, orderServiceStub{})
 	request = httptest.NewRequest(http.MethodGet, "/api/v1/stock-records", nil)
 	request.Header.Set("Authorization", "Bearer signed-token")
 	response = httptest.NewRecorder()
@@ -116,7 +125,7 @@ func TestWarehouseRoutesAuthenticationAndRoleGates(t *testing.T) {
 
 	technicianAuth := roleAuthStub{role: "TECHNICIAN"}
 	technicianRouter := NewRouter("test", pingerStub{}, technicianAuth)
-	registerWarehouseRoutes(technicianRouter, technicianAuth, &warehouseServiceStub{})
+	registerWarehouseRoutes(technicianRouter, technicianAuth, &warehouseServiceStub{}, orderServiceStub{})
 	request = httptest.NewRequest(http.MethodGet, "/api/v1/stocks", nil)
 	request.Header.Set("Authorization", "Bearer signed-token")
 	response = httptest.NewRecorder()
@@ -128,7 +137,7 @@ func TestWarehouseRoutesAuthenticationAndRoleGates(t *testing.T) {
 	managerService := &warehouseServiceStub{}
 	managerAuth := roleAuthStub{role: "WAREHOUSE_MANAGER"}
 	managerRouter := NewRouter("test", pingerStub{}, managerAuth)
-	registerWarehouseRoutes(managerRouter, managerAuth, managerService)
+	registerWarehouseRoutes(managerRouter, managerAuth, managerService, orderServiceStub{})
 	request = httptest.NewRequest(http.MethodPost, "/api/v1/materials", strings.NewReader(`{"name":"番茄","category":"作物","unit":"kg"}`))
 	request.Header.Set("Authorization", "Bearer signed-token")
 	request.Header.Set("Content-Type", "application/json")
@@ -143,7 +152,7 @@ func TestWarehouseInboundRequiresIdempotencyAndUsesJWTActor(t *testing.T) {
 	service := &warehouseServiceStub{}
 	auth := roleAuthStub{role: "WAREHOUSE_MANAGER"}
 	router := NewRouter("test", pingerStub{}, auth)
-	registerWarehouseRoutes(router, auth, service)
+	registerWarehouseRoutes(router, auth, service, orderServiceStub{})
 	body := `{"warehouseId":1,"materialId":2,"quantity":"500.125","plotId":3}`
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/stocks/inbound", strings.NewReader(body))
 	request.Header.Set("Authorization", "Bearer signed-token")

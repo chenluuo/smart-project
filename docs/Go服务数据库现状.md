@@ -4,7 +4,7 @@
 
 本文记录当前 Go 服务实际使用的数据存储、MySQL 表、主要表关系和 Redis 数据。内容以 2026-08-24 的本地数据库实例、`backend/internal/platform/database/migrations` 迁移文件及当前代码为准。
 
-当前 MySQL 已应用到 `016_add_chat_message_tokens.sql`。数据库结构发生变化后，应同步更新本文。
+当前 MySQL 已应用到 `017_create_order_intents.sql`。数据库结构发生变化后，应同步更新本文。
 
 ## 2. 数据存储总览
 
@@ -18,7 +18,7 @@
 
 ## 3. MySQL 表清单
 
-当前 `smart_agriculture` 数据库共有 18 张表，其中 16 张业务表、2 张迁移元数据表。
+当前 `smart_agriculture` 数据库共有 24 张表，其中 22 张业务表、2 张迁移元数据表。
 
 ### 3.1 用户与权限
 
@@ -28,7 +28,7 @@
 | `roles` | 角色字典 | `id`、`role_code`、`role_name` | `role_code` 唯一 |
 | `user_roles` | 用户与角色多对多关系 | `user_id`、`role_id` | 联合主键；分别外键关联 `users`、`roles` |
 
-迁移定义的预置角色为 `FARMER`、`FARM_ADMIN`、`SYSTEM_ADMIN`。2026-08-24 本地实例实际只有 `FARMER` 和 `SYSTEM_ADMIN`，缺少 `FARM_ADMIN`，属于种子数据与迁移定义不一致，后续应补齐或确认该角色是否废弃。
+迁移定义的预置角色为 `FARMER`、`FARM_ADMIN`、`SYSTEM_ADMIN`、`WAREHOUSE_MANAGER`（015）、`CUSTOMER`（017）。2026-08-24 本地实例实际只有 `FARMER` 和 `SYSTEM_ADMIN`，缺少 `FARM_ADMIN`，属于种子数据与迁移定义不一致，后续应补齐或确认该角色是否废弃。
 
 ### 3.2 地块、设备与控制
 
@@ -53,7 +53,22 @@
 | `audit_logs` | 重要操作的审计记录 | `id`、`actor_id`、`action`、`resource_type`、`resource_id`、`result`、`request_id`、`trace_id` | `actor_id` 可空并关联 `users`；支持按 `trace_id` 追踪 |
 | `outbox_events` | 事务内可靠事件 | `id`、`aggregate_type`、`aggregate_id`、`event_type`、`payload`、`status`、`available_at`、`published_at`、`retry_count`、`last_error` | 与业务写入同事务落库，后台派发器异步处理 |
 
-### 3.4 会话、建议与知识文档
+### 3.4 仓储与意向订单
+
+| 表 | 用途 | 关键字段 | 主要关系或约束 |
+| --- | --- | --- | --- |
+| `materials` | 农产品/农资物料主数据 | `id`、`name`、`category`、`unit`、`spec`、`status` | `name` 唯一；`status` 支持软删除（DELETED） |
+| `warehouses` | 成品仓主数据 | `id`、`name`、`location`、`status` | `name` 唯一 |
+| `stocks` | 实物库存 | `id`、`warehouse_id`、`material_id`、`quantity`、`status` | `(warehouse_id, material_id)` 联合唯一；`quantity >= 0` 检查约束 |
+| `stock_records` | 出入库流水 | `id`、`warehouse_id`、`material_id`、`type(IN/OUT)`、`quantity`、`ref_type(HARVEST/ORDER/ADJUSTMENT)`、`ref_id`、`plot_id`、`operator_id`、`remark` | `quantity > 0` 检查约束；`(ref_type, ref_id, warehouse_id, material_id)` 业务引用唯一 |
+| `order_headers` | 采购意向单主表 | `id`、`order_no`、`status(PENDING/APPROVED/TRADING/CONFIRMED/CLOSED/REJECTED/DELETED)`、`customer_id`、`expected_time`、`remark` | `order_no` 唯一；`customer_id -> users.id` |
+| `order_items` | 意向单明细 | `id`、`order_id`、`material_id`、`quantity`、`warehouse_id`（成交时指定） | `(order_id, material_id)` 联合唯一；`quantity > 0` 检查约束 |
+
+- 全链路**无价格字段**：意向、成交、库存、流水不出现价格。
+- **可售数量**（占用量）由仓储 Service 统一输出：`available = Σstocks − Σ(TRADING 状态 order_items)`，`ReservationReader` 由订单模块实现注入。
+- 数量统一 `DECIMAL(18,3)`，单位取 `materials.unit`（不重复存储）。
+
+### 3.5 会话、建议与知识文档
 
 | 表 | 用途 | 关键字段 | 主要关系或约束 |
 | --- | --- | --- | --- |
@@ -64,11 +79,11 @@
 
 这些表属于 Go 服务的数据管理范围。外部智能体可以通过受保护接口写入消息或接收通知，但不直接拥有或迁移这些 MySQL 表。
 
-### 3.5 迁移元数据
+### 3.6 迁移元数据
 
 | 表 | 用途 |
 | --- | --- |
-| `schema_migrations` | 当前 Go 内嵌迁移器记录已应用的 SQL 文件，现有版本为 001 至 016 |
+| `schema_migrations` | 当前 Go 内嵌迁移器记录已应用的 SQL 文件，现有版本为 001 至 017 |
 | `flyway_schema_history` | 兼容旧 Flyway 数据库的历史记录；Go 迁移器会导入成功版本，避免重复执行 |
 
 ## 4. MySQL 字段明细
@@ -357,6 +372,73 @@
 | `archived_at` | `DATETIME(6)` | 是 | `NULL` | — | 归档时间 |
 | `created_at` | `DATETIME(6)` | 否 | `CURRENT_TIMESTAMP(6)` | — | 创建时间 |
 | `updated_at` | `DATETIME(6)` | 否 | `CURRENT_TIMESTAMP(6)` | `ON UPDATE CURRENT_TIMESTAMP(6)` | 最后更新时间 |
+
+### 4.16.1 仓储表（迁移 015_create_warehouse_schema.sql）
+
+`materials`：物料主数据
+
+| 字段 | 类型 | 可空 | 默认值 | 键与约束 | 业务含义 |
+| --- | --- | --- | --- | --- | --- |
+| `id` | `BIGINT` | 否 | 自增 | 主键 | 物料 ID |
+| `name` | `VARCHAR(128)` | 否 | — | 唯一键 `uk_materials_name` | 物料名称 |
+| `category` | `VARCHAR(64)` | 否 | — | — | 分类（作物/农资等） |
+| `unit` | `VARCHAR(32)` | 否 | — | — | 计量单位（kg/箱等），全链路沿用 |
+| `spec` | `VARCHAR(255)` | 是 | `NULL` | — | 规格说明 |
+| `status` | `VARCHAR(32)` | 否 | `ACTIVE` | 普通索引 | `ACTIVE`/`DISABLED`/`DELETED`（软删除） |
+| `created_at` / `updated_at` | `DATETIME(6)` | 否 | `CURRENT_TIMESTAMP(6)` | — | 时间戳 |
+
+`warehouses`：仓库主数据（`id`、`name` 唯一、`location`、`status`、时间戳，与 materials 同风格）
+
+`stocks`：实物库存
+
+| 字段 | 类型 | 可空 | 默认值 | 键与约束 | 业务含义 |
+| --- | --- | --- | --- | --- | --- |
+| `id` | `BIGINT` | 否 | 自增 | 主键 | 库存行 ID |
+| `warehouse_id` | `BIGINT` | 否 | — | 与 `material_id` 联合唯一；外键 `warehouses.id` | 仓库 |
+| `material_id` | `BIGINT` | 否 | — | 与 `warehouse_id` 联合唯一；外键 `materials.id` | 物料 |
+| `quantity` | `DECIMAL(18,3)` | 否 | `0` | 检查约束 `quantity >= 0` | 实物库存量 |
+| `status` | `VARCHAR(32)` | 否 | `ACTIVE` | — | 库存行状态 |
+| `created_at` / `updated_at` | `DATETIME(6)` | 否 | `CURRENT_TIMESTAMP(6)` | — | 时间戳 |
+
+`stock_records`：出入库流水
+
+| 字段 | 类型 | 可空 | 默认值 | 键与约束 | 业务含义 |
+| --- | --- | --- | --- | --- | --- |
+| `id` | `BIGINT` | 否 | 自增 | 主键 | 流水 ID |
+| `warehouse_id` / `material_id` | `BIGINT` | 否 | — | 外键 | 出入库仓库与物料 |
+| `type` | `VARCHAR(8)` | 否 | — | 检查约束 `IN ('IN','OUT')` | 入库/出库 |
+| `quantity` | `DECIMAL(18,3)` | 否 | — | 检查约束 `> 0` | 变动数量 |
+| `ref_type` | `VARCHAR(32)` | 否 | — | 检查约束 `IN ('HARVEST','ORDER','ADJUSTMENT')` | 业务来源：收获/订单/调整 |
+| `ref_id` | `VARCHAR(128)` | 否 | — | 与 `ref_type`、仓库、物料组成唯一键 `uk_stock_records_business_ref` | 幂等键或订单号 |
+| `plot_id` | `BIGINT` | 是 | `NULL` | 外键 `plots.id` | 来源地块（收获入库） |
+| `operator_id` | `BIGINT` | 否 | — | 外键 `users.id` | 操作人 |
+| `remark` | `VARCHAR(500)` | 是 | `NULL` | — | 备注 |
+| `created_at` / `updated_at` | `DATETIME(6)` | 否 | `CURRENT_TIMESTAMP(6)` | — | 时间戳 |
+
+### 4.16.2 意向订单表（迁移 017_create_order_intents.sql）
+
+`order_headers`：采购意向单主表
+
+| 字段 | 类型 | 可空 | 默认值 | 键与约束 | 业务含义 |
+| --- | --- | --- | --- | --- | --- |
+| `id` | `BIGINT` | 否 | 自增 | 主键 | 意向单 ID |
+| `order_no` | `VARCHAR(32)` | 否 | — | 唯一键 `uk_order_headers_order_no` | 意向单号（Go 生成） |
+| `status` | `VARCHAR(16)` | 否 | `PENDING` | 普通索引 | `PENDING`/`APPROVED`/`TRADING`/`CONFIRMED`/`CLOSED`/`REJECTED`/`DELETED` |
+| `customer_id` | `BIGINT` | 否 | — | 外键 `users.id`；与创建时间组成索引 | 发意向的顾客 |
+| `expected_time` | `DATETIME(6)` | 是 | `NULL` | — | 期望时间（可选） |
+| `remark` | `VARCHAR(500)` | 是 | `NULL` | — | 备注 |
+| `created_at` / `updated_at` | `DATETIME(6)` | 否 | `CURRENT_TIMESTAMP(6)` | — | 时间戳 |
+
+`order_items`：意向单明细
+
+| 字段 | 类型 | 可空 | 默认值 | 键与约束 | 业务含义 |
+| --- | --- | --- | --- | --- | --- |
+| `id` | `BIGINT` | 否 | 自增 | 主键 | 明细 ID |
+| `order_id` | `BIGINT` | 否 | — | 与 `material_id` 联合唯一；外键 `order_headers.id` | 所属意向单 |
+| `material_id` | `BIGINT` | 否 | — | 与 `order_id` 联合唯一；外键 `materials.id` | 意向物料 |
+| `quantity` | `DECIMAL(18,3)` | 否 | — | 检查约束 `> 0` | 意向数量 |
+| `warehouse_id` | `BIGINT` | 是 | `NULL` | — | 成交时指定扣库仓库（意向阶段可空） |
+| `created_at` / `updated_at` | `DATETIME(6)` | 否 | `CURRENT_TIMESTAMP(6)` | — | 时间戳 |
 
 ### 4.17 `schema_migrations`：Go 迁移记录
 
