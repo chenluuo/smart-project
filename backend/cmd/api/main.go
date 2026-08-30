@@ -28,6 +28,7 @@ import (
 	"github.com/chenluuo/smart-project/backend/internal/platform/tdengine"
 	"github.com/chenluuo/smart-project/backend/internal/plot"
 	"github.com/chenluuo/smart-project/backend/internal/telemetry"
+	"github.com/chenluuo/smart-project/backend/internal/trade"
 )
 
 func main() {
@@ -157,6 +158,7 @@ func main() {
 	}
 	knowledgeService := knowledge.NewService(knowledge.NewRepository(db), knowledgeObjectStore)
 	knowledgeService.ConfigureObjectAccess(cfg.ObjectStorage.MaxUploadBytes, cfg.ObjectStorage.SignedURLTimeout)
+	warehouseService := trade.NewWarehouseService(trade.NewWarehouseRepository(db), trade.NoReservations{})
 	workerContext, stopWorkers := context.WithCancel(context.Background())
 	defer stopWorkers()
 	go alert.NewThresholdExpiryWorker(alertRepositories).Run(workerContext, cfg.Internal.OutboxDispatchInterval)
@@ -203,7 +205,7 @@ func main() {
 		Handler: httpserver.NewRouterWithAdminServices(
 			cfg.Server.Mode, healthPinger, authService, plotService, deviceService, controlService, alertService,
 			agentService, knowledgeService, telemetryService, cfg.Internal.ServiceKey,
-			identity.NewRepositories(db), plotRepositories, knowledgeService, deviceRepositories, alertService, eventBroker,
+			identity.NewRepositories(db), plotRepositories, knowledgeService, deviceRepositories, alertService, warehouseService, eventBroker,
 		),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,

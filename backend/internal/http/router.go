@@ -120,6 +120,7 @@ func NewRouterWithAdminServices(
 	adminKnowledge adminKnowledgeService,
 	adminDevices adminDeviceService,
 	adminAlerts adminAlertService,
+	warehouses warehouseService,
 	eventSubscribers ...eventSubscriber,
 ) *gin.Engine {
 	router := NewRouterWithBackendServices(
@@ -145,8 +146,12 @@ func NewRouterWithAdminServices(
 	if adminAlerts != nil {
 		registerAdminAlertRoutes(router, auth, adminAlerts)
 	}
+	if warehouses != nil {
+		registerWarehouseRoutes(router, auth, warehouses)
+	}
 	return router
 }
+
 type authService interface {
 	Register(context.Context, identity.RegisterInput) (*identity.User, error)
 	Login(context.Context, string, string) (*identity.LoginResult, error)
