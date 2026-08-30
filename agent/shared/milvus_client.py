@@ -160,3 +160,15 @@ def delete_documents(doc_id: str, kind: str = "knowledge") -> None:
     conn = _get_conn()
     col = _collection(kind)
     conn.delete(collection_name=col, filter=f'doc_id == "{doc_id}"')
+
+
+def list_knowledge_doc_ids() -> set[str]:
+    """返回 knowledge collection 中全部去重 doc_id（对账用）。
+
+    数据量小（切片级），全量 query 一次取回；超大批量可改分页迭代。
+    """
+    conn = _get_conn()
+    col = _collection("knowledge")
+    _load(col)
+    rows = conn.query(collection_name=col, output_fields=["doc_id"], limit=16384)
+    return {str(r.get("doc_id")) for r in rows if r.get("doc_id") is not None}

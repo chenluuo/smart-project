@@ -10,6 +10,15 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+func TestPrimaryRolePrioritizesWarehouseManager(t *testing.T) {
+	if got := primaryRole([]string{"FARMER", "WAREHOUSE_MANAGER"}); got != "WAREHOUSE_MANAGER" {
+		t.Fatalf("primaryRole = %q, want WAREHOUSE_MANAGER", got)
+	}
+	if got := primaryRole([]string{"WAREHOUSE_MANAGER", "SYSTEM_ADMIN"}); got != "SYSTEM_ADMIN" {
+		t.Fatalf("primaryRole = %q, want SYSTEM_ADMIN", got)
+	}
+}
+
 type memoryUserStore struct {
 	users []*User
 	roles []string

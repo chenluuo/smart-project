@@ -72,6 +72,11 @@ func (s *storeStub) ListByOwner(_ context.Context, ownerID uint64, filter ListFi
 	return s.rows, s.total, s.listErr
 }
 
+func (s *storeStub) AdminList(_ context.Context, filter ListFilter) ([]CommandListRow, int64, error) {
+	s.filter = filter
+	return s.rows, s.total, s.listErr
+}
+
 func TestIrrigationStatusUsesLatestSuccessfulCommand(t *testing.T) {
 	ackAt := time.Date(2026, 8, 22, 8, 20, 0, 0, time.UTC)
 	store := &storeStub{

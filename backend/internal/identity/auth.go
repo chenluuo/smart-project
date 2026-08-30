@@ -178,9 +178,11 @@ func (s *AuthService) CurrentUser(ctx context.Context, userID uint64) (*CurrentU
 }
 
 func primaryRole(roles []string) string {
-	for _, role := range roles {
-		if role == "SYSTEM_ADMIN" {
-			return role
+	for _, preferred := range []string{"SYSTEM_ADMIN", "WAREHOUSE_MANAGER", "TECHNICIAN", "FARMER"} {
+		for _, role := range roles {
+			if role == preferred {
+				return role
+			}
 		}
 	}
 	return roles[0]

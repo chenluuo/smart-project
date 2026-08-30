@@ -22,7 +22,7 @@ from shared.observability import configure_logging  # noqa: E402
 from shared.redis_client import get_redis  # noqa: E402
 from shared.trace import bind_correlation_ids, normalize_correlation_id, reset_correlation_ids  # noqa: E402
 
-from doc_processor import process_doc_event  # noqa: E402
+from doc_processor import process_doc_event, reconcile_knowledge  # noqa: E402
 from lru import handle_activity  # noqa: E402
 from summarizer import build_summary  # noqa: E402
 
@@ -40,6 +40,10 @@ HANDLERS = {
 # 定时任务调度间隔（秒）：5 分钟轮询到期的定时任务
 TASK_POLL_SECONDS = 300
 _TASK_SCHEDULE_KEY = "agent:task:schedule"
+
+# 向量对账间隔（秒）：默认每日一次；启动时额外跑一次（清理历史残留）。
+# 对账兜底"删除事件清理失败被丢弃"导致的永久残留（见 doc_processor.reconcile_knowledge）。
+RECONCILE_SECONDS = int(get_config("ingest").get("reconcile_interval_seconds", 86400))
 
 
 def run_task_schedule() -> None:
@@ -114,6 +118,28 @@ def _next_task_run(redis, user_id: str, task: dict, now_ms: float):
         return None
 
 
+def run_reconcile() -> None:
+    """向量对账：清理 Milvus 有向量但 Go 不在 ACTIVE 清单的文档（兜底永久残留）。"""
+    try:
+        result = reconcile_knowledge()
+        log.info(
+            "知识向量对账完成",
+            extra={
+                "event": "knowledge_reconcile",
+                "service": "ingest-service",
+                "result": result.get("status"),
+                "stale_count": len(result.get("stale") or []),
+                "cleaned": result.get("cleaned", 0),
+            },
+        )
+        if result.get("status") == "failed":
+            log.warning("知识向量对账失败: %s", result.get("reason"))
+        elif result.get("failed"):
+            log.warning("知识向量对账部分失败: %s", result["failed"])
+    except Exception as e:
+        log.warning("知识向量对账异常: %s", e)
+
+
 def run_once() -> None:
     r = get_redis()
     for stream in HANDLERS:
@@ -148,7 +174,7 @@ def run_once() -> None:
                 # 失败重投（带重试计数，超限丢弃），失败消息不再丢失
                 recovery_exception = None
                 try:
-                    requeued = r.retry_later(stream, ev, retry_key="retry", max_retries=3)
+                    requeued = r.retry_later(stream, ev, retry_key="retry", max_retries=5)
                     if requeued:
                         r.xack(stream, ev["id"])  # 原消息已重投，可 ACK
                         outcome = "requeued"
@@ -183,12 +209,20 @@ def run_once() -> None:
 def main() -> None:
     log.info("ingest-service 启动，消费队列: %s", list(HANDLERS))
     last_task_check = 0.0
+    last_reconcile = 0.0
+    # 启动即对账一次：清理历史遗留的永久残留（不等首个周期）
+    run_reconcile()
+    last_reconcile = time.time()
     while True:
         run_once()
         # 定时任务：每 TASK_POLL_SECONDS 检查一次
         if time.time() - last_task_check >= TASK_POLL_SECONDS:
             run_task_schedule()
             last_task_check = time.time()
+        # 向量对账：每 RECONCILE_SECONDS（默认每日）一次
+        if time.time() - last_reconcile >= RECONCILE_SECONDS:
+            run_reconcile()
+            last_reconcile = time.time()
         time.sleep(0.5)
 
 

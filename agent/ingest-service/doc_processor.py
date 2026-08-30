@@ -3,7 +3,9 @@
 流程：收到通知（Go 文档上传/变更 → agent 入队）
   → 服务账号登录拿 JWT → 拉 GET /knowledge/docs（可用文档清单，含 downloadUrl）
   → 与 Milvus 已有向量对比（doc_id + version）
-  → 缺失/版本变更 → downloadUrl 拉原文 → 切片 → embedding → 写知识 collection（幂等）
+  → 缺失/版本变更 → downloadUrl 拉原文（二进制）
+      → docling-serve 解析成 Markdown（PDF/DOCX/XLSX/PPTX/图片；纯文本降级 resp.text）
+      → 切片 → embedding → 写知识 collection（幂等）
 """
 from __future__ import annotations
 
@@ -12,9 +14,15 @@ import time
 from typing import Any
 
 from shared.config import get_config
+from shared.docling_client import parse_bytes
 from shared.embedding import embed
 from shared.go_client import get_go_client
-from shared.milvus_client import ensure_collections, upsert_documents
+from shared.milvus_client import (
+    delete_documents,
+    ensure_collections,
+    list_knowledge_doc_ids,
+    upsert_documents,
+)
 
 _token_lock = threading.Lock()
 _cached_token: str = ""
@@ -38,14 +46,40 @@ def _service_token() -> str:
         return _cached_token
 
 
-def _fetch(url: str) -> str:
-    """按签名 URL 拉取文档原文（downloadUrl 已带 MinIO 签名）。"""
+def _download(url: str) -> tuple[bytes, str]:
+    """按签名 URL 下载文档原文（二进制 + content-type）。"""
     import httpx
 
     with httpx.Client(timeout=60, trust_env=False) as client:
         resp = client.get(url)
         resp.raise_for_status()
-        return resp.text
+        return resp.content, resp.headers.get("content-type", "")
+
+
+def _extract_text(url: str, filename: str, content_type: str) -> str:
+    """优先 docling 解析（支持 PDF/Office/图片）；纯文本格式降级直读。"""
+    try:
+        md = parse_bytes(_download(url)[0], filename)
+        if md:
+            return md
+        # docling 返回空：说明文件本身无文本（如纯图片无 OCR），走降级
+        raise ValueError("docling 未提取到文本")
+    except Exception:
+        # 纯文本（txt/md/csv 等）降级为直读原文；二进制格式解析失败则抛错
+        from urllib.parse import urlparse
+
+        url_ext = (urlparse(url).path or "").lower()
+        is_text = (
+            content_type.startswith("text/")
+            or url_ext.endswith((".txt", ".md", ".markdown", ".csv"))
+            or filename.lower().endswith((".txt", ".md", ".markdown", ".csv"))
+        )
+        if is_text:
+            import httpx
+
+            with httpx.Client(timeout=60, trust_env=False) as client:
+                return client.get(url).text
+        raise
 
 
 def _chunk_text(text: str, size: int, overlap: int) -> list[str]:
@@ -87,11 +121,12 @@ def process_doc_event(event: dict) -> dict:
     if not download_url:
         return {"doc_id": doc_id, "status": "skipped", "reason": "缺少 downloadUrl"}
 
-    # 拉原文（downloadUrl 为 MinIO 签名 URL，直连拉取）
+    # 拉原文（二进制）→ docling 解析成 Markdown（纯文本降级）
     try:
-        text = _fetch(download_url)
+        content, content_type = _download(download_url)
+        text = _extract_text(download_url, doc.get("title") or f"{doc_id}.bin", content_type)
     except Exception as e:
-        return {"doc_id": doc_id, "status": "failed", "reason": f"拉取原文失败: {e}"}
+        return {"doc_id": doc_id, "status": "failed", "reason": f"拉取/解析原文失败: {e}"}
 
     # 切片 + embedding + 写入（doc_id + version 幂等）
     chunks = _chunk_text(text, chunk_size, chunk_overlap)
@@ -113,3 +148,37 @@ def process_doc_event(event: dict) -> dict:
         })
     upsert_documents(rows, kind="knowledge")
     return {"doc_id": doc_id, "version": doc.get("version"), "chunks": len(chunks), "status": "ok"}
+
+
+def reconcile_knowledge() -> dict:
+    """对账：清理 Milvus 有向量但 Go 不在 ACTIVE 清单的文档（兜底永久残留）。
+
+    删除/归档事件的向量清理若失败被丢弃（重投超限），会留下永久残留且无感知。
+    此函数周期性（worker 调度，默认每日 + 启动时）扫描差集并清理，保证
+    检索不会无限期返回已删除文档。
+
+    返回 {"status", "stale": [...], "cleaned": n} 供 worker 打日志。
+    """
+    try:
+        docs = get_go_client().get_knowledge_docs(authorization="Bearer " + _service_token())
+    except Exception as e:
+        return {"status": "failed", "reason": f"拉取 Go 可用文档清单失败: {e}"}
+    active_ids = {str(d.get("id")) for d in docs}
+    try:
+        milvus_ids = list_knowledge_doc_ids()
+    except Exception as e:
+        return {"status": "failed", "reason": f"扫描 Milvus 向量失败: {e}"}
+
+    stale = sorted(milvus_ids - active_ids)
+    cleaned = 0
+    failed: list[str] = []
+    for doc_id in stale:
+        try:
+            delete_documents(doc_id)
+            cleaned += 1
+        except Exception as e:
+            failed.append(f"{doc_id}({e})")
+    result: dict[str, Any] = {"status": "ok", "stale": stale, "cleaned": cleaned}
+    if failed:
+        result["failed"] = failed
+    return result

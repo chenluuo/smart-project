@@ -120,7 +120,9 @@ func NewRouterWithAdminServices(
 	adminPlots adminPlotService,
 	adminKnowledge adminKnowledgeService,
 	adminDevices adminDeviceService,
+	adminCommands adminCommandService,
 	adminAlerts adminAlertService,
+	warehouses warehouseService,
 	eventSubscribers ...eventSubscriber,
 ) *gin.Engine {
 	router := NewRouterWithBackendServices(
@@ -143,14 +145,20 @@ func NewRouterWithAdminServices(
 		statusService, _ := devices.(deviceStatusService)
 		registerAdminDeviceRoutes(router, auth, adminDevices, statusService)
 	}
+	if adminCommands != nil {
+		registerAdminCommandRoutes(router, auth, adminCommands)
+	}
 	if adminAlerts != nil {
 		registerAdminAlertRoutes(router, auth, adminAlerts)
 	}
 	if trade != nil {
 		registerTradeRoutes(router, auth, trade)
+	if warehouses != nil {
+		registerWarehouseRoutes(router, auth, warehouses)
 	}
 	return router
 }
+
 type authService interface {
 	Register(context.Context, identity.RegisterInput) (*identity.User, error)
 	Login(context.Context, string, string) (*identity.LoginResult, error)
@@ -193,6 +201,7 @@ type agentService interface {
 	AppendMessageByOwner(context.Context, uint64, string, agent.MessageInput) (*agent.Message, error)
 	ListMessages(context.Context, uint64, string, int, int) (agent.MessageList, error)
 	CloseSession(context.Context, uint64, string) (*agent.Session, error)
+	TokenUsage(context.Context, uint64) (agent.TokenUsage, error)
 }
 
 type knowledgeService interface {

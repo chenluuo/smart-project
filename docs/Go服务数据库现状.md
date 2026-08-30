@@ -4,7 +4,7 @@
 
 本文记录当前 Go 服务实际使用的数据存储、MySQL 表、主要表关系和 Redis 数据。内容以 2026-08-24 的本地数据库实例、`backend/internal/platform/database/migrations` 迁移文件及当前代码为准。
 
-当前 MySQL 已应用到 `012_add_device_warning_alerts.sql`。数据库结构发生变化后，应同步更新本文。
+当前 MySQL 已应用到 `016_add_chat_message_tokens.sql`。数据库结构发生变化后，应同步更新本文。
 
 ## 2. 数据存储总览
 
@@ -58,7 +58,7 @@
 | 表 | 用途 | 关键字段 | 主要关系或约束 |
 | --- | --- | --- | --- |
 | `chat_sessions` | 用户会话 | `id`、`user_id`、`plot_id`、`status`、`summary`、`last_message_at`、`closed_at` | 关联用户；可选关联地块 |
-| `chat_messages` | 会话消息 | `id`、`session_id`、`role`、`content`、`citations_json`、`plot_id`、`model_version`、`trace_id` | 关联会话；可选关联地块 |
+| `chat_messages` | 会话消息 | `id`、`session_id`、`role`、`content`、`citations_json`、`plot_id`、`model_version`、`trace_id`、`prompt_tokens`、`completion_tokens` | 关联会话；可选关联地块；`prompt_tokens`/`completion_tokens` 记录该条 ASSISTANT 消息对应的 LLM token 消耗（015 迁移新增） |
 | `ai_suggestions` | 会话产生的业务建议及采纳状态 | `id`、`session_id`、`plot_id`、`action`、`duration_seconds`、`confidence`、`reason`、`status`、`accepted_by`、`command_id` | 关联会话、地块、采纳用户和可选设备命令 |
 | `knowledge_documents` | 知识文档元数据和发布状态 | `id`、`title`、`category`、`object_key`、`file_hash`、`source`、`status`、`version`、上传/审批/发布/归档信息 | `file_hash` 唯一；上传人与审批人关联 `users`；文件内容位于 MinIO |
 
@@ -68,7 +68,7 @@
 
 | 表 | 用途 |
 | --- | --- |
-| `schema_migrations` | 当前 Go 内嵌迁移器记录已应用的 SQL 文件，现有版本为 001 至 013 |
+| `schema_migrations` | 当前 Go 内嵌迁移器记录已应用的 SQL 文件，现有版本为 001 至 016 |
 | `flyway_schema_history` | 兼容旧 Flyway 数据库的历史记录；Go 迁移器会导入成功版本，避免重复执行 |
 
 ## 4. MySQL 字段明细
@@ -317,6 +317,8 @@
 | `plot_id` | `BIGINT` | 是 | `NULL` | 外键 `plots.id` | 消息关联地块 |
 | `model_version` | `VARCHAR(64)` | 是 | `NULL` | — | 生成消息的模型版本 |
 | `trace_id` | `VARCHAR(64)` | 是 | `NULL` | — | 跨组件追踪 ID |
+| `prompt_tokens` | `BIGINT` | 否 | `0` | — | 本条 ASSISTANT 消息对应的 LLM 输入 token 数（agent 随消息落库；USER/SYSTEM/TOOL 消息为 0） |
+| `completion_tokens` | `BIGINT` | 否 | `0` | — | 本条 ASSISTANT 消息对应的 LLM 输出 token 数 |
 | `created_at` | `DATETIME(6)` | 否 | `CURRENT_TIMESTAMP(6)` | — | 创建时间 |
 
 ### 4.15 `ai_suggestions`：业务建议
