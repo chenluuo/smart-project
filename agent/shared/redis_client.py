@@ -155,13 +155,28 @@ class RedisClient:
         pipe.expire(key, ttl)
         pipe.execute()
 
-    def proactive_get(self, user_id: str) -> list[dict[str, Any]]:
-        raw = self._r.lrange(f"agent:proactive:{user_id}", 0, 9)
+    # Lua 脚本：原子读取并清空 proactive 列表（读后清，避免补发后重复展示）。
+    _PROACTIVE_DRAIN_LUA = """
+    local key = KEYS[1]
+    local items = redis.call('LRANGE', key, 0, -1)
+    redis.call('DEL', key)
+    return items
+    """
+
+    def proactive_drain(self, user_id: str) -> list[dict[str, Any]]:
+        """读取并清空该用户的主动通知（用户在线/上线后拉取，视为已送达）。"""
+        key = f"agent:proactive:{user_id}"
+        try:
+            raw = self._r.eval(self._PROACTIVE_DRAIN_LUA, 1, key)
+        except Exception:
+            # 降级：非原子读后清（极端情况），避免拉取失败阻塞
+            raw = self._r.lrange(key, 0, -1)
+            self._r.delete(key)
         out: list[dict[str, Any]] = []
         for item in raw or []:
             try:
                 out.append(json.loads(item))
-            except json.JSONDecodeError:
+            except (TypeError, json.JSONDecodeError):
                 continue
         return out
 

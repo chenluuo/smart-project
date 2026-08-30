@@ -146,6 +146,20 @@ class CloseRequest(BaseModel):
     pass
 
 
+@app.get("/agent/proactive")
+def get_proactive(authorization: str = Header(default=""), request: Request = None) -> dict:
+    """获取当前用户的主动通知（告警/定时任务触发 agent 处理的结果）。
+
+    读后清空：用户在线/上线拉取后视为已送达，避免重复展示。
+    """
+    user_id = _require_user(authorization)
+    set_actor_id(user_id)
+    if request is not None:
+        request.state.actor_id = user_id
+    items = get_redis().proactive_drain(user_id)
+    return {"ok": True, "items": items}
+
+
 @app.post("/agent/chat/sessions/{session_id}/close")
 def close_session(session_id: str, request: Request, authorization: str = Header(default="")) -> dict:
     user_id = _require_user(authorization)
@@ -170,6 +184,28 @@ class NotifyRequest(BaseModel):
     doc_id: str | int = Field(alias="docId")
     event: str
     version: int | None = None
+
+
+class TaskTriggerRequest(BaseModel):
+    task: dict
+
+
+@app.post("/internal/task/trigger")
+def task_trigger(req: TaskTriggerRequest, x_internal_key: str = Header(default="", alias="X-Internal-Key"),
+                 x_internal_service_key: str = Header(default="", alias="X-Internal-Service-Key")) -> dict:
+    """定时任务到期触发：ingest worker 调用，后台以任务所属用户身份跑 agent 编排。"""
+    import threading
+
+    from task_trigger import run_task_in_background
+
+    expected = get_config("go").get("internal_key")
+    if not expected or (x_internal_key != expected and x_internal_service_key != expected):
+        raise HTTPException(status_code=401, detail="内部密钥无效")
+    task = req.task or {}
+    if not task.get("user_id"):
+        raise HTTPException(status_code=400, detail="task.user_id 不能为空")
+    threading.Thread(target=run_task_in_background, args=(task,), daemon=True).start()
+    return {"ok": True, "accepted": True}
 
 
 @app.post("/internal/knowledge/notify")

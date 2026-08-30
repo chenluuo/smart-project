@@ -110,7 +110,12 @@ async def handle_question(
     plot_id: str | None,
     authorization: str,
 ) -> AsyncIterator[dict[str, Any]]:
-    """处理一轮问答，SSE 事件流：{type: answer/done/error, ...}。"""
+    """处理一轮问答，SSE 事件流：{type: answer/done/error, ...}。
+
+    【系统补发】特殊指令：前端上线/切页时调用，返回该用户积压的主动通知
+    （告警分析 / 定时任务汇报，Redis agent:proactive:{userId} 读后清）。
+    拦截在最前：不建会话、不落库、不写窗口、不调 LLM。
+    """
     global _context_url, _tool_url
 
     # 系统补发不属于普通对话：不创建会话、不写入上下文，只返回该用户离线期间积压的主动通知。
@@ -125,6 +130,21 @@ async def handle_question(
 
     _context_url = _context_url or _svc_url("context")
     _tool_url = _tool_url or _svc_url("tool")
+
+    # ---------- 【系统补发】拦截：返回离线积压的主动通知 ----------
+    if (question or "").strip() == "【系统补发】":
+        items = get_redis().proactive_drain(user_id)
+        if not items:
+            yield {"type": "answer", "delta": "暂无新的主动通知"}
+            yield {"type": "done", "sessionId": "", "canClose": True, "closed": False, "sources": []}
+            return
+        for item in items:
+            summary = (item.get("summary") or "").strip() or "(无内容)"
+            ts = item.get("ts")
+            prefix = f"[通知 {ts}] " if ts else ""
+            yield {"type": "answer", "delta": f"{prefix}{summary}\n\n"}
+        yield {"type": "done", "sessionId": "", "canClose": True, "closed": False, "sources": []}
+        return
 
     # ---------- 会话状态 ----------
     state = get_session(session_id) if session_id else None
