@@ -41,6 +41,8 @@ export function LoginPage({
   const [hint, setHint] = useState('');
   const leafClicksRef = useRef(0);
   const leafTimerRef = useRef<number | null>(null);
+  const errorField = notice ? loginErrorField(notice, authMode) : null;
+  const connectionError = notice && !errorField ? notice : '';
 
   function tapLeaf() {
     leafClicksRef.current += 1;
@@ -85,7 +87,11 @@ export function LoginPage({
               value={credentials.username}
               onChange={(event) => onCredentialsChange({ ...credentials, username: event.target.value })}
               placeholder="请输入用户名"
+              className={errorField === 'username' ? 'input-invalid' : undefined}
+              aria-invalid={errorField === 'username'}
+              aria-describedby={errorField === 'username' ? 'auth-username-error' : undefined}
             />
+            {errorField === 'username' && <p className="field-error" id="auth-username-error" role="alert">{notice}</p>}
           </label>
           {authMode === 'register' && (
             <label>
@@ -94,7 +100,11 @@ export function LoginPage({
                 value={credentials.mobile}
                 onChange={(event) => onCredentialsChange({ ...credentials, mobile: event.target.value })}
                 placeholder="请输入手机号"
+                className={errorField === 'mobile' ? 'input-invalid' : undefined}
+                aria-invalid={errorField === 'mobile'}
+                aria-describedby={errorField === 'mobile' ? 'auth-mobile-error' : undefined}
               />
+              {errorField === 'mobile' && <p className="field-error" id="auth-mobile-error" role="alert">{notice}</p>}
             </label>
           )}
           <label>
@@ -104,9 +114,13 @@ export function LoginPage({
               value={credentials.password}
               onChange={(event) => onCredentialsChange({ ...credentials, password: event.target.value })}
               placeholder="请输入密码"
+              className={errorField === 'password' ? 'input-invalid' : undefined}
+              aria-invalid={errorField === 'password'}
+              aria-describedby={errorField === 'password' ? 'auth-password-error' : undefined}
             />
+            {errorField === 'password' && <p className="field-error" id="auth-password-error" role="alert">{notice}</p>}
           </label>
-          {notice && <p className="inline-error">{notice}</p>}
+          {connectionError && <p className="auth-connection-error" role="alert">{connectionError}</p>}
           {hint && <p className="inline-hint">{hint}</p>}
           <button className="primary-button" disabled={busy}>
             {busy ? '处理中...' : authMode === 'login' ? '进入看板' : '注册并登录'}
@@ -122,4 +136,12 @@ export function LoginPage({
       </section>
     </main>
   );
+}
+
+function loginErrorField(notice: string, authMode: AuthMode): 'username' | 'password' | 'mobile' | null {
+  const normalized = notice.toLowerCase();
+  if (/服务|api|连接|network|fetch|localhost|不可达|超时|timeout/.test(normalized)) return null;
+  if (authMode === 'register' && /手机|mobile|phone/.test(normalized)) return 'mobile';
+  if (/(账号|用户名|用户|username)/.test(normalized) && !/(密码|password)/.test(normalized)) return 'username';
+  return 'password';
 }

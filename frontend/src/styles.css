@@ -898,6 +898,90 @@ button.button-feedback {
   color: #53625c;
 }
 
+.offline-backlog {
+  overflow: hidden;
+  border: 1px solid #dfe8df;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.offline-backlog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 56px;
+  padding: 10px 14px;
+  border-bottom: 1px solid #e7eee7;
+}
+
+.offline-backlog-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: #173029;
+}
+
+.offline-backlog-title svg {
+  flex: 0 0 auto;
+  color: #2f8439;
+}
+
+.offline-backlog-title strong {
+  font-size: 16px;
+}
+
+.offline-backlog-action {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid #cfe2d1;
+  border-radius: 8px;
+  color: #246f31;
+  background: #f7fbf7;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.offline-backlog-action:disabled {
+  cursor: default;
+  opacity: 0.56;
+}
+
+.offline-backlog-action.is-refreshing svg {
+  animation: button-refresh-spin 1.1s linear infinite;
+}
+
+.offline-backlog-content {
+  min-height: 52px;
+  padding: 12px 14px;
+  color: #31423a;
+  background: #fbfdfb;
+  font-size: 14px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.offline-backlog-content p {
+  margin: 0;
+}
+
+.offline-backlog-empty {
+  color: #7a877e;
+}
+
+.offline-backlog-error {
+  margin-top: 8px !important;
+  color: #be4238;
+}
+
 .ai-chat {
   display: grid;
   min-height: 590px;
@@ -1630,6 +1714,7 @@ button.button-feedback {
   display: grid;
   grid-template-columns: 0.8fr 1.2fr;
   gap: 8px;
+  align-items: start;
 }
 
 .alert-row button {
@@ -2309,6 +2394,7 @@ button:disabled {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
+  align-items: flex-start;
 }
 
 .admin-bind-form input,
@@ -2327,6 +2413,25 @@ button:disabled {
   background: #2f7f3a;
   color: #fff;
   font-size: 13.5px;
+}
+
+.admin-input-field {
+  display: grid;
+  flex: 1 1 180px;
+  min-width: 0;
+  gap: 6px;
+  color: #3c5049;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.admin-bind-form button.primary {
+  align-self: end;
+  min-height: 39px;
+}
+
+.admin-bind-form .admin-form-error {
+  flex-basis: 100%;
 }
 
 /* 登录页叶子隐藏入口：连点 3 次后叶子淡出 */
@@ -2375,4 +2480,41 @@ button:disabled {
   margin-top: 3px;
   font-size: 11.5px;
   color: #8a9a90;
+}
+
+.auth-connection-error {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid #f0c9b6;
+  border-radius: 12px;
+  color: #a74013;
+  background: #fff6f0;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+.form-field {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+}
+
+.field-error {
+  margin: 0;
+  color: #bd3f37;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+input.input-invalid,
+select.input-invalid {
+  border-color: #d78077;
+  background: #fff8f7;
+}
+
+.knowledge-form-error,
+.admin-form-error {
+  margin-top: -2px;
 }

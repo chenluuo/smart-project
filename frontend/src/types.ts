@@ -49,6 +49,7 @@ export type TelemetryLatest = {
   metrics: {
     soilMoisture?: { value: number; unit: string };
     temperature?: { value: number; unit: string };
+    light?: { value: number; unit: string };
   };
   sourceDevices: Array<{
     id: number;

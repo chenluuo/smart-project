@@ -22,7 +22,8 @@ export function ControlPanelPage({
   onIrrigate
 }: ControlPanelPageProps) {
   const [duration, setDuration] = useState('600');
-  const [error, setError] = useState('');
+  const [plotError, setPlotError] = useState('');
+  const [durationError, setDurationError] = useState('');
   const maxSeconds = irrigation?.maxSeconds ?? 1800;
   const canControl = Boolean(selectedPlot && irrigation);
   const visibleCommands = useMemo(() => {
@@ -30,23 +31,27 @@ export function ControlPanelPage({
     return commands.filter((command) => command.plotCode === selectedPlot.code).slice(0, 6);
   }, [commands, selectedPlot]);
 
-  async function openWithDuration(nextDuration: number) {
-    setError('');
+  async function openWithDuration(nextDuration: number, source: 'quick' | 'custom' = 'quick') {
+    setPlotError('');
+    setDurationError('');
     if (!canControl) {
-      setError('当前地块未绑定灌溉阀门');
+      setPlotError('当前地块未绑定灌溉阀门。');
       return;
     }
     if (nextDuration < 60 || nextDuration > maxSeconds) {
-      setError(`开启时长需在 60-${maxSeconds} 秒之间`);
+      if (source === 'custom') {
+        setDurationError(`开启时长需在 60-${maxSeconds} 秒之间。`);
+      }
       return;
     }
     await onIrrigate('OPEN', nextDuration);
   }
 
   async function closeValve() {
-    setError('');
+    setPlotError('');
+    setDurationError('');
     if (!canControl) {
-      setError('当前地块未绑定灌溉阀门');
+      setPlotError('当前地块未绑定灌溉阀门。');
       return;
     }
     await onIrrigate('CLOSE');
@@ -68,7 +73,13 @@ export function ControlPanelPage({
             当前地块
             <select
               value={selectedPlot?.id ?? ''}
-              onChange={(event) => onSelectPlot(Number(event.target.value))}
+              onChange={(event) => {
+                setPlotError('');
+                onSelectPlot(Number(event.target.value));
+              }}
+              className={plotError ? 'input-invalid' : undefined}
+              aria-invalid={Boolean(plotError)}
+              aria-describedby={plotError ? 'control-plot-error' : undefined}
               disabled={plots.length === 0}
             >
               {plots.length === 0 && <option value="">暂无地块</option>}
@@ -78,6 +89,7 @@ export function ControlPanelPage({
                 </option>
               ))}
             </select>
+            {plotError && <p className="field-error" id="control-plot-error" role="alert">{plotError}</p>}
           </label>
         </div>
 
@@ -96,8 +108,6 @@ export function ControlPanelPage({
           <em>{irrigation?.state === 'ON' ? '运行中' : '待命'}</em>
         </div>
 
-        {error && <p className="inline-error">{error}</p>}
-
         <div className="control-actions">
           <button disabled={busy || !canControl} onClick={() => void openWithDuration(600)}>
             <Power size={18} />
@@ -108,15 +118,24 @@ export function ControlPanelPage({
             开启 900 秒
           </button>
           <div className="duration-field">
-            <input
-              type="number"
-              min={60}
-              max={maxSeconds}
-              value={duration}
-              onChange={(event) => setDuration(event.target.value)}
-              aria-label="自定义开启秒数"
-            />
-            <button disabled={busy || !canControl} onClick={() => void openWithDuration(Number(duration))}>
+            <div className="form-field">
+              <input
+                type="number"
+                min={60}
+                max={maxSeconds}
+                value={duration}
+                onChange={(event) => {
+                  setDuration(event.target.value);
+                  setDurationError('');
+                }}
+                className={durationError ? 'input-invalid' : undefined}
+                aria-label="自定义开启秒数"
+                aria-invalid={Boolean(durationError)}
+                aria-describedby={durationError ? 'control-duration-error' : undefined}
+              />
+              {durationError && <p className="field-error" id="control-duration-error" role="alert">{durationError}</p>}
+            </div>
+            <button disabled={busy || !canControl} onClick={() => void openWithDuration(Number(duration), 'custom')}>
               自定义开启
             </button>
           </div>

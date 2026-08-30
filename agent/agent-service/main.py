@@ -125,8 +125,8 @@ async def chat(req: ChatRequest, request: Request,
             async for ev in handle_question(
                 user_id=user_id,
                 question=req.question,
-                session_id=req.session_id,
-                plot_id=req.plot_id,
+                session_id=req.session_id.strip() or None if req.session_id else None,
+                plot_id=req.plot_id.strip() or None if req.plot_id else None,
                 authorization=authorization,
             ):
                 yield f"event: {ev['type']}\ndata: {json.dumps(ev, ensure_ascii=False)}\n\n"

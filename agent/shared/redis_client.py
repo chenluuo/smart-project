@@ -165,6 +165,21 @@ class RedisClient:
                 continue
         return out
 
+    def proactive_take(self, user_id: str) -> list[dict[str, Any]]:
+        """原子取出并清空用户待补发的主动通知，避免重复补发。"""
+        key = f"agent:proactive:{user_id}"
+        pipe = self._r.pipeline(transaction=True)
+        pipe.lrange(key, 0, -1)
+        pipe.delete(key)
+        raw, _ = pipe.execute()
+        out: list[dict[str, Any]] = []
+        for item in raw or []:
+            try:
+                out.append(json.loads(item))
+            except json.JSONDecodeError:
+                continue
+        return out
+
 
 _inst: RedisClient | None = None
 

@@ -33,6 +33,7 @@ from session import (
 
 _context_url = None
 _tool_url = None
+SYSTEM_REDELIVERY_QUESTION = "【系统补发】"
 
 
 def _svc_url(service: str) -> str:
@@ -111,6 +112,17 @@ async def handle_question(
 ) -> AsyncIterator[dict[str, Any]]:
     """处理一轮问答，SSE 事件流：{type: answer/done/error, ...}。"""
     global _context_url, _tool_url
+
+    # 系统补发不属于普通对话：不创建会话、不写入上下文，只返回该用户离线期间积压的主动通知。
+    if question.strip() == SYSTEM_REDELIVERY_QUESTION:
+        queued = get_redis().proactive_take(user_id)
+        summaries = [str(item.get("summary") or "").strip() for item in reversed(queued)]
+        backlog = "\n\n".join(summary for summary in summaries if summary)
+        if backlog:
+            yield {"type": "answer", "delta": backlog}
+        yield {"type": "done", "canClose": False, "sources": [], "closed": False}
+        return
+
     _context_url = _context_url or _svc_url("context")
     _tool_url = _tool_url or _svc_url("tool")
 
