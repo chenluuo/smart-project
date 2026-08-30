@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/chenluuo/smart-project/backend/internal/identity"
 	"github.com/chenluuo/smart-project/backend/internal/trade"
@@ -74,6 +75,21 @@ func (orderServiceStub) List(context.Context, trade.OrderFilter) (trade.ListResu
 }
 func (orderServiceStub) Get(context.Context, uint64) (*trade.OrderView, error) {
 	return &trade.OrderView{ID: 1, OrderNo: "INT-1"}, nil
+}
+func (orderServiceStub) CreateOrder(context.Context, uint64, *time.Time, string, []trade.OrderItemInput) (*trade.OrderHeader, error) {
+	return &trade.OrderHeader{}, nil
+}
+func (orderServiceStub) Review(context.Context, uint64, bool) (*trade.OrderHeader, error) {
+	return &trade.OrderHeader{}, nil
+}
+func (orderServiceStub) StartTrade(context.Context, uint64) (*trade.OrderHeader, error) {
+	return &trade.OrderHeader{}, nil
+}
+func (orderServiceStub) Terminate(context.Context, uint64, bool) (*trade.OrderHeader, error) {
+	return &trade.OrderHeader{}, nil
+}
+func (orderServiceStub) Confirm(context.Context, uint64, uint64, []trade.ConfirmItemInput) (*trade.OrderHeader, error) {
+	return &trade.OrderHeader{}, nil
 }
 
 func TestWarehouseRoutesAuthenticationAndRoleGates(t *testing.T) {

@@ -30,10 +30,15 @@ type warehouseService interface {
 	ListRecords(context.Context, trade.RecordFilter) (trade.ListResult[trade.RecordView], error)
 }
 
-// orderService 意向订单查询（列表/详情）。
+// orderService 意向订单服务（查询 + 业务流转）。
 type orderService interface {
 	List(context.Context, trade.OrderFilter) (trade.ListResult[trade.OrderView], error)
 	Get(context.Context, uint64) (*trade.OrderView, error)
+	CreateOrder(context.Context, uint64, *time.Time, string, []trade.OrderItemInput) (*trade.OrderHeader, error)
+	Review(context.Context, uint64, bool) (*trade.OrderHeader, error)
+	StartTrade(context.Context, uint64) (*trade.OrderHeader, error)
+	Terminate(context.Context, uint64, bool) (*trade.OrderHeader, error)
+	Confirm(context.Context, uint64, uint64, []trade.ConfirmItemInput) (*trade.OrderHeader, error)
 }
 
 type warehouseHandler struct {
@@ -63,6 +68,12 @@ func registerWarehouseRoutes(router *gin.Engine, auth authService, service wareh
 	// 意向订单：登录即可查（FARMER/ADMIN/WAREHOUSE_MANAGER 全量，CUSTOMER 仅自己，handler 内按角色过滤）
 	api.GET("/orders", h.listOrders)
 	api.GET("/orders/:id", h.getOrder)
+	// 意向订单业务流转
+	api.POST("/orders", requireAnyRole("CUSTOMER"), h.createOrder)
+	api.POST("/orders/:id/review", requireAnyRole("WAREHOUSE_MANAGER", "SYSTEM_ADMIN"), h.reviewOrder)
+	api.POST("/orders/:id/start-trade", requireAnyRole("WAREHOUSE_MANAGER", "SYSTEM_ADMIN"), h.startTrade)
+	api.POST("/orders/:id/terminate", h.terminateOrder)
+	api.POST("/orders/:id/confirm", requireAnyRole("WAREHOUSE_MANAGER", "SYSTEM_ADMIN"), h.confirmOrder)
 }
 
 type materialRequest struct {
@@ -402,4 +413,134 @@ func respondWarehouseError(c *gin.Context, err error) {
 	default:
 		respondError(c, http.StatusInternalServerError, 50000, "服务器内部错误")
 	}
+}
+
+type orderItemRequest struct {
+	MaterialID uint64       `json:"materialId"`
+	Quantity   decimalInput `json:"quantity"`
+}
+
+type createOrderRequest struct {
+	ExpectedTime *time.Time         `json:"expectedTime"`
+	Remark       string             `json:"remark"`
+	Items        []orderItemRequest `json:"items"`
+}
+
+func (h warehouseHandler) createOrder(c *gin.Context) {
+	claims, ok := authenticatedClaims(c)
+	if !ok {
+		return
+	}
+	var request createOrderRequest
+	if !bindWarehouseJSON(c, &request) {
+		return
+	}
+	items := make([]trade.OrderItemInput, 0, len(request.Items))
+	for _, item := range request.Items {
+		items = append(items, trade.OrderItemInput{MaterialID: item.MaterialID, Quantity: item.Quantity.Decimal})
+	}
+	order, err := h.orders.CreateOrder(c.Request.Context(), claims.UserID, request.ExpectedTime, request.Remark, items)
+	if err != nil {
+		respondWarehouseError(c, err)
+		return
+	}
+	respondSuccess(c, http.StatusCreated, order)
+}
+
+func (h warehouseHandler) reviewOrder(c *gin.Context) {
+	orderID, ok := warehousePathID(c)
+	if !ok {
+		return
+	}
+	var request struct {
+		Action string `json:"action"`
+	}
+	if !bindWarehouseJSON(c, &request) {
+		return
+	}
+	action := strings.ToLower(strings.TrimSpace(request.Action))
+	if action != "approve" && action != "reject" {
+		respondError(c, http.StatusBadRequest, 40001, "参数错误：action 必须为 approve 或 reject")
+		return
+	}
+	order, err := h.orders.Review(c.Request.Context(), orderID, action == "approve")
+	if err != nil {
+		respondWarehouseError(c, err)
+		return
+	}
+	respondSuccess(c, http.StatusOK, order)
+}
+
+func (h warehouseHandler) startTrade(c *gin.Context) {
+	orderID, ok := warehousePathID(c)
+	if !ok {
+		return
+	}
+	order, err := h.orders.StartTrade(c.Request.Context(), orderID)
+	if err != nil {
+		respondWarehouseError(c, err)
+		return
+	}
+	respondSuccess(c, http.StatusOK, order)
+}
+
+func (h warehouseHandler) terminateOrder(c *gin.Context) {
+	claims, ok := authenticatedClaims(c)
+	if !ok {
+		return
+	}
+	orderID, ok := warehousePathID(c)
+	if !ok {
+		return
+	}
+	var cancel bool
+	switch claims.Role {
+	case "CUSTOMER":
+		cancel = true
+	case "WAREHOUSE_MANAGER", "SYSTEM_ADMIN":
+		cancel = false
+	default:
+		respondError(c, http.StatusForbidden, 40301, "无权限执行此操作")
+		return
+	}
+	order, err := h.orders.Terminate(c.Request.Context(), orderID, cancel)
+	if err != nil {
+		respondWarehouseError(c, err)
+		return
+	}
+	respondSuccess(c, http.StatusOK, order)
+}
+
+type confirmItemRequest struct {
+	MaterialID uint64       `json:"materialId"`
+	Quantity   decimalInput `json:"quantity"`
+}
+
+type confirmRequest struct {
+	Items []confirmItemRequest `json:"items"`
+}
+
+func (h warehouseHandler) confirmOrder(c *gin.Context) {
+	claims, ok := authenticatedClaims(c)
+	if !ok {
+		return
+	}
+	orderID, ok := warehousePathID(c)
+	if !ok {
+		return
+	}
+	var request confirmRequest
+	if !bindWarehouseJSON(c, &request) {
+		return
+	}
+	items := make([]trade.ConfirmItemInput, 0, len(request.Items))
+	for _, item := range request.Items {
+		items = append(items, trade.ConfirmItemInput{MaterialID: item.MaterialID, Quantity: item.Quantity.Decimal})
+	}
+	order, err := h.orders.Confirm(c.Request.Context(), orderID, claims.UserID, items)
+	if err != nil {
+		respondWarehouseError(c, err)
+		return
+	}
+	respondSuccess(c, http.StatusOK, order)
 }

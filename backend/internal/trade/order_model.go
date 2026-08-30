@@ -70,3 +70,15 @@ type OrderView struct {
 	CreatedAt    time.Time       `json:"createdAt"`
 	Items        []OrderItemView `json:"items"`
 }
+
+// OrderItemInput 发意向明细入参。
+type OrderItemInput struct {
+	MaterialID uint64
+	Quantity   decimal.Decimal
+}
+
+// ConfirmItemInput 成交实成交量入参。
+type ConfirmItemInput struct {
+	MaterialID uint64
+	Quantity   decimal.Decimal
+}
