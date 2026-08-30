@@ -126,6 +126,7 @@ python worker.py           # ingest（workdir=ingest-service）
 | **消息落库** | 每轮经 Go 接口写 `chat_messages`（事实源，复用 Go 表）；Redis 窗口为可重建缓存 |
 | **知识库** | 元数据状态机归 Go（可用性 Go 保证）；向量化归智能体（Go 通知 → ingest → 火山 embedding → Milvus knowledge collection，无状态过滤） |
 | **长期记忆** | 会话 closed → ingest 摘要（LLM）→ Milvus memory collection（`user_id` 强隔离，`source_type=memory`）→ 每轮自动召回 |
+| **离线消息补发** | 告警/定时任务触发的 agent 分析结果写入 Redis `agent:proactive:{userId}`（cap 5、TTL 24h）；前端复用 `POST /agent/chat` 固定发 `question="【系统补发】"` 即可拉取积压（**读后清**，Lua 原子），SSE 流格式与普通问答一致 |
 | **SSE** | 先发 `started` 占位事件（响应头立即返回），再逐 delta 流式 answer，`done` 带 canClose/sources |
 | **并发控制** | `agent.max_concurrency`（默认 4）限制同时处理的对话数；`concurrency_wait_seconds=0`（当前）并发满立即返回"系统繁忙"不排队；调 >0 可恢复排队；`/healthz` 暴露 in_flight/waiting/available |
 | **失败重投** | ingest 消费"成功才 ACK"；失败重投（retry 计数，超 3 次丢弃） |
@@ -145,7 +146,41 @@ HTTP 完成记录包含服务、路由、状态、耗时、请求/响应字节�
 
 接口契约详见：`docs/08_智能体接口契约.md`（复用 Go 已有 9 个 + Go 新增 2 个 + agent 提供）、`docs/09_给Go侧的接口与SQL需求.md`（PostgreSQL 方言）。
 
-## 六、注意事项
+## 六、离线消息补发（【系统补发】指令）
+
+### 背景
+
+告警触发、定时任务到期时，agent 会以该用户身份自动分析并生成汇报。结果存入 Redis `agent:proactive:{userId}`（读后清队列）。用户离线期间这些消息会积压，上线后通过补发指令取回。
+
+### 前端调用契约
+
+复用现有问答接口 `POST /agent/chat`，固定传：
+
+```json
+{
+  "session_id": null,
+  "plot_id": null,
+  "question": "【系统补发】"
+}
+```
+
+- 识别到 `question == "【系统补发"]` 时，agent **拦截在编排最前**：不建会话、不落库、不写短期窗口、不调 LLM；
+- 从 `agent:proactive:{userId}` **读后清**（Lua 原子）积压消息；
+- 返回 SSE 流（事件格式与普通问答一致：`started` → 每条积压一条 `answer`（`[通知 {ts}] {summary}`）→ `done`）；
+- 无积压时返回一条 `answer`："暂无新的主动通知"。
+
+### 存储
+
+- `agent:proactive:{userId}`（Redis List，`proactive_push` 写入，cap 5、TTL 24h）；
+- `proactive_drain(userId)`：Lua 原子读后清（LRANGE + DEL）。
+
+### 与普通问答的隔离
+
+- 补发不创建会话、不写 `chat_messages`（拦截在编排前）；
+- 不写共享短期窗口 `ctx:{userId}`（避免污染下轮问答上下文）；
+- 用户主动问答会话完全独立，不受补发影响。
+
+## 七、注意事项
 
 - `config.yaml` 中 API key 为**测试 key**，项目完成后统一删除并改回 `${VAR}` 占位；
 - `tool.mock_go: true` 为测试期开关，Go 就绪后改回 `false`；

@@ -155,15 +155,100 @@ class RedisClient:
         pipe.expire(key, ttl)
         pipe.execute()
 
-    def proactive_get(self, user_id: str) -> list[dict[str, Any]]:
-        raw = self._r.lrange(f"agent:proactive:{user_id}", 0, 9)
+    # Lua 脚本：原子读取并清空 proactive 列表（读后清，避免补发后重复展示）。
+    _PROACTIVE_DRAIN_LUA = """
+    local key = KEYS[1]
+    local items = redis.call('LRANGE', key, 0, -1)
+    redis.call('DEL', key)
+    return items
+    """
+
+    def proactive_drain(self, user_id: str) -> list[dict[str, Any]]:
+        """读取并清空该用户的主动通知（用户在线/上线后拉取，视为已送达）。"""
+        key = f"agent:proactive:{user_id}"
+        try:
+            raw = self._r.eval(self._PROACTIVE_DRAIN_LUA, 1, key)
+        except Exception:
+            # 降级：非原子读后清（极端情况），避免拉取失败阻塞
+            raw = self._r.lrange(key, 0, -1)
+            self._r.delete(key)
         out: list[dict[str, Any]] = []
         for item in raw or []:
             try:
                 out.append(json.loads(item))
-            except json.JSONDecodeError:
+            except (TypeError, json.JSONDecodeError):
                 continue
         return out
+
+    # ---------- 定时任务（按用户颗粒度） ----------
+    # 任务本体：agent:task:{user_id}:{task_id}（Hash）
+    # 调度索引：agent:task:schedule（ZSET，score = next_run_at 毫秒时间戳）
+
+    @staticmethod
+    def _task_key(user_id: str, task_id: str) -> str:
+        return f"agent:task:{user_id}:{task_id}"
+
+    _SCHEDULE_KEY = "agent:task:schedule"
+
+    def task_create(self, user_id: str, task_id: str, task: dict[str, Any]) -> None:
+        """创建定时任务：写任务 Hash + 登记调度索引。"""
+        key = self._task_key(user_id, task_id)
+        pipe = self._r.pipeline()
+        pipe.hset(key, mapping=task)
+        pipe.hset(key, "task_id", task_id)
+        pipe.hset(key, "user_id", user_id)
+        next_run = task.get("next_run_at")
+        if next_run:
+            pipe.zadd(self._SCHEDULE_KEY, {task_id: float(next_run)})
+        pipe.execute()
+
+    def task_update_next_run(self, user_id: str, task_id: str, next_run: float | None) -> None:
+        """更新任务的 next_run_at 并重登记调度索引；next_run=None 表示删除调度（once 完成）。"""
+        key = self._task_key(user_id, task_id)
+        pipe = self._r.pipeline()
+        if next_run is not None:
+            pipe.hset(key, "next_run_at", str(int(next_run)))
+            pipe.zadd(self._SCHEDULE_KEY, {task_id: float(next_run)})
+        else:
+            pipe.hdel(key, "next_run_at")
+            pipe.zrem(self._SCHEDULE_KEY, task_id)
+        pipe.execute()
+
+    def task_get(self, user_id: str, task_id: str) -> dict[str, Any] | None:
+        raw = self._r.hgetall(self._task_key(user_id, task_id))
+        return raw if raw else None
+
+    def task_list(self, user_id: str) -> list[dict[str, Any]]:
+        pattern = f"agent:task:{user_id}:*"
+        keys = self._r.keys(pattern)
+        out: list[dict[str, Any]] = []
+        for key in keys or []:
+            raw = self._r.hgetall(key)
+            if raw:
+                out.append(raw)
+        out.sort(key=lambda t: t.get("created_at", ""), reverse=True)
+        return out
+
+    def task_cancel(self, user_id: str, task_id: str) -> bool:
+        """停用/删除任务：删除任务 Hash 并从调度索引移除。"""
+        key = self._task_key(user_id, task_id)
+        pipe = self._r.pipeline()
+        pipe.delete(key)
+        pipe.zrem(self._SCHEDULE_KEY, task_id)
+        pipe.execute()
+        return True
+
+    def task_due(self, now_ms: float, limit: int = 50) -> list[str]:
+        """取已到期任务 ID（按 next_run_at 升序）。"""
+        return self._r.zrangebyscore(self._SCHEDULE_KEY, 0, now_ms, start=0, num=limit)
+
+    def task_set_result(self, user_id: str, task_id: str, summary: str, last_run: str) -> None:
+        """记录任务最近一次执行结果。"""
+        key = self._task_key(user_id, task_id)
+        pipe = self._r.pipeline()
+        pipe.hset(key, "last_summary", summary)
+        pipe.hset(key, "last_run_at", last_run)
+        pipe.execute()
 
 
 _inst: RedisClient | None = None
