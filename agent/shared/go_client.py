@@ -175,6 +175,21 @@ class GoClient:
     def get_knowledge_docs(self, authorization: str = "", **query: Any) -> list[Any]:
         return self._request("GET", "/knowledge/docs", authorization=authorization, params=query)
 
+    # ---------- 仓储/意向订单（JWT） ----------
+    def get_orders(self, authorization: str = "", **query: Any) -> dict[str, Any]:
+        """意向订单列表（FARMER/ADMIN/WAREHOUSE_MANAGER 全量，CUSTOMER 仅自己；支持 status 过滤）。"""
+        data = self._request("GET", "/orders", authorization=authorization, params=query)
+        return data if isinstance(data, dict) else {}
+
+    def post_stock_inbound(self, authorization: str, body: dict[str, Any],
+                           headers: dict[str, str] | None = None) -> dict[str, Any]:
+        """收获入库（Idempotency-Key 头幂等；FARMER/WAREHOUSE_MANAGER/SYSTEM_ADMIN 可调）。"""
+        data = self._request(
+            "POST", "/stocks/inbound", authorization=authorization,
+            json=body, headers=headers or {},
+        )
+        return data if isinstance(data, dict) else {}
+
     # ---------- 摘要落库（内部密钥） ----------
     def post_summary(self, session_id: str, body: dict[str, Any]) -> dict[str, Any]:
         data = self._request(

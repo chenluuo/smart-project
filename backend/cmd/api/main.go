@@ -158,7 +158,9 @@ func main() {
 	}
 	knowledgeService := knowledge.NewService(knowledge.NewRepository(db), knowledgeObjectStore)
 	knowledgeService.ConfigureObjectAccess(cfg.ObjectStorage.MaxUploadBytes, cfg.ObjectStorage.SignedURLTimeout)
-	warehouseService := trade.NewWarehouseService(trade.NewWarehouseRepository(db), trade.NoReservations{})
+	// 意向订单服务实现 ReservationReader（TRADING 占用），注入仓库服务让 GET /stocks 的可用数量减去占用
+	orderService := trade.NewOrderService(trade.NewOrderRepository(db))
+	warehouseService := trade.NewWarehouseService(trade.NewWarehouseRepository(db), orderService)
 	workerContext, stopWorkers := context.WithCancel(context.Background())
 	defer stopWorkers()
 	go alert.NewThresholdExpiryWorker(alertRepositories).Run(workerContext, cfg.Internal.OutboxDispatchInterval)
@@ -205,7 +207,7 @@ func main() {
 		Handler: httpserver.NewRouterWithAdminServices(
 			cfg.Server.Mode, healthPinger, authService, plotService, deviceService, controlService, alertService,
 			agentService, knowledgeService, telemetryService, cfg.Internal.ServiceKey,
-			identity.NewRepositories(db), plotRepositories, knowledgeService, deviceRepositories, controlService, alertService, warehouseService, eventBroker,
+			identity.NewRepositories(db), plotRepositories, knowledgeService, deviceRepositories, controlService, alertService, warehouseService, orderService, eventBroker,
 		),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,

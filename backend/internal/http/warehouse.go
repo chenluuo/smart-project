@@ -30,10 +30,19 @@ type warehouseService interface {
 	ListRecords(context.Context, trade.RecordFilter) (trade.ListResult[trade.RecordView], error)
 }
 
-type warehouseHandler struct{ service warehouseService }
+// orderService 意向订单查询（列表/详情）。
+type orderService interface {
+	List(context.Context, trade.OrderFilter) (trade.ListResult[trade.OrderView], error)
+	Get(context.Context, uint64) (*trade.OrderView, error)
+}
 
-func registerWarehouseRoutes(router *gin.Engine, auth authService, service warehouseService) {
-	h := warehouseHandler{service: service}
+type warehouseHandler struct {
+	service warehouseService
+	orders  orderService
+}
+
+func registerWarehouseRoutes(router *gin.Engine, auth authService, service warehouseService, orders orderService) {
+	h := warehouseHandler{service: service, orders: orders}
 	api := router.Group("/api/v1", jwtAuthentication(auth))
 	warehouseRead := requireAnyRole("WAREHOUSE_MANAGER", "SYSTEM_ADMIN")
 	warehouseWrite := requireAnyRole("WAREHOUSE_MANAGER", "SYSTEM_ADMIN")
@@ -48,8 +57,12 @@ func registerWarehouseRoutes(router *gin.Engine, auth authService, service wareh
 	api.PUT("/warehouses/:id", warehouseWrite, h.updateWarehouse)
 	api.DELETE("/warehouses/:id", warehouseWrite, h.deleteWarehouse)
 	api.GET("/stocks", warehouseRead, h.listStocks)
-	api.POST("/stocks/inbound", warehouseWrite, h.inbound)
+	// 收获入库：FARMER 可写（收获通知），仓库管理员/系统管理员可写
+	api.POST("/stocks/inbound", requireAnyRole("FARMER", "WAREHOUSE_MANAGER", "SYSTEM_ADMIN"), h.inbound)
 	api.GET("/stock-records", warehouseRead, h.listRecords)
+	// 意向订单：登录即可查（FARMER/ADMIN/WAREHOUSE_MANAGER 全量，CUSTOMER 仅自己，handler 内按角色过滤）
+	api.GET("/orders", h.listOrders)
+	api.GET("/orders/:id", h.getOrder)
 }
 
 type materialRequest struct {
@@ -302,6 +315,68 @@ func bindWarehouseJSON(c *gin.Context, target any) bool {
 	}
 	return true
 }
+func (h warehouseHandler) listOrders(c *gin.Context) {
+	claims, ok := authenticatedClaims(c)
+	if !ok {
+		return
+	}
+	page, size, ok := pagination(c)
+	if !ok {
+		return
+	}
+	f := trade.OrderFilter{Page: page, PageSize: size}
+	if raw := strings.ToUpper(strings.TrimSpace(c.Query("status"))); raw != "" {
+		status := trade.OrderStatus(raw)
+		if !validOrderStatus(status) {
+			respondError(c, http.StatusBadRequest, 40001, "参数错误：status 不合法")
+			return
+		}
+		f.Status = &status
+	}
+	// CUSTOMER 仅能看自己的意向；其余角色（FARMER/ADMIN/WAREHOUSE_MANAGER）看全部
+	if claims.Role == "CUSTOMER" {
+		f.CustomerID = &claims.UserID
+	}
+	result, err := h.orders.List(c.Request.Context(), f)
+	if err != nil {
+		respondWarehouseError(c, err)
+		return
+	}
+	respondSuccess(c, http.StatusOK, result)
+}
+
+func (h warehouseHandler) getOrder(c *gin.Context) {
+	claims, ok := authenticatedClaims(c)
+	if !ok {
+		return
+	}
+	id, ok := warehousePathID(c)
+	if !ok {
+		return
+	}
+	result, err := h.orders.Get(c.Request.Context(), id)
+	if err != nil {
+		respondWarehouseError(c, err)
+		return
+	}
+	// CUSTOMER 仅能看自己的意向
+	if claims.Role == "CUSTOMER" && result.CustomerID != claims.UserID {
+		respondError(c, http.StatusNotFound, 40401, "仓储资源不存在")
+		return
+	}
+	respondSuccess(c, http.StatusOK, result)
+}
+
+func validOrderStatus(v trade.OrderStatus) bool {
+	switch v {
+	case trade.OrderStatusPending, trade.OrderStatusApproved, trade.OrderStatusTrading,
+		trade.OrderStatusConfirmed, trade.OrderStatusClosed, trade.OrderStatusRejected:
+		return true
+	default:
+		return false
+	}
+}
+
 func respondWarehouseCreated(c *gin.Context, result any, err error) {
 	if err != nil {
 		respondWarehouseError(c, err)
