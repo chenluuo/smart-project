@@ -20,6 +20,7 @@ var (
 	ErrInvalidAccountName = errors.New("username must contain 3 to 64 non-whitespace characters")
 	ErrInvalidMobile      = errors.New("mobile must be 6 to 15 digits and may start with +")
 	ErrInvalidPassword    = errors.New("password must contain 8 to 72 bytes")
+	ErrInvalidRole        = errors.New("role must be CUSTOMER or FARMER")
 )
 
 var mobilePattern = regexp.MustCompile(`^\+?[1-9][0-9]{5,14}$`)
@@ -28,7 +29,7 @@ type UserStore interface {
 	FindUserByAccountName(context.Context, string) (*User, error)
 	FindUserByMobile(context.Context, string) (*User, error)
 	FindUserByID(context.Context, uint64) (*User, error)
-	CreateUser(context.Context, *User) error
+	CreateUser(context.Context, *User, string) error
 	FindRoleCodesByUserID(context.Context, uint64) ([]string, error)
 }
 
@@ -36,6 +37,7 @@ type RegisterInput struct {
 	Mobile      string
 	AccountName string
 	Password    string
+	Role        string
 }
 
 type LoginResult struct {
@@ -71,6 +73,13 @@ func (s *AuthService) Register(ctx context.Context, input RegisterInput) (*User,
 	if len(input.Password) < 8 || len(input.Password) > 72 {
 		return nil, ErrInvalidPassword
 	}
+	role := strings.TrimSpace(input.Role)
+	if role == "" {
+		role = "FARMER"
+	}
+	if role != "CUSTOMER" && role != "FARMER" {
+		return nil, ErrInvalidRole
+	}
 
 	if _, err := s.users.FindUserByAccountName(ctx, input.AccountName); err == nil {
 		return nil, ErrUserConflict
@@ -93,7 +102,7 @@ func (s *AuthService) Register(ctx context.Context, input RegisterInput) (*User,
 		PasswordHash: string(passwordHash),
 		Status:       UserStatusActive,
 	}
-	if err := s.users.CreateUser(ctx, user); err != nil {
+	if err := s.users.CreateUser(ctx, user, role); err != nil {
 		if errors.Is(err, ErrUserConflict) {
 			return nil, err
 		}
