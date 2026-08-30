@@ -199,9 +199,7 @@ services:
       GO_BASE_URL: http://go-api:8080/api/v1
       AGENT_BASE_URL: http://agent-service:8000
       CONTEXT_BASE_URL: http://context-service:8001
-      DOCLING_HOST: docling           # 文档原文工具解析（compose 网络内服务名）
-      DOCLING_API_KEY: ${DOCLING_API_KEY:-dev-docling-key}
-    depends_on: [go-api, redis, milvus, minio, docling]
+    depends_on: [go-api, redis, milvus, minio]
 
   ingest-service:
     image: smart-project-agent:local

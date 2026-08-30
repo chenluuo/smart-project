@@ -1,4 +1,4 @@
-"""MinIO 客户端（知识文档原文读取；向量化写入由 ingest 负责拉取）。"""
+"""MinIO 客户端（知识文档对象写入；原文读取由 ingest 走签名 URL 下载）。"""
 from __future__ import annotations
 
 from io import BytesIO
@@ -23,23 +23,6 @@ def _get_client():
         secure=bool(cfg.get("secure", False)),
     )
     return _client
-
-
-def get_document(object_key: str) -> str:
-    """按对象 key 读取文档原文（UTF-8 文本；二进制文档由 ingest 负责解析）。"""
-    return get_document_bytes(object_key).decode("utf-8", errors="replace")
-
-
-def get_document_bytes(object_key: str) -> bytes:
-    """按对象 key 读取文档原始字节（PDF/Word 等二进制原样返回）。"""
-    client = _get_client()
-    bucket = get_config("minio").get("bucket", "knowledge")
-    resp = client.get_object(bucket, object_key)
-    try:
-        return resp.read()
-    finally:
-        resp.close()
-        resp.release_conn()
 
 
 def put_bytes(object_key: str, data: bytes, content_type: str = "application/octet-stream") -> None:

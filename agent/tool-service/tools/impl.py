@@ -1,4 +1,4 @@
-"""tool-service：19 个工具实现（集中管理）+ JSON Schema 定义。
+"""tool-service：17 个工具实现（集中管理）+ JSON Schema 定义。
 
 工具清单：
   1. get_user_plots        田块查询入口（Go /plots，JWT 权限）
@@ -9,19 +9,21 @@
   6. get_alert_rules       阈值规则（Go /plots/{id}/thresholds）
   7. get_device_status     设备状态（Go /devices）
   8. search_knowledge      知识检索（Milvus 直连，ACTIVE 由 Go 保证）
-  9. get_document_content  文档原文（MinIO 直连）
- 10. get_irrigation_status 灌溉状态（Go /plots/{id}/irrigation/status）
- 11. get_command_result    命令执行结果（Go /commands/{id}）
- 12. set_crop              设置地块种植作物（Go POST /plots/{id}/crop，"未种植"=清除）
- 13. update_alert_rule     修改告警阈值规则（Go PUT /plots/{id}/thresholds/{tid}）
- 14. create_alert_rule     新建告警阈值规则（Go POST /plots/{id}/thresholds，创建即下发）
- 15. irrigate_to_target_humidity 目标湿度灌溉（阈值闭环，内部经 Go 灌溉命令）
- 16. create_scheduled_task 创建定时任务（interval/cron/once，到点提醒）
- 17. list_scheduled_tasks  查询我的定时任务
- 18. cancel_scheduled_task 取消定时任务
+  9. get_irrigation_status 灌溉状态（Go /plots/{id}/irrigation/status）
+ 10. get_command_result    命令执行结果（Go /commands/{id}）
+ 11. set_crop              设置地块种植作物（Go POST /plots/{id}/crop，"未种植"=清除）
+ 12. update_alert_rule     修改告警阈值规则（Go PUT /plots/{id}/thresholds/{tid}）
+ 13. create_alert_rule     新建告警阈值规则（Go POST /plots/{id}/thresholds，创建即下发）
+ 14. irrigate_to_target_humidity 目标湿度灌溉（阈值闭环，内部经 Go 灌溉命令）
+ 15. create_scheduled_task 创建定时任务（interval/cron/once，到点提醒）
+ 16. list_scheduled_tasks  查询我的定时任务
+ 17. cancel_scheduled_task 取消定时任务
 
-注：按时间控泵的 send_irrigation_command 已不对 LLM 暴露（保留函数仅供
-irrigate_to_target_humidity 内部发 OPEN/CLOSE 使用），灌溉统一按阈值驱动。
+注：
+- 按时间控泵的 send_irrigation_command 已不对 LLM 暴露（保留函数仅供
+  irrigate_to_target_humidity 内部发 OPEN/CLOSE 使用），灌溉统一按阈值驱动。
+- get_document_content（文档原文工具）已移除：RAG 检索自带 title/来源，
+  问答引用文章名即可，无需整篇原文工具（历史实现见 git 提交 227da55，可按需找回）。
 
 mock_go=true 时（config.yaml tool.mock_go），现场/排查工具返回契约示例数据，
 便于 Go 未就绪时本地联调。
@@ -268,54 +270,7 @@ def search_knowledge(authorization: str, args: dict) -> dict:
 
 
 # ============================================================
-# 9. get_document_content：文档原文（MinIO 直连）
-# ============================================================
-
-GET_DOCUMENT_CONTENT_SCHEMA = {
-    "doc_id": {"type": "string", "description": "文档 ID（经 Go 清单映射 file_url）"},
-    "file_url": {"type": "string", "description": "MinIO 对象 key（可直接拉取）"},
-}
-
-
-def get_document_content(authorization: str, args: dict) -> dict:
-    if _mock_enabled():
-        return {"ok": True, "data": {"docId": args.get("doc_id") or args.get("file_url"), "content": "（mock）番茄灌溉手册原文……"}}
-    from shared.docling_client import parse_bytes  # 延迟导入
-    from shared.minio_client import get_document_bytes  # 延迟导入
-
-    object_key = args.get("file_url")
-    if not object_key:
-        # doc_id → 从 Go 可用文档清单取 downloadUrl（MinIO 签名 URL）
-        docs = get_go_client().get_knowledge_docs(authorization)
-        matched = next((d for d in docs if str(d.get("id")) == str(args["doc_id"])), None)
-        if not matched:
-            return {"ok": False, "error": f"未找到文档 {args.get('doc_id')}"}
-        download_url = matched.get("downloadUrl") or matched.get("file_url")
-        if not download_url:
-            return {"ok": False, "error": f"文档 {args.get('doc_id')} 缺少下载地址"}
-        # 签名 URL 下载二进制 → docling 解析
-        import httpx
-
-        try:
-            with httpx.Client(timeout=60, trust_env=False) as hc:
-                resp = hc.get(download_url)
-                resp.raise_for_status()
-                content = parse_bytes(resp.content, matched.get("title") or f"{args['doc_id']}.bin")
-        except Exception as e:
-            return {"ok": False, "error": f"文档解析失败: {e}"}
-        return {"ok": True, "data": {"docId": args.get("doc_id"), "fileUrl": download_url, "content": content}}
-
-    # file_url 直传（MinIO object_key）→ 读原始字节 → docling 解析（纯文本自动降级）
-    try:
-        raw = get_document_bytes(object_key)
-        content = parse_bytes(raw, object_key.split("/")[-1])
-    except Exception as e:
-        return {"ok": False, "error": f"文档解析失败: {e}"}
-    return {"ok": True, "data": {"docId": args.get("doc_id"), "fileUrl": object_key, "content": content}}
-
-
-# ============================================================
-# 10. get_irrigation_status：灌溉状态
+# 9. get_irrigation_status：灌溉状态
 # ============================================================
 
 GET_IRRIGATION_STATUS_SCHEMA = {
@@ -727,7 +682,6 @@ def register_all() -> None:
     reg.register("get_alert_rules", "1.0", "查询地块阈值规则（含 operator/时长）", GET_ALERT_RULES_SCHEMA, ["plot_id"], get_alert_rules)
     reg.register("get_device_status", "1.0", "查询设备在线状态", GET_DEVICE_STATUS_SCHEMA, [], get_device_status)
     reg.register("search_knowledge", "1.0", "检索农业知识库（RAG）", SEARCH_KNOWLEDGE_SCHEMA, ["query"], search_knowledge)
-    reg.register("get_document_content", "1.0", "获取知识文档原文片段", GET_DOCUMENT_CONTENT_SCHEMA, [], get_document_content)
     # 控制类（组内已允许 agent 直接发送命令；复用 Go 已有控制接口）
     reg.register("get_irrigation_status", "1.0", "查询地块灌溉状态（ON/OFF、剩余时长）", GET_IRRIGATION_STATUS_SCHEMA, ["plot_id"], get_irrigation_status)
     reg.register("get_command_result", "1.0", "查询命令执行结果（SUCCEEDED/FAILED/TIMEOUT）", GET_COMMAND_RESULT_SCHEMA, ["command_id"], get_command_result)

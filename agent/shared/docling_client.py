@@ -9,8 +9,6 @@
 """
 from __future__ import annotations
 
-import io
-
 import httpx
 
 from shared.config import get_config
@@ -45,11 +43,6 @@ def parse_bytes(content: bytes, filename: str) -> str:
     if not text:  # 都没有 markdown 时兜底纯文本
         text = (doc.get("text_content") or "").strip()
     return text
-
-
-def parse_stream(stream: io.BytesIO, filename: str) -> str:
-    """同 parse_bytes，输入为流（MinIO get_object 场景）。"""
-    return parse_bytes(stream.read(), filename)
 
 
 def _is_plain_text(filename: str) -> bool:

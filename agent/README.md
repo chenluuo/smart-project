@@ -122,7 +122,7 @@ python worker.py           # ingest（workdir=ingest-service）
 
 | 项 | 设计 |
 |---|---|
-| **工具（9 个）** | 田块查询 / 最新遥测 / 历史趋势 / 总览 / 告警 / 阈值 / 设备 / 知识检索 / 文档原文；JSON Schema 白名单 + 版本号；`mock_go=true` 时返回契约示例（Go 未就绪联调用） |
+| **工具（17 个）** | 田块查询 / 最新遥测 / 历史趋势 / 总览 / 告警 / 阈值 / 设备 / 知识检索 / 灌溉状态 / 命令结果 / 作物设置 / 规则增改 / 目标湿度灌溉 / 定时任务（建/查/销）；JSON Schema 白名单 + 版本号；`mock_go=true` 时返回契约示例（Go 未就绪联调用）。注：文档原文工具已移除，RAG 检索自带 title 来源即可（历史实现见 git 227da55） |
 | **上下文组装** | System 段 = 硬编码提示词按 `interaction_style` / `knowledge_reliance` case 选取（`context-service/prompts.py`）；三路取数（知识/现场/记忆）分隔符隔离；**预算裁剪：现场>知识>短期>记忆** |
 | **会话状态机** | Redis `agent:session:{id}`：active / waiting_close / closed；结束判定=显式按钮 → 规则正则 → LLM 意图 → 询问后 5 分钟超时（惰性检查） |
 | **短期窗口** | Redis `ctx:{userId}`（按用户单会话），只存文字；LRU 最大活跃用户数（`ctx:active` ZSET），超限由 ingest 判定逐出、直接销毁（不写回） |
