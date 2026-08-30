@@ -73,6 +73,24 @@ func (s *memoryStore) CloseSessionByOwner(_ context.Context, sessionID string, u
 	return session, nil
 }
 
+func (s *memoryStore) TokenUsage(_ context.Context, userID uint64) (TokenUsage, error) {
+	var usage TokenUsage
+	for _, messages := range s.messages {
+		for _, message := range messages {
+			if message.Role != MessageRoleAssistant {
+				continue
+			}
+			usage.TotalPromptTokens += message.PromptTokens
+			usage.TotalCompletionTokens += message.CompletionTokens
+			usage.TodayPromptTokens += message.PromptTokens
+			usage.TodayCompletionTokens += message.CompletionTokens
+		}
+	}
+	usage.Total = usage.TotalPromptTokens + usage.TotalCompletionTokens
+	usage.TodayTotal = usage.TodayPromptTokens + usage.TodayCompletionTokens
+	return usage, nil
+}
+
 func TestServiceSessionMessageLifecycle(t *testing.T) {
 	store := newMemoryStore()
 	service := NewService(store)

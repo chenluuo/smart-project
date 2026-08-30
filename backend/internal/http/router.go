@@ -119,6 +119,7 @@ func NewRouterWithAdminServices(
 	adminPlots adminPlotService,
 	adminKnowledge adminKnowledgeService,
 	adminDevices adminDeviceService,
+	adminCommands adminCommandService,
 	adminAlerts adminAlertService,
 	warehouses warehouseService,
 	eventSubscribers ...eventSubscriber,
@@ -142,6 +143,9 @@ func NewRouterWithAdminServices(
 	if adminDevices != nil {
 		statusService, _ := devices.(deviceStatusService)
 		registerAdminDeviceRoutes(router, auth, adminDevices, statusService)
+	}
+	if adminCommands != nil {
+		registerAdminCommandRoutes(router, auth, adminCommands)
 	}
 	if adminAlerts != nil {
 		registerAdminAlertRoutes(router, auth, adminAlerts)
@@ -194,6 +198,7 @@ type agentService interface {
 	AppendMessageByOwner(context.Context, uint64, string, agent.MessageInput) (*agent.Message, error)
 	ListMessages(context.Context, uint64, string, int, int) (agent.MessageList, error)
 	CloseSession(context.Context, uint64, string) (*agent.Session, error)
+	TokenUsage(context.Context, uint64) (agent.TokenUsage, error)
 }
 
 type knowledgeService interface {

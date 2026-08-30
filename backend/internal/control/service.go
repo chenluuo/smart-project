@@ -96,6 +96,7 @@ type Store interface {
 	FindLatestSuccessfulByDeviceAndPlot(context.Context, uint64, uint64) (*Command, error)
 	FindByCommandIDAndOwner(context.Context, string, uint64) (*Command, error)
 	ListByOwner(context.Context, uint64, ListFilter) ([]CommandListRow, int64, error)
+	AdminList(context.Context, ListFilter) ([]CommandListRow, int64, error)
 }
 
 type Service struct {
@@ -349,6 +350,25 @@ func (s *Service) List(ctx context.Context, ownerID uint64, filter ListFilter) (
 		})
 	}
 	return ListResult{Items: items, Page: filter.Page, PageSize: filter.PageSize, Total: total}, nil
+}
+
+// AdminList 管理后台全量命令查询（不按地块归属过滤），返回原始行供管理面板展示。
+func (s *Service) AdminList(ctx context.Context, filter ListFilter) ([]CommandListRow, int64, error) {
+	if filter.Page == 0 {
+		filter.Page = 1
+	}
+	if filter.PageSize == 0 {
+		filter.PageSize = 20
+	}
+	if filter.Page < 1 || filter.PageSize < 1 || filter.PageSize > 100 ||
+		filter.PlotID != nil && *filter.PlotID == 0 || filter.Status != nil && !ValidStatus(*filter.Status) {
+		return nil, 0, ErrInvalidInput
+	}
+	rows, total, err := s.commands.AdminList(ctx, filter)
+	if err != nil {
+		return nil, 0, fmt.Errorf("admin list commands: %w", err)
+	}
+	return rows, total, nil
 }
 
 func ValidStatus(status Status) bool {

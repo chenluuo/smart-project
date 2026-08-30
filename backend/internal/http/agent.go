@@ -20,21 +20,25 @@ type createAgentSessionRequest struct {
 }
 
 type appendAgentMessageRequest struct {
-	Role         string          `json:"role" binding:"required"`
-	Content      string          `json:"content" binding:"required"`
-	Citations    json.RawMessage `json:"citations"`
-	PlotID       *uint64         `json:"plotId"`
-	ModelVersion string          `json:"modelVersion"`
-	TraceID      string          `json:"traceId"`
+	Role             string          `json:"role" binding:"required"`
+	Content          string          `json:"content" binding:"required"`
+	Citations        json.RawMessage `json:"citations"`
+	PlotID           *uint64         `json:"plotId"`
+	ModelVersion     string          `json:"modelVersion"`
+	TraceID          string          `json:"traceId"`
+	PromptTokens     *uint64         `json:"promptTokens"`
+	CompletionTokens *uint64         `json:"completionTokens"`
 }
 
 type appendPythonAgentMessageRequest struct {
-	Role         string          `json:"role" binding:"required"`
-	Content      string          `json:"content" binding:"required"`
-	Citations    json.RawMessage `json:"citations"`
-	PlotID       *string         `json:"plot_id"`
-	ModelVersion string          `json:"model_version"`
-	TraceID      string          `json:"trace_id"`
+	Role             string          `json:"role" binding:"required"`
+	Content          string          `json:"content" binding:"required"`
+	Citations        json.RawMessage `json:"citations"`
+	PlotID           *string         `json:"plot_id"`
+	ModelVersion     string          `json:"model_version"`
+	TraceID          string          `json:"trace_id"`
+	PromptTokens     *uint64         `json:"prompt_tokens"`
+	CompletionTokens *uint64         `json:"completion_tokens"`
 }
 
 func registerAgentRoutes(router *gin.Engine, auth authService, service agentService, internalServiceKey string) {
@@ -45,6 +49,9 @@ func registerAgentRoutes(router *gin.Engine, auth authService, service agentServ
 	api.POST("/sessions/:sessionId/close", handler.closeSession)
 	pythonAPI := router.Group("/api/v1/agent", jwtAuthentication(auth))
 	pythonAPI.POST("/sessions/:sessionId/messages", handler.appendPythonMessage)
+
+	users := router.Group("/api/v1/users", jwtAuthentication(auth))
+	users.GET("/me/token-usage", handler.meTokenUsage)
 
 	internal := router.Group("/internal/agent", internalServiceAuthentication(internalServiceKey))
 	internal.POST("/sessions/:sessionId/messages", handler.appendMessage)
@@ -72,6 +79,7 @@ func (h agentHandler) appendPythonMessage(c *gin.Context) {
 	result, err := h.service.AppendMessageByOwner(c.Request.Context(), claims.UserID, c.Param("sessionId"), agent.MessageInput{
 		Role: request.Role, Content: request.Content, Citations: request.Citations,
 		PlotID: plotID, ModelVersion: request.ModelVersion, TraceID: traceID,
+		PromptTokens: uint64OrZero(request.PromptTokens), CompletionTokens: uint64OrZero(request.CompletionTokens),
 	})
 	if err != nil {
 		respondAgentError(c, err)
@@ -118,6 +126,7 @@ func (h agentHandler) appendMessage(c *gin.Context) {
 	result, err := h.service.AppendMessage(c.Request.Context(), c.Param("sessionId"), agent.MessageInput{
 		Role: request.Role, Content: request.Content, Citations: request.Citations,
 		PlotID: request.PlotID, ModelVersion: request.ModelVersion, TraceID: request.TraceID,
+		PromptTokens: uint64OrZero(request.PromptTokens), CompletionTokens: uint64OrZero(request.CompletionTokens),
 	})
 	if err != nil {
 		respondAgentError(c, err)
@@ -156,6 +165,24 @@ func (h agentHandler) closeSession(c *gin.Context) {
 	respondSuccess(c, http.StatusOK, gin.H{"sessionId": result.ID, "status": result.Status})
 }
 
+// meTokenUsage 当前用户查询自己的 LLM token 消耗（今日 + 累计，来自问答记录聚合）。
+func (h agentHandler) meTokenUsage(c *gin.Context) {
+	claims, ok := authenticatedClaims(c)
+	if !ok {
+		return
+	}
+	usage, err := h.service.TokenUsage(c.Request.Context(), claims.UserID)
+	if err != nil {
+		if errors.Is(err, agent.ErrInvalidInput) {
+			respondError(c, http.StatusBadRequest, 40001, "参数错误")
+			return
+		}
+		respondError(c, http.StatusInternalServerError, 50000, "服务器内部错误")
+		return
+	}
+	respondSuccess(c, http.StatusOK, usage)
+}
+
 func respondAgentError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, agent.ErrInvalidInput):
@@ -167,6 +194,13 @@ func respondAgentError(c *gin.Context, err error) {
 	default:
 		respondError(c, http.StatusInternalServerError, 50000, "服务器内部错误")
 	}
+}
+
+func uint64OrZero(value *uint64) uint64 {
+	if value == nil {
+		return 0
+	}
+	return *value
 }
 
 func pagination(c *gin.Context) (int, int, bool) {

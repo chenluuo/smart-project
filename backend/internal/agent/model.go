@@ -41,15 +41,17 @@ type Session struct {
 func (Session) TableName() string { return "chat_sessions" }
 
 type Message struct {
-	ID            uint64         `json:"id" gorm:"primaryKey;autoIncrement"`
-	SessionID     string         `json:"sessionId" gorm:"column:session_id;size:64;not null;index:idx_chat_messages_session_created,priority:1"`
-	Role          MessageRole    `json:"role" gorm:"size:16;not null"`
-	Content       string         `json:"content" gorm:"type:longtext;not null"`
-	CitationsJSON datatypes.JSON `json:"citations,omitempty" gorm:"column:citations_json;type:json"`
-	PlotID        *uint64        `json:"plotId,omitempty" gorm:"column:plot_id;index:idx_chat_messages_plot_created,priority:1"`
-	ModelVersion  *string        `json:"modelVersion,omitempty" gorm:"column:model_version;size:64"`
-	TraceID       *string        `json:"traceId,omitempty" gorm:"column:trace_id;size:64"`
-	CreatedAt     time.Time      `json:"createdAt" gorm:"column:created_at;autoCreateTime;index:idx_chat_messages_session_created,priority:2;index:idx_chat_messages_plot_created,priority:2"`
+	ID               uint64         `json:"id" gorm:"primaryKey;autoIncrement"`
+	SessionID        string         `json:"sessionId" gorm:"column:session_id;size:64;not null;index:idx_chat_messages_session_created,priority:1"`
+	Role             MessageRole    `json:"role" gorm:"size:16;not null"`
+	Content          string         `json:"content" gorm:"type:longtext;not null"`
+	CitationsJSON    datatypes.JSON `json:"citations,omitempty" gorm:"column:citations_json;type:json"`
+	PlotID           *uint64        `json:"plotId,omitempty" gorm:"column:plot_id;index:idx_chat_messages_plot_created,priority:1"`
+	ModelVersion     *string        `json:"modelVersion,omitempty" gorm:"column:model_version;size:64"`
+	TraceID          *string        `json:"traceId,omitempty" gorm:"column:trace_id;size:64"`
+	PromptTokens     uint64         `json:"promptTokens" gorm:"column:prompt_tokens;not null;default:0"`
+	CompletionTokens uint64         `json:"completionTokens" gorm:"column:completion_tokens;not null;default:0"`
+	CreatedAt        time.Time      `json:"createdAt" gorm:"column:created_at;autoCreateTime;index:idx_chat_messages_session_created,priority:2;index:idx_chat_messages_plot_created,priority:2"`
 }
 
 func (Message) TableName() string { return "chat_messages" }

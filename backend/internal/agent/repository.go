@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"time"
 
@@ -106,4 +107,28 @@ func (r *Repository) CloseSessionByOwner(ctx context.Context, sessionID string, 
 		}).Error
 	})
 	return &session, err
+}
+
+// TokenUsage 聚合当前用户在 chat_messages 的 ASSISTANT 消息 token 消耗（今日 + 累计）。
+func (r *Repository) TokenUsage(ctx context.Context, userID uint64) (TokenUsage, error) {
+	var usage TokenUsage
+	query := r.db.WithContext(ctx).Table("chat_messages AS m").
+		Joins("JOIN chat_sessions AS s ON s.id = m.session_id").
+		Where("s.user_id = ? AND m.role = ?", userID, MessageRoleAssistant)
+
+	row := query.Select(`
+		COALESCE(SUM(m.prompt_tokens), 0)     AS total_prompt,
+		COALESCE(SUM(m.completion_tokens), 0) AS total_completion,
+		COALESCE(SUM(CASE WHEN m.created_at >= CURDATE() THEN m.prompt_tokens ELSE 0 END), 0)     AS today_prompt,
+		COALESCE(SUM(CASE WHEN m.created_at >= CURDATE() THEN m.completion_tokens ELSE 0 END), 0) AS today_completion`).
+		Row()
+	if err := row.Scan(&usage.TotalPromptTokens, &usage.TotalCompletionTokens, &usage.TodayPromptTokens, &usage.TodayCompletionTokens); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return usage, nil
+		}
+		return usage, err
+	}
+	usage.Total = usage.TotalPromptTokens + usage.TotalCompletionTokens
+	usage.TodayTotal = usage.TodayPromptTokens + usage.TodayCompletionTokens
+	return usage, nil
 }

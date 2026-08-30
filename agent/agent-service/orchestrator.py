@@ -241,6 +241,8 @@ async def handle_question(
     answer = ""
     max_rounds = int(get_config("agent").get("max_tool_rounds", 5))
     tool_log: list[dict] = []
+    prompt_used = 0
+    completion_used = 0
     try:
         tools = await _tool_schemas()
     except Exception:
@@ -257,9 +259,15 @@ async def handle_question(
             tool_choice="auto" if tools else None,
             stream=True,
             temperature=get_config("llm").get("temperature", 0.3),
+            stream_options={"include_usage": True},  # 流式末尾返回 usage，用于 token 消耗记录
         )
         # 本轮先收（不直出），轮结束后按"中间回复 / 最终回复"统一发出
         async for chunk in stream:
+            if chunk.usage:
+                # 流式 usage 只在最后一个 chunk 出现（choices 为空）
+                usage = chunk.usage
+                prompt_used += int(getattr(usage, "prompt_tokens", 0) or 0)
+                completion_used += int(getattr(usage, "completion_tokens", 0) or 0)
             if not chunk.choices:
                 continue
             delta = chunk.choices[0].delta
@@ -335,6 +343,8 @@ async def handle_question(
             "role": "assistant", "content": answer,
             "citations": [{"docId": k.get("docId"), "title": k.get("title"), "version": k.get("version")} for k in knowledge[:5]] or None,
             "model_version": get_config("llm").get("model"),
+            "prompt_tokens": prompt_used,
+            "completion_tokens": completion_used,
         })
     except Exception as e:
         print(f"[落库失败] session={session_id}: {e}", flush=True)  # 不阻塞回答，但记录便于排查

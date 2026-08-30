@@ -39,6 +39,10 @@ func (agentServiceStub) CloseSession(_ context.Context, userID uint64, sessionID
 	return &agent.Session{ID: sessionID, UserID: userID, Status: agent.SessionStatusClosed}, nil
 }
 
+func (agentServiceStub) TokenUsage(_ context.Context, _ uint64) (agent.TokenUsage, error) {
+	return agent.TokenUsage{TodayPromptTokens: 10, TodayCompletionTokens: 5, TodayTotal: 15, TotalPromptTokens: 100, TotalCompletionTokens: 50, Total: 150}, nil
+}
+
 type knowledgeServiceStub struct{}
 
 func (knowledgeServiceStub) MaxUploadBytes() int64 { return 20 * 1024 * 1024 }
