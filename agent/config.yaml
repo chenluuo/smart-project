@@ -85,6 +85,7 @@ services:
     evict_batch: 5          # 每次逐出数量
     chunk_size: 800
     chunk_overlap: 100
+    reconcile_interval_seconds: 86400  # 知识向量对账间隔（秒，默认每日一次；启动时额外跑一次）
     # 服务账号：ingest 拉取 Go 文档清单 /knowledge/docs 用的 JWT 来源（测试环境账号，上线前替换）
     service_account:
       username: codex08231008

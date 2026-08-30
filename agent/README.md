@@ -127,12 +127,12 @@ python worker.py           # ingest（workdir=ingest-service）
 | **会话状态机** | Redis `agent:session:{id}`：active / waiting_close / closed；结束判定=显式按钮 → 规则正则 → LLM 意图 → 询问后 5 分钟超时（惰性检查） |
 | **短期窗口** | Redis `ctx:{userId}`（按用户单会话），只存文字；LRU 最大活跃用户数（`ctx:active` ZSET），超限由 ingest 判定逐出、直接销毁（不写回） |
 | **消息落库** | 每轮经 Go 接口写 `chat_messages`（事实源，复用 Go 表）；Redis 窗口为可重建缓存 |
-| **知识库** | 元数据状态机归 Go（可用性 Go 保证）；向量化归智能体（Go 通知 → ingest → 火山 embedding → Milvus knowledge collection，无状态过滤）；**文件解析**：ingest 拉二进制原文 → docling-serve（`/v1/convert/file`）→ Markdown → 切片（纯文本降级直读） |
+| **知识库** | 元数据状态机归 Go（可用性 Go 保证）；向量化归智能体（Go 通知 → ingest → 火山 embedding → Milvus knowledge collection，无状态过滤）；**文件解析**：ingest 拉二进制原文 → docling-serve（`/v1/convert/file`）→ Markdown → 切片（纯文本降级直读）；**向量对账**：ingest 启动时 + 每日一次扫描 Milvus doc_id 对照 Go ACTIVE 清单，清理"删除事件失败被丢弃"导致的永久残留（`reconcile_interval_seconds` 可调） |
 | **长期记忆** | 会话 closed → ingest 摘要（LLM）→ Milvus memory collection（`user_id` 强隔离，`source_type=memory`）→ 每轮自动召回 |
 | **离线消息补发** | 告警/定时任务触发的 agent 分析结果写入 Redis `agent:proactive:{userId}`（cap 5、TTL 24h）；前端复用 `POST /agent/chat` 固定发 `question="【系统补发】"` 即可拉取积压（**读后清**，Lua 原子），SSE 流格式与普通问答一致 |
 | **SSE** | 先发 `started` 占位事件（响应头立即返回），再逐 delta 流式 answer，`done` 带 canClose/sources |
 | **并发控制** | `agent.max_concurrency`（默认 4）限制同时处理的对话数；`concurrency_wait_seconds=0`（当前）并发满立即返回"系统繁忙"不排队；调 >0 可恢复排队；`/healthz` 暴露 in_flight/waiting/available |
-| **失败重投** | ingest 消费"成功才 ACK"；失败重投（retry 计数，超 3 次丢弃） |
+| **失败重投** | ingest 消费"成功才 ACK"；失败重投（retry 计数，超 5 次丢弃）；丢弃的删除清理由向量对账兜底 |
 | **可观测性** | 三个 HTTP 服务每次请求输出一条 JSON 完成记录并回传 `X-Request-ID`/`X-Trace-Id`；ingest 每次消费输出一条成功或失败记录；跨服务同时透传两个 ID |
 
 HTTP 完成记录包含服务、路由、状态、耗时、请求/响应字节数和关联 ID；已识别用户时包含 `actor_id`。Stream 记录包含 stream、event_id、处理结果、耗时及重投/丢弃结果。日志不记录查询参数、请求体、JWT、内部密钥或完整业务内容。

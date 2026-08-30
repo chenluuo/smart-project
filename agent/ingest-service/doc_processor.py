@@ -17,7 +17,12 @@ from shared.config import get_config
 from shared.docling_client import parse_bytes
 from shared.embedding import embed
 from shared.go_client import get_go_client
-from shared.milvus_client import ensure_collections, upsert_documents
+from shared.milvus_client import (
+    delete_documents,
+    ensure_collections,
+    list_knowledge_doc_ids,
+    upsert_documents,
+)
 
 _token_lock = threading.Lock()
 _cached_token: str = ""
@@ -143,3 +148,37 @@ def process_doc_event(event: dict) -> dict:
         })
     upsert_documents(rows, kind="knowledge")
     return {"doc_id": doc_id, "version": doc.get("version"), "chunks": len(chunks), "status": "ok"}
+
+
+def reconcile_knowledge() -> dict:
+    """对账：清理 Milvus 有向量但 Go 不在 ACTIVE 清单的文档（兜底永久残留）。
+
+    删除/归档事件的向量清理若失败被丢弃（重投超限），会留下永久残留且无感知。
+    此函数周期性（worker 调度，默认每日 + 启动时）扫描差集并清理，保证
+    检索不会无限期返回已删除文档。
+
+    返回 {"status", "stale": [...], "cleaned": n} 供 worker 打日志。
+    """
+    try:
+        docs = get_go_client().get_knowledge_docs(authorization="Bearer " + _service_token())
+    except Exception as e:
+        return {"status": "failed", "reason": f"拉取 Go 可用文档清单失败: {e}"}
+    active_ids = {str(d.get("id")) for d in docs}
+    try:
+        milvus_ids = list_knowledge_doc_ids()
+    except Exception as e:
+        return {"status": "failed", "reason": f"扫描 Milvus 向量失败: {e}"}
+
+    stale = sorted(milvus_ids - active_ids)
+    cleaned = 0
+    failed: list[str] = []
+    for doc_id in stale:
+        try:
+            delete_documents(doc_id)
+            cleaned += 1
+        except Exception as e:
+            failed.append(f"{doc_id}({e})")
+    result: dict[str, Any] = {"status": "ok", "stale": stale, "cleaned": cleaned}
+    if failed:
+        result["failed"] = failed
+    return result
