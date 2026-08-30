@@ -216,7 +216,20 @@ services:
       MILVUS_HOST: milvus
       MINIO_ENDPOINT: minio:9000
       GO_BASE_URL: http://go-api:8080/api/v1
-    depends_on: [go-api, redis, milvus, minio]
+      DOCLING_HOST: docling           # 文档解析服务（compose 网络内服务名）
+      DOCLING_API_KEY: ${DOCLING_API_KEY:-dev-docling-key}
+    depends_on: [go-api, redis, milvus, minio, docling]
+
+  # ---------------- 文档解析服务（docling-serve，hwdsl2 一键镜像） ----------------
+  # ingest 上传知识文档（PDF/Word/Excel/PPT/图片等）时调 /v1/convert/file 解析成 Markdown
+  docling:
+    image: hwdsl2/docling-server
+    restart: unless-stopped
+    environment:
+      DOCLING_API_KEY: ${DOCLING_API_KEY:-dev-docling-key}   # 与 config.yaml docling.api_key 一致
+      DOCLING_DISABLE_USAGE_COUNTS: "1"
+    ports: ["5001:5001"]              # 调试/文档用；生产可去掉端口映射走内网
+    volumes: [docling-data:/var/lib/docling]
 
   # ---------------- 前端（nginx 托管 + 反代） ----------------
   frontend:
@@ -246,3 +259,4 @@ volumes:
     external: true
     name: smart-agriculture_tdengine-data
   tdengine-log:
+  docling-data:

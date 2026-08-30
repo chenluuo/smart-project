@@ -56,6 +56,7 @@ agent/
 │   ├── embedding.py       # 向量化（multimodal 火山 / standard OpenAI 兼容，config 切换）
 │   ├── milvus_client.py   # Milvus（知识/记忆两 collection，完整 schema）
 │   └── minio_client.py    # MinIO 知识原文
+├── docling 容器           # 文档解析服务（hwdsl2/docling-server：PDF/DOCX/XLSX/PPTX/图片 → Markdown）
 ├── agent-service/         # 8000：问答编排（SSE）、会话状态机、工具循环、RAG/记忆
 ├── context-service/       # 8001：System 段组装（prompts 硬编码 + case）、预算裁剪
 ├── tool-service/          # 8002：9 工具注册表（JSON Schema）+ 执行
@@ -98,8 +99,10 @@ embedding:
 ### 2. 依赖服务（Docker）
 
 ```powershell
-docker compose -p smart_agriculture up -d redis minio milvus-etcd milvus-minio milvus
+docker compose -p smart_agriculture up -d redis minio milvus-etcd milvus-minio milvus docling
 ```
+
+> `docling`：文档解析服务（`hwdsl2/docling-server`，端口 5001）。ingest 上传知识文档（PDF/Word/Excel/PPT/图片等）时调用 `/v1/convert/file` 解析成 Markdown 再切片入库；纯文本（txt/md/csv）自动降级直读原文。API key 与 `config.yaml` 的 `docling.api_key` 保持一致（dev 默认 `dev-docling-key`，上线用 `.env` 覆盖）。首次启动需加载内置模型（约 2GB 内存），`docker logs agent-docling` 看到 "Docling document parsing server is ready" 即为就绪。
 
 ### 3. 启动 4 个服务
 
@@ -119,17 +122,17 @@ python worker.py           # ingest（workdir=ingest-service）
 
 | 项 | 设计 |
 |---|---|
-| **工具（9 个）** | 田块查询 / 最新遥测 / 历史趋势 / 总览 / 告警 / 阈值 / 设备 / 知识检索 / 文档原文；JSON Schema 白名单 + 版本号；`mock_go=true` 时返回契约示例（Go 未就绪联调用） |
+| **工具（17 个）** | 田块查询 / 最新遥测 / 历史趋势 / 总览 / 告警 / 阈值 / 设备 / 知识检索 / 灌溉状态 / 命令结果 / 作物设置 / 规则增改 / 目标湿度灌溉 / 定时任务（建/查/销）；JSON Schema 白名单 + 版本号；`mock_go=true` 时返回契约示例（Go 未就绪联调用）。注：文档原文工具已移除，RAG 检索自带 title 来源即可（历史实现见 git 227da55） |
 | **上下文组装** | System 段 = 硬编码提示词按 `interaction_style` / `knowledge_reliance` case 选取（`context-service/prompts.py`）；三路取数（知识/现场/记忆）分隔符隔离；**预算裁剪：现场>知识>短期>记忆** |
 | **会话状态机** | Redis `agent:session:{id}`：active / waiting_close / closed；结束判定=显式按钮 → 规则正则 → LLM 意图 → 询问后 5 分钟超时（惰性检查） |
 | **短期窗口** | Redis `ctx:{userId}`（按用户单会话），只存文字；LRU 最大活跃用户数（`ctx:active` ZSET），超限由 ingest 判定逐出、直接销毁（不写回） |
 | **消息落库** | 每轮经 Go 接口写 `chat_messages`（事实源，复用 Go 表）；Redis 窗口为可重建缓存 |
-| **知识库** | 元数据状态机归 Go（可用性 Go 保证）；向量化归智能体（Go 通知 → ingest → 火山 embedding → Milvus knowledge collection，无状态过滤） |
+| **知识库** | 元数据状态机归 Go（可用性 Go 保证）；向量化归智能体（Go 通知 → ingest → 火山 embedding → Milvus knowledge collection，无状态过滤）；**文件解析**：ingest 拉二进制原文 → docling-serve（`/v1/convert/file`）→ Markdown → 切片（纯文本降级直读）；**向量对账**：ingest 启动时 + 每日一次扫描 Milvus doc_id 对照 Go ACTIVE 清单，清理"删除事件失败被丢弃"导致的永久残留（`reconcile_interval_seconds` 可调） |
 | **长期记忆** | 会话 closed → ingest 摘要（LLM）→ Milvus memory collection（`user_id` 强隔离，`source_type=memory`）→ 每轮自动召回 |
 | **离线消息补发** | 告警/定时任务触发的 agent 分析结果写入 Redis `agent:proactive:{userId}`（cap 5、TTL 24h）；前端复用 `POST /agent/chat` 固定发 `question="【系统补发】"` 即可拉取积压（**读后清**，Lua 原子），SSE 流格式与普通问答一致 |
 | **SSE** | 先发 `started` 占位事件（响应头立即返回），再逐 delta 流式 answer，`done` 带 canClose/sources |
 | **并发控制** | `agent.max_concurrency`（默认 4）限制同时处理的对话数；`concurrency_wait_seconds=0`（当前）并发满立即返回"系统繁忙"不排队；调 >0 可恢复排队；`/healthz` 暴露 in_flight/waiting/available |
-| **失败重投** | ingest 消费"成功才 ACK"；失败重投（retry 计数，超 3 次丢弃） |
+| **失败重投** | ingest 消费"成功才 ACK"；失败重投（retry 计数，超 5 次丢弃）；丢弃的删除清理由向量对账兜底 |
 | **可观测性** | 三个 HTTP 服务每次请求输出一条 JSON 完成记录并回传 `X-Request-ID`/`X-Trace-Id`；ingest 每次消费输出一条成功或失败记录；跨服务同时透传两个 ID |
 
 HTTP 完成记录包含服务、路由、状态、耗时、请求/响应字节数和关联 ID；已识别用户时包含 `actor_id`。Stream 记录包含 stream、event_id、处理结果、耗时及重投/丢弃结果。日志不记录查询参数、请求体、JWT、内部密钥或完整业务内容。
