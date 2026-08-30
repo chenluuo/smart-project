@@ -74,6 +74,9 @@ func (s *memoryStore) Create(_ context.Context, document *Document, _ uint64, _ 
 func (s *memoryStore) ListAll(_ context.Context, filter AdminListFilter) ([]DocumentWithUploader, int64, error) {
 	var result []DocumentWithUploader
 	for _, document := range s.documents {
+		if document.Status == StatusDeleted {
+			continue
+		}
 		if filter.Status != nil && document.Status != *filter.Status {
 			continue
 		}
@@ -93,13 +96,19 @@ func (s *memoryStore) Delete(_ context.Context, documentID, _ uint64, _ string) 
 	if document == nil {
 		return nil, ErrNotFound
 	}
-	delete(s.documents, documentID)
+	if document.Status == StatusDeleted {
+		return nil, ErrNotFound
+	}
+	document.Status = StatusDeleted
 	return document, nil
 }
 
 func (s *memoryStore) Transition(_ context.Context, documentID, actorID uint64, target Status, _ string, now time.Time) (*Document, error) {
 	document := s.documents[documentID]
 	if document == nil {
+		return nil, ErrNotFound
+	}
+	if document.Status == StatusDeleted {
 		return nil, ErrNotFound
 	}
 	if !validTransition(document.Status, target) {
@@ -217,5 +226,38 @@ func TestServiceUploadsAndSignsDocument(t *testing.T) {
 		Size: 1025, Reader: bytes.NewReader(make([]byte, 1025)),
 	}); !errors.Is(err, ErrFileTooLarge) {
 		t.Fatalf("large Upload() error = %v, want ErrFileTooLarge", err)
+	}
+}
+
+func TestServiceDeleteSoftDeletesDocument(t *testing.T) {
+	store := newMemoryStore()
+	objects := &memoryObjects{objects: map[string][]byte{"knowledge/guide.pdf": []byte("document")}}
+	service := NewService(store, objects)
+	document := &Document{
+		ID: 1, Title: "指南", Category: "general", ObjectKey: "knowledge/guide.pdf",
+		FileHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Status:   StatusActive, Version: 1, UploadedBy: 1,
+	}
+	store.documents[document.ID] = document
+
+	deleted, err := service.Delete(context.Background(), 2, document.ID, "trace-1")
+	if err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+	if deleted.Status != StatusDeleted || store.documents[document.ID] == nil {
+		t.Fatalf("Delete() document = %+v, want retained DELETED document", deleted)
+	}
+	if len(objects.removed) != 0 || string(objects.objects[document.ObjectKey]) != "document" {
+		t.Fatalf("Delete() removed object: removed=%v objects=%v", objects.removed, objects.objects)
+	}
+	views, total, err := service.ListAll(context.Background(), AdminListFilter{})
+	if err != nil || total != 0 || len(views) != 0 {
+		t.Fatalf("ListAll() after delete = %+v, total=%d, err=%v", views, total, err)
+	}
+	if _, err := service.Delete(context.Background(), 2, document.ID, "trace-2"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("second Delete() error = %v, want ErrNotFound", err)
+	}
+	if _, err := service.Approve(context.Background(), 2, document.ID, "trace-3"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Approve() deleted document error = %v, want ErrNotFound", err)
 	}
 }

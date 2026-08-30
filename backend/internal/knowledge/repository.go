@@ -37,7 +37,7 @@ type DocumentWithUploader struct {
 	UploaderName string
 }
 
-// ListAll 管理后台全状态文档列表（status 为空表示全部状态）。
+// ListAll 管理后台未删除文档列表（status 为空表示全部可见状态）。
 func (r *Repository) ListAll(ctx context.Context, filter AdminListFilter) ([]DocumentWithUploader, int64, error) {
 	if filter.Page < 1 {
 		filter.Page = 1
@@ -49,6 +49,7 @@ func (r *Repository) ListAll(ctx context.Context, filter AdminListFilter) ([]Doc
 	category := strings.TrimSpace(filter.Category)
 
 	applyFilter := func(query *gorm.DB) *gorm.DB {
+		query = query.Where("d.status <> ?", StatusDeleted)
 		if filter.Status != nil {
 			query = query.Where("d.status = ?", *filter.Status)
 		}
@@ -92,7 +93,8 @@ func (r *Repository) Create(ctx context.Context, document *Document, actorID uin
 func (r *Repository) Transition(ctx context.Context, documentID, actorID uint64, target Status, traceID string, now time.Time) (*Document, error) {
 	var document Document
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&document, documentID).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("status <> ?", StatusDeleted).First(&document, documentID).Error; err != nil {
 			return err
 		}
 		if !validTransition(document.Status, target) {
@@ -143,18 +145,20 @@ func (r *Repository) Transition(ctx context.Context, documentID, actorID uint64,
 	return &document, normalizeRepositoryError(err)
 }
 
-// Delete 物理删除文档：删 DB 行 + 写审计日志 + 写 outbox DELETED 事件（通知 agent 清理向量）。
-// 返回被删文档（含 objectKey，供调用方清理对象存储）。
+// Delete 软删除文档：将状态标记为 DELETED，并写审计日志和 outbox DELETED 事件。
 func (r *Repository) Delete(ctx context.Context, documentID, actorID uint64, traceID string) (*Document, error) {
 	var document Document
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&document, documentID).Error; err != nil {
-			return err
-		}
-		if err := tx.Delete(&Document{}, documentID).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("status <> ?", StatusDeleted).First(&document, documentID).Error; err != nil {
 			return err
 		}
 		now := time.Now().UTC()
+		if err := tx.Model(&Document{}).Where("id = ? AND status <> ?", documentID, StatusDeleted).
+			Updates(map[string]any{"status": StatusDeleted, "updated_at": now}).Error; err != nil {
+			return err
+		}
+		document.Status = StatusDeleted
 		document.UpdatedAt = now
 		return createSideEffects(tx, &document, actorID, traceID, "KNOWLEDGE_DOCUMENT_DELETED", "DELETED", now)
 	})

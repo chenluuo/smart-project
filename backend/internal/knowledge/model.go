@@ -13,6 +13,7 @@ const (
 	StatusApproved Status = "APPROVED"
 	StatusActive   Status = "ACTIVE"
 	StatusArchived Status = "ARCHIVED"
+	StatusDeleted  Status = "DELETED"
 )
 
 type Document struct {

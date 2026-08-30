@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"path"
 	"regexp"
 	"strconv"
@@ -138,7 +137,7 @@ func (s *Service) ListActive(ctx context.Context, category string) ([]DocumentVi
 	for index := range documents {
 		view := DocumentView{
 			ID: documents[index].ID, Title: documents[index].Title, Category: documents[index].Category,
-			Status: documents[index].Status,
+			Status:  documents[index].Status,
 			Version: documents[index].Version, Source: documents[index].Source,
 			PublishedAt: documents[index].PublishedAt, UpdatedAt: documents[index].UpdatedAt,
 		}
@@ -195,12 +194,6 @@ func (s *Service) Delete(ctx context.Context, actorID, documentID uint64, traceI
 	document, err := s.store.Delete(ctx, documentID, actorID, traceID)
 	if err != nil {
 		return nil, fmt.Errorf("delete knowledge document: %w", err)
-	}
-	// 物理删除对象文件；失败不阻断（DB 行已删，孤儿对象可后续清理）
-	if s.objects != nil {
-		if err := s.objects.Remove(ctx, document.ObjectKey); err != nil {
-			slog.Warn("remove knowledge document object", "docId", document.ID, "objectKey", document.ObjectKey, "error", err)
-		}
 	}
 	return document, nil
 }
