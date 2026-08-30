@@ -14,6 +14,7 @@ import time
 from typing import Any
 
 from shared.config import get_config
+from shared.docling_client import parse_bytes
 from shared.embedding import embed
 from shared.go_client import get_go_client
 from shared.milvus_client import ensure_collections, upsert_documents
@@ -50,38 +51,10 @@ def _download(url: str) -> tuple[bytes, str]:
         return resp.content, resp.headers.get("content-type", "")
 
 
-def _parse_with_docling(content: bytes, filename: str) -> str:
-    """调 docling-serve（/v1/convert/file）把文档解析成 Markdown 文本。
-
-    返回空串表示解析无可提取文本（非异常）；HTTP 失败抛异常由调用方降级。
-    """
-    import httpx
-
-    cfg = get_config("docling")
-    url = f"http://{cfg.get('host', 'localhost')}:{cfg.get('port', 5001)}/v1/convert/file"
-    headers = {}
-    api_key = cfg.get("api_key")
-    if api_key:
-        headers["X-Api-Key"] = api_key
-    timeout = int(cfg.get("timeout_seconds", 180))
-    files = {"files": (filename or "document", content, "application/octet-stream")}
-    data = {"to_formats": ["md"]}  # 只要 Markdown（含表格）
-    with httpx.Client(timeout=timeout, trust_env=False) as client:
-        resp = client.post(url, files=files, data=data, headers=headers)
-        resp.raise_for_status()
-        payload = resp.json()
-    # 新版 docling-server：document.{md_content,text_content}；旧版：顶层 markdown
-    doc = payload.get("document") or {}
-    md = (doc.get("md_content") or payload.get("markdown") or "").strip()
-    if not md:  # 都没有 markdown 时兜底纯文本
-        md = (doc.get("text_content") or "").strip()
-    return md
-
-
 def _extract_text(url: str, filename: str, content_type: str) -> str:
     """优先 docling 解析（支持 PDF/Office/图片）；纯文本格式降级直读。"""
     try:
-        md = _parse_with_docling(_download(url)[0], filename)
+        md = parse_bytes(_download(url)[0], filename)
         if md:
             return md
         # docling 返回空：说明文件本身无文本（如纯图片无 OCR），走降级

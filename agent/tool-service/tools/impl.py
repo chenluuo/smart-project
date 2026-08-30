@@ -280,17 +280,37 @@ GET_DOCUMENT_CONTENT_SCHEMA = {
 def get_document_content(authorization: str, args: dict) -> dict:
     if _mock_enabled():
         return {"ok": True, "data": {"docId": args.get("doc_id") or args.get("file_url"), "content": "（mock）番茄灌溉手册原文……"}}
-    from shared.minio_client import get_document  # 延迟导入
+    from shared.docling_client import parse_bytes  # 延迟导入
+    from shared.minio_client import get_document_bytes  # 延迟导入
 
     object_key = args.get("file_url")
     if not object_key:
-        # doc_id → 从 Go 可用文档清单取 file_url
+        # doc_id → 从 Go 可用文档清单取 downloadUrl（MinIO 签名 URL）
         docs = get_go_client().get_knowledge_docs(authorization)
         matched = next((d for d in docs if str(d.get("id")) == str(args["doc_id"])), None)
-        if not matched or not matched.get("file_url"):
+        if not matched:
             return {"ok": False, "error": f"未找到文档 {args.get('doc_id')}"}
-        object_key = matched["file_url"]
-    content = get_document(object_key)
+        download_url = matched.get("downloadUrl") or matched.get("file_url")
+        if not download_url:
+            return {"ok": False, "error": f"文档 {args.get('doc_id')} 缺少下载地址"}
+        # 签名 URL 下载二进制 → docling 解析
+        import httpx
+
+        try:
+            with httpx.Client(timeout=60, trust_env=False) as hc:
+                resp = hc.get(download_url)
+                resp.raise_for_status()
+                content = parse_bytes(resp.content, matched.get("title") or f"{args['doc_id']}.bin")
+        except Exception as e:
+            return {"ok": False, "error": f"文档解析失败: {e}"}
+        return {"ok": True, "data": {"docId": args.get("doc_id"), "fileUrl": download_url, "content": content}}
+
+    # file_url 直传（MinIO object_key）→ 读原始字节 → docling 解析（纯文本自动降级）
+    try:
+        raw = get_document_bytes(object_key)
+        content = parse_bytes(raw, object_key.split("/")[-1])
+    except Exception as e:
+        return {"ok": False, "error": f"文档解析失败: {e}"}
     return {"ok": True, "data": {"docId": args.get("doc_id"), "fileUrl": object_key, "content": content}}
 
 

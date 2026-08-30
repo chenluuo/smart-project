@@ -81,7 +81,9 @@ services:
     working_dir: /app/tool-service
     env_file: .env
     ports: ["8002:8002"]
-    depends_on: ["redis", "minio"]
+    depends_on: ["redis", "minio", "docling"]
+    environment:
+      DOCLING_HOST: docling
 
   ingest-service:
     build: {context: ., dockerfile: Dockerfile}

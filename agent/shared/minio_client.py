@@ -27,11 +27,16 @@ def _get_client():
 
 def get_document(object_key: str) -> str:
     """按对象 key 读取文档原文（UTF-8 文本；二进制文档由 ingest 负责解析）。"""
+    return get_document_bytes(object_key).decode("utf-8", errors="replace")
+
+
+def get_document_bytes(object_key: str) -> bytes:
+    """按对象 key 读取文档原始字节（PDF/Word 等二进制原样返回）。"""
     client = _get_client()
     bucket = get_config("minio").get("bucket", "knowledge")
     resp = client.get_object(bucket, object_key)
     try:
-        return resp.read().decode("utf-8", errors="replace")
+        return resp.read()
     finally:
         resp.close()
         resp.release_conn()
