@@ -128,9 +128,12 @@ export type CommandItem = {
 };
 
 export type AdminCommand = CommandItem & {
+  commandId?: string;
   plotId?: number;
+  plotName?: string | null;
   deviceId?: number;
   deviceName?: string | null;
+  parameters?: unknown;
   requestPayload?: unknown;
   ackPayload?: unknown;
   errorMessage?: string | null;

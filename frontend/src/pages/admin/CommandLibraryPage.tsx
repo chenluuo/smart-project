@@ -16,7 +16,9 @@ const COMMAND_STATUS_NAMES: Record<string, string> = {
 
 const COMMAND_ACTION_NAMES: Record<string, string> = {
   OPEN: '开启灌溉',
-  CLOSE: '关闭灌溉'
+  CLOSE: '关闭灌溉',
+  IRRIGATION_ON: '开启灌溉',
+  IRRIGATION_OFF: '关闭灌溉'
 };
 
 type Query = { plotId?: number; deviceId?: number; status?: string; startAt?: string; endAt?: string };
@@ -29,8 +31,6 @@ export function CommandLibraryPage() {
   const [error, setError] = useState('');
   const [fieldError, setFieldError] = useState('');
   const [detail, setDetail] = useState<AdminCommand | null>(null);
-  const [detailLoading, setDetailLoading] = useState(false);
-  const [detailError, setDetailError] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -63,15 +63,9 @@ export function CommandLibraryPage() {
     });
   }
 
-  async function openDetail(commandId: string) {
-    setDetail(null);
-    setDetailError('');
-    setDetailLoading(true);
-    try {
-      setDetail(await api.adminCommand(commandId));
-    } catch (requestError) {
-      setDetailError(errorMessage(requestError));
-    } finally { setDetailLoading(false); }
+  async function openDetail(command: AdminCommand) {
+    // 管理端无单条详情接口；列表接口已返回完整字段（参数/状态/错误信息/地块/操作人），直接复用列表数据渲染。
+    setDetail(command);
   }
 
   return <div className="admin-stack">
@@ -95,25 +89,35 @@ export function CommandLibraryPage() {
     <section className="admin-card">
       <div className="admin-card-heading"><div><h3>命令记录</h3><p className="admin-card-copy">按创建时间倒序展示，可查看下发参数和设备回执。</p></div></div>
       {loading ? <div className="admin-empty"><Loader2 size={22} className="admin-spin" />加载中…</div> : <div className="admin-table-wrap"><table className="admin-table command-table"><thead><tr><th>命令编号</th><th>地块</th><th>设备</th><th>动作</th><th>状态</th><th>操作人</th><th>创建时间</th><th>操作</th></tr></thead><tbody>
-        {commands.map((command) => <tr key={command.id}><td className="admin-strong command-id">{command.id}</td><td>{command.plotCode || (command.plotId ? `#${command.plotId}` : '--')}</td><td>{command.deviceName || (command.deviceId ? `设备 #${command.deviceId}` : '--')}</td><td>{COMMAND_ACTION_NAMES[command.action] ?? command.action}</td><td><CommandStatus status={command.status} /></td><td>{command.operatorName || '--'}</td><td>{formatDateTime(command.createdAt)}</td><td><button type="button" className="admin-link-btn" onClick={() => void openDetail(command.id)}><ScanSearch size={14} />查看</button></td></tr>)}
+        {commands.map((command) => <tr key={command.commandId ?? command.id}><td className="admin-strong command-id">{command.commandId ?? command.id}</td><td>{command.plotCode || (command.plotId ? `#${command.plotId}` : '--')}</td><td>{command.deviceName || (command.deviceId ? `设备 #${command.deviceId}` : '--')}</td><td>{COMMAND_ACTION_NAMES[command.action] ?? command.action}</td><td><CommandStatus status={command.status} /></td><td>{command.operatorName || '--'}</td><td>{formatDateTime(command.createdAt)}</td><td><button type="button" className="admin-link-btn" onClick={() => void openDetail(command)}><ScanSearch size={14} />查看</button></td></tr>)}
         {commands.length === 0 && <tr><td colSpan={8} className="admin-empty"><ClipboardList size={18} />暂无符合条件的命令记录。</td></tr>}
       </tbody></table></div>}
     </section>
-    {(detail || detailLoading || detailError) && <CommandDrawer command={detail} loading={detailLoading} error={detailError} onClose={() => { setDetail(null); setDetailError(''); }} />}
+    {detail && <CommandDrawer command={detail} onClose={() => setDetail(null)} />}
   </div>;
 }
 
-function CommandDrawer(props: { command: AdminCommand | null; loading: boolean; error: string; onClose: () => void }) {
-  return <div className="admin-drawer-mask"><aside className="admin-drawer" role="dialog" aria-modal="true" aria-label="命令详情"><header><div><h3>命令详情</h3><span>{props.command?.id ?? '正在读取命令信息'}</span></div><button type="button" onClick={props.onClose} title="关闭"><X size={18} /></button></header><div className="admin-preview-body">
-    {props.loading && <div className="admin-empty"><Loader2 size={22} className="admin-spin" />加载中…</div>}
-    {props.error && <div className="admin-error">{props.error}</div>}
-    {props.command && <div className="command-detail">
-      <div className="order-detail-meta"><span>动作：{COMMAND_ACTION_NAMES[props.command.action] ?? props.command.action}</span><span>状态：{COMMAND_STATUS_NAMES[props.command.status] ?? props.command.status}</span><span>地块：{props.command.plotCode || (props.command.plotId ? `#${props.command.plotId}` : '--')}</span><span>设备：{props.command.deviceName || (props.command.deviceId ? `#${props.command.deviceId}` : '--')}</span><span>操作人：{props.command.operatorName || '--'}</span><span>创建：{formatDateTime(props.command.createdAt)}</span></div>
-      <h4>下发参数</h4><pre className="admin-preview-text">{prettyPayload(props.command.requestPayload)}</pre>
-      <h4>设备回执</h4><pre className="admin-preview-text">{prettyPayload(props.command.ackPayload)}</pre>
-      {props.command.errorMessage && <><h4>失败原因</h4><p className="admin-error">{props.command.errorMessage}</p></>}
-    </div>}
+function CommandDrawer(props: { command: AdminCommand; onClose: () => void }) {
+  const command = props.command;
+  return <div className="admin-drawer-mask"><aside className="admin-drawer" role="dialog" aria-modal="true" aria-label="命令详情"><header><div><h3>命令详情</h3><span>{command.commandId ?? command.id}</span></div><button type="button" onClick={props.onClose} title="关闭"><X size={18} /></button></header><div className="admin-preview-body">
+    <div className="command-detail">
+      <div className="order-detail-meta"><span>动作：{COMMAND_ACTION_NAMES[command.action] ?? command.action}</span><span>状态：{COMMAND_STATUS_NAMES[command.status] ?? command.status}</span><span>地块：{command.plotCode || (command.plotId ? `#${command.plotId}` : '--')}</span><span>设备：{command.deviceName || (command.deviceId ? `#${command.deviceId}` : '--')}</span><span>操作人：{command.operatorName || '--'}</span><span>创建：{formatDateTime(command.createdAt)}</span></div>
+      <h4>下发参数</h4><pre className="admin-preview-text">{prettyPayload(command.parameters ?? command.requestPayload)}</pre>
+      <h4>设备回执</h4><pre className="admin-preview-text">{prettyPayload(command.ackPayload ?? deriveAckPayload(command))}</pre>
+      {command.errorMessage && <><h4>失败原因</h4><p className="admin-error">{command.errorMessage}</p></>}
+    </div>
   </div></aside></div>;
+}
+
+// 管理端无回执存储；按后端用户侧详情相同规则推导（成功/已确认 → state，开启灌溉附 remainingSeconds）。
+function deriveAckPayload(command: AdminCommand): unknown {
+  if (command.status !== 'SUCCEEDED' && command.status !== 'ACKNOWLEDGED') return undefined;
+  const state = command.action === 'OPEN' || command.action === 'IRRIGATION_ON' ? 'ON' : 'OFF';
+  const payload: Record<string, unknown> = { state };
+  const params = (command.parameters ?? command.requestPayload) as Record<string, unknown> | undefined;
+  const duration = typeof params?.durationSeconds === 'number' ? params.durationSeconds : 0;
+  if (state === 'ON' && duration > 0) payload.remainingSeconds = duration;
+  return payload;
 }
 
 function CommandStatus(props: { status: string }) {

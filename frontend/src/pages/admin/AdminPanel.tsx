@@ -12,6 +12,7 @@ import {
   Search,
   ShoppingCart,
   Trash2,
+  Upload,
   Users,
   Warehouse,
   X
@@ -793,14 +794,148 @@ function AdminKnowledge({ isAdmin }: { isAdmin: boolean }) {
       {preview && (
         <PreviewDrawer doc={preview} onClose={() => setPreview(null)} />
       )}
+      {uploadOpen && (
+        <UploadKnowledgeModal
+          onClose={() => setUploadOpen(false)}
+          onUploaded={async () => {
+            refresh();
+            setNotice('文档已上传，待管理员审核');
+          }}
+        />
+      )}
     </div>
   );
+}
+
+// ---------------- 文件上传（与农户面板同款） ----------------
+
+type KnowledgeUploadErrors = Partial<Record<'title' | 'category' | 'file' | 'form', string>>;
+
+function UploadKnowledgeModal(props: { onClose: () => void; onUploaded: () => Promise<void> }) {
+  const [busy, setBusy] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState<KnowledgeUploadErrors>({});
+
+  function clearFieldError(field: keyof KnowledgeUploadErrors) {
+    setFieldErrors((current) => {
+      if (!current[field] && !current.form) return current;
+      const next = { ...current };
+      delete next[field];
+      delete next.form;
+      return next;
+    });
+  }
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    const formElement = event.currentTarget as HTMLFormElement;
+    const form = new FormData(formElement);
+    const title = String(form.get('title') ?? '').trim();
+    const category = String(form.get('category') ?? '').trim();
+    const file = form.get('file');
+    const nextErrors: KnowledgeUploadErrors = {};
+
+    if (!title) nextErrors.title = '请输入文档标题。';
+    if (!category) nextErrors.category = '请输入文档分类。';
+    if (!(file instanceof File) || !file.name || file.size === 0) {
+      nextErrors.file = '请选择可用的文档文件。';
+    }
+    if (Object.keys(nextErrors).length > 0) {
+      setFieldErrors(nextErrors);
+      return;
+    }
+
+    setFieldErrors({});
+    setBusy(true);
+    try {
+      await api.uploadKnowledge(form);
+      formElement.reset();
+      await props.onUploaded();
+      props.onClose();
+    } catch (err) {
+      setFieldErrors(knowledgeUploadErrorFor(errorMessage(err)));
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="admin-modal-mask">
+      <form className="admin-modal" onSubmit={submit} noValidate>
+        <header>
+          <h3>上传文档</h3>
+          <button type="button" onClick={props.onClose} title="关闭">
+            <X size={18} />
+          </button>
+        </header>
+        <p className="admin-modal-hint">提交后为草稿，需审核并发布后才会进入知识库供查询。</p>
+        <label>
+          标题 *
+          <input
+            name="title"
+            placeholder="文档标题"
+            onChange={() => clearFieldError('title')}
+            className={fieldErrors.title ? 'input-invalid' : undefined}
+            aria-invalid={Boolean(fieldErrors.title)}
+            aria-describedby={fieldErrors.title ? 'knowledge-title-error' : undefined}
+          />
+          {fieldErrors.title && <p className="field-error" id="knowledge-title-error" role="alert">{fieldErrors.title}</p>}
+        </label>
+        <label>
+          分类 *
+          <input
+            name="category"
+            placeholder="如 irrigation"
+            onChange={() => clearFieldError('category')}
+            className={fieldErrors.category ? 'input-invalid' : undefined}
+            aria-invalid={Boolean(fieldErrors.category)}
+            aria-describedby={fieldErrors.category ? 'knowledge-category-error' : undefined}
+          />
+          {fieldErrors.category && <p className="field-error" id="knowledge-category-error" role="alert">{fieldErrors.category}</p>}
+        </label>
+        <label>
+          来源
+          <input name="source" placeholder="可选" />
+        </label>
+        <label>
+          版本
+          <input name="version" type="number" min={1} placeholder="可选" />
+        </label>
+        <label>
+          文档文件 *
+          <input
+            name="file"
+            type="file"
+            onChange={() => clearFieldError('file')}
+            className={fieldErrors.file ? 'input-invalid' : undefined}
+            aria-invalid={Boolean(fieldErrors.file)}
+            aria-describedby={fieldErrors.file ? 'knowledge-file-error' : undefined}
+          />
+          {fieldErrors.file && <p className="field-error" id="knowledge-file-error" role="alert">{fieldErrors.file}</p>}
+        </label>
+        {fieldErrors.form && <p className="field-error admin-form-error" role="alert">{fieldErrors.form}</p>}
+        <footer>
+          <button type="button" onClick={props.onClose}>取消</button>
+          <button type="submit" className="primary" disabled={busy}>
+            {busy ? '上传中…' : '上传文档'}
+          </button>
+        </footer>
+      </form>
+    </div>
+  );
+}
+
+function knowledgeUploadErrorFor(message: string): KnowledgeUploadErrors {
+  const normalized = message.toLowerCase();
+  if (/文件|file|上传|格式|大小|扩展名|读取|空文件/.test(normalized)) return { file: message };
+  if (/分类|category/.test(normalized)) return { category: message };
+  if (/标题|title/.test(normalized)) return { title: message };
+  return { form: message };
 }
 
 function PreviewDrawer(props: { doc: AdminKnowledgeDoc; onClose: () => void }) {
   const [content, setContent] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [unsupported, setUnsupported] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -810,9 +945,15 @@ function PreviewDrawer(props: { doc: AdminKnowledgeDoc; onClose: () => void }) {
       return;
     }
     const url = props.doc.downloadUrl.replace('http://minio:9000', '/minio-download');
+    setUnsupported(false);
     fetch(url)
       .then((response) => {
         if (!response.ok) throw new Error(`下载失败（${response.status}）`);
+        const contentType = response.headers.get('content-type') ?? '';
+        if (!isTextPreview(contentType, props.doc.downloadUrl ?? props.doc.title)) {
+          setUnsupported(true);
+          return '';
+        }
         return response.text();
       })
       .then((text) => {
@@ -852,7 +993,13 @@ function PreviewDrawer(props: { doc: AdminKnowledgeDoc; onClose: () => void }) {
             </div>
           )}
           {error && <div className="admin-error">{error}</div>}
-          {!loading && !error && <pre className="admin-preview-text">{content}</pre>}
+          {!loading && !error && unsupported && (
+            <div className="admin-empty">
+              <FileText size={22} />
+              <span>该格式不支持在线预览，请点击下方「打开原文件」下载查看。</span>
+            </div>
+          )}
+          {!loading && !error && !unsupported && <pre className="admin-preview-text">{content}</pre>}
         </div>
         <footer>
           {props.doc.downloadUrl && (
@@ -869,6 +1016,21 @@ function PreviewDrawer(props: { doc: AdminKnowledgeDoc; onClose: () => void }) {
       </aside>
     </div>
   );
+}
+
+const TEXT_PREVIEW_TYPES = ['text/', 'application/json', 'application/xml', 'application/x-yaml', 'application/markdown'];
+const BINARY_PREVIEW_EXT = /\.(docx?|pdf|xlsx?|pptx?|zip|rar|7z|png|jpe?g|gif|webp|bmp|mp4|mp3|wav)$/i;
+const TEXT_PREVIEW_EXT = /\.(txt|md|markdown|csv|json|xml|ya?ml|log)$/i;
+
+function isTextPreview(contentType: string, name: string): boolean {
+  const type = (contentType || '').toLowerCase();
+  if (TEXT_PREVIEW_TYPES.some((prefix) => type.startsWith(prefix))) return true;
+  const filename = (name || '').split('?')[0].toLowerCase();
+  if (BINARY_PREVIEW_EXT.test(filename)) return false;
+  if (TEXT_PREVIEW_EXT.test(filename)) return true;
+  // 无明确信息时：Content-Type 为已知二进制类型（office/pdf/图片/音视频等）判不支持，否则按文本预览
+  if (/^(application\/(pdf|msword|vnd\.openxmlformats|vnd\.ms-|zip|x-tar|x-7z)|image\/|audio\/|video\/)/.test(type)) return false;
+  return true;
 }
 
 // ---------------- 设备管理 ----------------
