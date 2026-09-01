@@ -369,8 +369,25 @@ async def handle_question(
                "sources": _sources(knowledge), "closed": False}
 
 
+# 同意/确认执行类短句（即使很短也**不是**收尾：用户同意建议后应继续执行）
+_AGREE_WORDS = ("可以", "好的", "好呀", "行", "同意", "就按", "按你", "没问题",
+                "开始吧", "做吧", "弄吧", "安排", "来吧", "试试", "听你的", "ok", "嗯")
+# 明确结束类词（才收尾）
+_CLOSE_WORDS = ("再见", "拜拜", "没了", "没有其他", "没有别", "谢谢", "先这样",
+                "结束", "关闭", "退", "不问了", "下次", "没事了")
+
+
 def _judge_can_close(question: str, answer: str) -> bool:
-    """收尾意图启发式：问题简短 + 回答给出建议 → 视为可收尾（生产可换 LLM 判定）。"""
+    """收尾意图启发式：
+    - 明确结束语（再见/没了/谢谢…）→ 收尾；
+    - 同意/确认执行（可以/好的/就按你说的做…）→ 不收尾（下一步应执行动作）；
+    - 其余：问题简短（<40 字）才视为可收尾（生产可换 LLM 判定）。
+    """
+    q = (question or "").strip().lower()
+    if any(w in q for w in _CLOSE_WORDS):
+        return True
+    if any(w in q for w in _AGREE_WORDS):
+        return False
     return len(question) < 40
 
 
