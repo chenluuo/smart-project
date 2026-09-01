@@ -254,7 +254,6 @@ export const api = {
     pageSize?: number;
   } = {}) =>
     request<PageResult<AdminCommand>>(`/api/v1/admin/commands${query({ page: 1, pageSize: 50, ...params })}`),
-  adminCommand: (commandId: string) => request<AdminCommand>(`/api/v1/admin/commands/${encodeURIComponent(commandId)}`),
 
   // ---------------- 二阶段仓储与采购意向 ----------------
   materials: (params: { keyword?: string; status?: string; page?: number; pageSize?: number } = {}) =>
