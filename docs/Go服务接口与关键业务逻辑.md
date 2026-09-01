@@ -1733,35 +1733,183 @@ DELETE /api/v1/admin/knowledge/docs/{docId}
 - 响应 `201`：`{ "recordId": 1, "stockQuantity": "600.000" }`（流水 `ref_type=HARVEST`，`ref_id` 为幂等键）。
 - 错误：`40001` 参数/幂等键不合法；`40401` 仓库、物料或地块不存在；`40901` 内容不一致或主数据停用。
 
-### 13.4 采购意向订单（只读）
+### 13.4 采购意向订单
+
+采购意向订单承载「顾客发意向 → 审批 → 进入交易（占用库存）→ 面谈成交（扣库存）」的完整链路，全链路无价格字段，数量统一 `DECIMAL(18,3)`、单位取 `materials.unit`。所有接口均需登录（`Authorization: Bearer`）。
+
+状态流转：
+
+```text
+PENDING ──approve──▶ APPROVED ──start-trade──▶ TRADING ──confirm──▶ DELETED（成交软删）
+   │                                            │
+   ├──reject──▶ REJECTED                        └──close──▶ CLOSED（谈崩，释放占用）
+   └──cancel──▶ DELETED（取消）
+```
+
+状态枚举：`PENDING`（待审批）、`APPROVED`（已审批）、`TRADING`（交易中，占用库存）、`CLOSED`（已关闭）、`REJECTED`（已驳回）、`DELETED`（已取消/已成交，软删）。`CONFIRMED` 为预留状态，当前成交流程不产生该状态（成交直接软删为 `DELETED`）。
+
+角色说明：`CUSTOMER`（顾客）发起并取消意向；`WAREHOUSE_MANAGER` / `SYSTEM_ADMIN`（仓库管理员/系统管理员）负责审批、进入交易、关闭与成交；`FARMER`（农户）对意向仅有只读可见性。
+
+#### 13.4.1 意向列表
 
 `GET /api/v1/orders?status=&page=&pageSize=`
 
-- 权限：登录即可；**`FARMER` / `WAREHOUSE_MANAGER` / `SYSTEM_ADMIN` 可见全部**，**`CUSTOMER` 仅见自己**发起的意向。
+- 权限：登录即可；`FARMER` / `WAREHOUSE_MANAGER` / `SYSTEM_ADMIN` 可见全部，`CUSTOMER` 仅见自己发起的意向。
 - `status` 可选：`PENDING`/`APPROVED`/`TRADING`/`CONFIRMED`/`CLOSED`/`REJECTED`。
+- 分页：`page` 默认 1；`pageSize` 默认 20、上限 100；按创建时间倒序。
 
-响应（`data.items[]`，倒序分页）：
+响应（`data.items[]`）：
 
 ```json
 {
-  "id": 1, "orderNo": "INT-20260830-001", "status": "APPROVED",
-  "customerId": 26, "customerName": "customer1",
-  "expectedTime": "2026-09-15T00:00:00Z", "remark": "番茄采购意向",
-  "createdAt": "2026-08-30T08:00:00Z",
-  "items": [{
-    "materialId": 1, "materialName": "番茄", "unit": "kg",
-    "quantity": "300.000", "availableQuantity": "300.000"
-  }]
+  "code": 0, "message": "OK",
+  "data": {
+    "items": [{
+      "id": 1, "orderNo": "INT-1725000000000000000-1a2b3c4d", "status": "APPROVED",
+      "customerId": 26, "customerName": "customer1",
+      "expectedTime": "2026-09-15T00:00:00Z", "remark": "番茄采购意向",
+      "createdAt": "2026-08-30T08:00:00Z",
+      "items": [{
+        "materialId": 1, "materialName": "番茄", "unit": "kg",
+        "quantity": "300.000", "availableQuantity": "300.000"
+      }]
+    }],
+    "page": 1, "pageSize": 20, "total": 1
+  }
 }
 ```
 
-- 每单明细的 `availableQuantity` 为该物料可售数量（库存总量 − TRADING 占用，与 `GET /stocks` 同源）。
-- 意向单的创建/审批/成交等写路径由订单模块后续补充；当前表结构、占用计算与只读查询已就绪。
+- 每单明细的 `availableQuantity` 为该物料可售数量（库存总量 − `TRADING` 占用，与 `GET /stocks` 同源）。
+
+#### 13.4.2 意向详情
 
 `GET /api/v1/orders/{id}`
 
-- 权限同上；`CUSTOMER` 访问他人意向返回 `40401`。
+- 权限同列表；`CUSTOMER` 访问他人意向返回 `40401`。
 - 返回结构与列表单条一致。
+
+#### 13.4.3 发起采购意向
+
+`POST /api/v1/orders`
+
+- 权限：仅 `CUSTOMER`（其余角色返回 `40301`）。
+- 顾客身份取登录 JWT，无需在请求体传 `customerId`。
+
+请求体：
+
+```json
+{
+  "expectedTime": "2026-09-15T00:00:00Z",
+  "remark": "番茄采购意向",
+  "items": [
+    { "materialId": 1, "quantity": "300.000" }
+  ]
+}
+```
+
+关键规则：
+
+- `items` 至少一项；同一意向内 `materialId` 不得重复。
+- `quantity` 必须为正数、最多 3 位小数、且小于 `10^15`。
+- 下单即校验可售数量（库存总量 − `TRADING` 占用），不足返回 `40901`。
+- 成功创建 `PENDING` 意向，订单头与明细在同一事务内落库。
+
+响应 `201`：
+
+```json
+{
+  "code": 0, "message": "OK",
+  "data": {
+    "id": 1, "orderNo": "INT-1725000000000000000-1a2b3c4d", "status": "PENDING",
+    "customerId": 26, "expectedTime": "2026-09-15T00:00:00Z", "remark": "番茄采购意向",
+    "createdAt": "2026-08-30T08:00:00Z", "updatedAt": "2026-08-30T08:00:00Z"
+  }
+}
+```
+
+#### 13.4.4 审批
+
+`POST /api/v1/orders/{id}/review`
+
+- 权限：`WAREHOUSE_MANAGER` / `SYSTEM_ADMIN`。
+- 仅 `PENDING` 状态可审批。
+
+请求体：
+
+```json
+{ "action": "approve" }
+```
+
+或
+
+```json
+{ "action": "reject" }
+```
+
+关键规则：
+
+- `action`：`approve` → `PENDING → APPROVED`；`reject` → `PENDING → REJECTED`。
+- 状态不符（非 `PENDING`）返回 `40901`。
+
+响应 `200`：返回更新后的订单头（`status` 变为 `APPROVED` 或 `REJECTED`）。
+
+#### 13.4.5 进入交易
+
+`POST /api/v1/orders/{id}/start-trade`
+
+- 权限：`WAREHOUSE_MANAGER` / `SYSTEM_ADMIN`。
+- 无请求体。
+- `APPROVED → TRADING`，开始占用库存；状态不符返回 `40901`。
+
+响应 `200`：返回订单头（`status` 变为 `TRADING`）。
+
+#### 13.4.6 终止意向
+
+`POST /api/v1/orders/{id}/terminate`
+
+- 无请求体；终止动作由角色决定：
+  - `CUSTOMER`：取消，`PENDING → DELETED`。
+  - `WAREHOUSE_MANAGER` / `SYSTEM_ADMIN`：关闭，`TRADING → CLOSED`（释放占用）。
+  - 其余角色（如 `FARMER`）返回 `40301`。
+
+响应 `200`：返回订单头。
+
+关键规则：`CUSTOMER` 仅能取消 `PENDING` 状态、管理员仅能关闭 `TRADING` 状态，状态不符返回 `40901`。
+
+#### 13.4.7 面谈成交
+
+`POST /api/v1/orders/{id}/confirm`
+
+- 权限：`WAREHOUSE_MANAGER` / `SYSTEM_ADMIN`。
+- 仅 `TRADING` 状态可成交。
+
+请求体：
+
+```json
+{
+  "items": [
+    { "materialId": 1, "quantity": "250.000" }
+  ]
+}
+```
+
+关键规则：
+
+- `items` 必须与订单明细一一对应：物料集合一致、每项 `quantity` 为正且 ≤ 原意向数量。
+- 服务端在同一事务内完成：行锁订单 → 校验实成交量 → 按 `warehouse_id` 升序分配仓库 → 扣减库存并写 `OUT` 流水（`ref_type=ORDER`、`ref_id=订单号`）→ 更新明细实成交量 → 软删订单（`status=DELETED`）。
+- 库存不足返回 `40901`。
+
+响应 `200`：返回订单头（`status` 变为 `DELETED`）。
+
+#### 13.4.8 订单错误码
+
+| HTTP | code | 场景 |
+| --- | --- | --- |
+| `400` | `40001` | 请求体格式错误、`items` 为空、`materialId` 重复或为 0、`quantity` 非法、`action` 非 `approve`/`reject`、路径 `id` 非正整数 |
+| `401` | `40101` | 未登录或令牌无效 |
+| `403` | `40301` | 角色无权限（非 `CUSTOMER` 发起、非管理员审批/成交、`FARMER` 终止等） |
+| `404` | `40401` | 订单不存在，或 `CUSTOMER` 访问他人意向 |
+| `409` | `40901` | 订单状态冲突（非 `PENDING`/`APPROVED`/`TRADING`）或可售/实收库存不足 |
 
 ### 13.5 Agent 工具（tool-service）
 
