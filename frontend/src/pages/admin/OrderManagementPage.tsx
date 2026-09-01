@@ -54,13 +54,26 @@ export function OrderManagementPage() {
   }
 
   async function review(order: Order, action: 'approve' | 'reject') {
-    const label = action === 'approve' ? '通过审批并进入待交易' : '拒绝该采购意向';
+    const label = action === 'approve' ? '通过审批（批准后进入已批准，还需再进入待交易）' : '拒绝该采购意向';
     if (!window.confirm(`确定${label}吗？`)) return;
     setBusy(true);
     setNotice('');
     try {
       await api.reviewOrder(order.id, action);
-      setNotice(action === 'approve' ? '意向已批准，库存占用将按待交易规则计算。' : '意向已拒绝。');
+      setNotice(action === 'approve' ? '意向已批准（已批准状态，尚未进入待交易）。' : '意向已拒绝。');
+      await load();
+    } catch (requestError) {
+      setError(errorMessage(requestError));
+    } finally { setBusy(false); }
+  }
+
+  async function startTrade(order: Order) {
+    if (!window.confirm(`确定将意向单 ${order.orderNo} 进入待交易吗？进入后该意向数量将占用可售库存。`)) return;
+    setBusy(true);
+    setNotice('');
+    try {
+      await api.startTradeOrder(order.id);
+      setNotice('意向已进入待交易，数量已占用可售库存。');
       await load();
     } catch (requestError) {
       setError(errorMessage(requestError));
@@ -93,6 +106,7 @@ export function OrderManagementPage() {
   const tabs = [
     { key: '', label: '全部' },
     { key: 'PENDING', label: '待审批' },
+    { key: 'APPROVED', label: '已批准' },
     { key: 'TRADING', label: '待交易' },
     { key: 'REJECTED', label: '已拒绝' },
     { key: 'CLOSED', label: '未成交' }
@@ -128,7 +142,8 @@ export function OrderManagementPage() {
               <td className="admin-actions orders-actions">
                 <button type="button" className="admin-link-btn" onClick={() => void openDetail(order.id)}><ScanSearch size={14} />详情</button>
                 {order.status === 'PENDING' && <><button type="button" className="admin-link-btn" disabled={busy} onClick={() => void review(order, 'approve')}><Check size={14} />通过</button><button type="button" className="admin-link-btn danger" disabled={busy} onClick={() => void review(order, 'reject')}><X size={14} />拒绝</button></>}
-                {(order.status === 'TRADING' || order.status === 'APPROVED') && <><button type="button" className="admin-link-btn" disabled={busy} onClick={() => void openConfirm(order)}>成交</button><button type="button" className="admin-link-btn danger" disabled={busy} onClick={() => void closeOrder(order)}><XCircle size={14} />关闭</button></>}
+                {order.status === 'APPROVED' && <button type="button" className="admin-link-btn" disabled={busy} onClick={() => void startTrade(order)}>进入待交易</button>}
+                {order.status === 'TRADING' && <><button type="button" className="admin-link-btn" disabled={busy} onClick={() => void openConfirm(order)}>成交</button><button type="button" className="admin-link-btn danger" disabled={busy} onClick={() => void closeOrder(order)}><XCircle size={14} />关闭</button></>}
               </td>
             </tr>)}
             {orders.length === 0 && <tr><td colSpan={7} className="admin-empty"><ClipboardList size={18} />暂无符合条件的采购意向。</td></tr>}

@@ -145,6 +145,43 @@ class RedisClient:
             ex=ttl,
         )
 
+    # ---------- 定时任务（agent:task:*) ----------
+    _TASK_SCHEDULE_KEY = "agent:task:schedule"
+
+    def task_create(self, user_id: str, task_id: str, task: dict[str, Any]) -> None:
+        """创建定时任务：hash 存定义 + ZSET 调度（score=下次运行毫秒）。"""
+        key = f"agent:task:{user_id}:{task_id}"
+        self._r.hset(key, mapping={k: str(v) for k, v in task.items()})
+        self._r.expire(key, 30 * 86400)
+        try:
+            score = int(task.get("next_run_at") or 0)
+        except (TypeError, ValueError):
+            score = 0
+        self._r.zadd(self._TASK_SCHEDULE_KEY, {task_id: score})
+
+    def task_list(self, user_id: str) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for key in self._r.scan_iter(match=f"agent:task:{user_id}:*", count=100):
+            data = self._r.hgetall(key)
+            if data:
+                out.append(data)
+        return out
+
+    def task_cancel(self, user_id: str, task_id: str) -> None:
+        self._r.delete(f"agent:task:{user_id}:{task_id}")
+        self._r.zrem(self._TASK_SCHEDULE_KEY, task_id)
+
+    def task_due(self, now_ms: float, limit: int = 50) -> list[str]:
+        """到期任务 id（score <= now_ms，取前 limit 个）。"""
+        return self._r.zrangebyscore(self._TASK_SCHEDULE_KEY, 0, now_ms, start=0, num=limit)
+
+    def task_update_next_run(self, user_id: str, task_id: str, next_run_ms: float | None) -> None:
+        """更新调度：next_run_ms=None（一次性完成）→ 移除调度；否则更新 score。"""
+        if next_run_ms is None:
+            self._r.zrem(self._TASK_SCHEDULE_KEY, task_id)
+        else:
+            self._r.zadd(self._TASK_SCHEDULE_KEY, {task_id: int(next_run_ms)})
+
     # ---------- 主动通知（告警推送触发 agent 处理的结果） ----------
     def proactive_push(self, user_id: str, item: dict[str, Any], ttl: int = 86400, cap: int = 5) -> None:
         """告警主动处理结果入队（agent:proactive:{userId}），保留最近 cap 条。"""

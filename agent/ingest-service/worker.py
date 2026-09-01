@@ -65,9 +65,13 @@ def run_task_schedule() -> None:
                 redis.client().zrem(_TASK_SCHEDULE_KEY, task_id)
                 continue
             user_id, task = matched
-            # 计算下一次触发时间
+            # 计算下一次触发时间；一次性任务完成 → None
             next_run = _next_task_run(redis, user_id, task, now_ms)
-            redis.task_update_next_run(user_id, task_id, next_run)
+            if next_run is None:
+                # 一次性任务触发完成：删除任务定义（hash + 调度），避免仍能被查/残留
+                redis.task_cancel(user_id, task_id)
+            else:
+                redis.task_update_next_run(user_id, task_id, next_run)
             # 触发 agent（内部接口，agent-service 负责编排）
             try:
                 _notify_agent_service(task)

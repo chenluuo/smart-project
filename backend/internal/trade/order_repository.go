@@ -226,9 +226,14 @@ func (r *OrderRepository) UpdateItemQuantity(ctx context.Context, itemID uint64,
 	return nil
 }
 
-// SoftDelete 软删订单（status=DELETED，释放 TRADING 占用）。
+// SoftDelete 软删订单（status=DELETED，仅 PENDING 取消使用；成交订单保留 CONFIRMED 供顾客查看）。
 func (r *OrderRepository) SoftDelete(ctx context.Context, orderID uint64) error {
-	result := r.db.WithContext(ctx).Model(&OrderHeader{}).Where("id = ?", orderID).Update("status", OrderStatusDeleted)
+	return r.UpdateStatus(ctx, orderID, OrderStatusDeleted)
+}
+
+// UpdateStatus 更新订单状态（调用方需已在事务/行锁内）。
+func (r *OrderRepository) UpdateStatus(ctx context.Context, orderID uint64, status OrderStatus) error {
+	result := r.db.WithContext(ctx).Model(&OrderHeader{}).Where("id = ?", orderID).Update("status", status)
 	if result.Error != nil {
 		return result.Error
 	}
@@ -256,7 +261,7 @@ func validOrderTransition(current, target OrderStatus) bool {
 	case OrderStatusApproved:
 		return target == OrderStatusTrading
 	case OrderStatusTrading:
-		return target == OrderStatusClosed
+		return target == OrderStatusClosed || target == OrderStatusConfirmed
 	default:
 		return false
 	}

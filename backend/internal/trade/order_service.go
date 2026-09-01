@@ -182,8 +182,9 @@ func (s *OrderService) Terminate(ctx context.Context, orderID uint64, cancel boo
 	return s.repository.Transition(ctx, orderID, target)
 }
 
-// Confirm 成交：行锁订单 → 校验实成交量 → 分配仓库 → 扣库存 → 更新实成交量 → 软删订单。
-// 整个流程运行在仓储事务内，保证扣库存与软删原子。
+// Confirm 成交：行锁订单 → 校验实成交量 → 分配仓库 → 扣库存 → 更新实成交量 → 置 CONFIRMED。
+// 整个流程运行在仓储事务内，保证扣库存与状态更新原子。
+// 成交订单保留 CONFIRMED 状态（不软删）：顾客界面仍可见自己的历史成交单。DELETED 仅用于 PENDING 取消。
 func (s *OrderService) Confirm(ctx context.Context, orderID, operatorID uint64, actualItems []ConfirmItemInput) (*OrderHeader, error) {
 	if s.warehouse == nil {
 		return nil, ErrInvalidInput
@@ -262,10 +263,10 @@ func (s *OrderService) Confirm(ctx context.Context, orderID, operatorID uint64, 
 				return err
 			}
 		}
-		if err := repo.SoftDelete(ctx, orderID); err != nil {
+		if err := repo.UpdateStatus(ctx, orderID, OrderStatusConfirmed); err != nil {
 			return err
 		}
-		order.Status = OrderStatusDeleted
+		order.Status = OrderStatusConfirmed
 		result = order
 		return nil
 	})

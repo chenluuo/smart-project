@@ -301,6 +301,8 @@ export const api = {
     request<Order>('/api/v1/orders', { method: 'POST', body: JSON.stringify(payload) }),
   reviewOrder: (orderId: number, action: 'approve' | 'reject') =>
     request<Order>(`/api/v1/orders/${orderId}/review`, { method: 'POST', body: JSON.stringify({ action }) }),
+  startTradeOrder: (orderId: number) =>
+    request<Order>(`/api/v1/orders/${orderId}/start-trade`, { method: 'POST', body: JSON.stringify({}) }),
   terminateOrder: (orderId: number, action: 'cancel' | 'close') =>
     request<Order>(`/api/v1/orders/${orderId}/terminate`, { method: 'POST', body: JSON.stringify({ action }) }),
   confirmOrder: (orderId: number, payload: { items: Array<{ materialId: number; quantity: number }> }) =>
